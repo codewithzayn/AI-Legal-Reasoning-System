@@ -44,18 +44,6 @@ def main():
     # Initialize chat history
     initialize_chat_history()
     
-    # Sidebar
-    with st.sidebar:
-        st.header("Settings")
-        if st.button("Clear Chat History", use_container_width=True):
-            clear_chat_history()
-            st.rerun()
-        
-        st.divider()
-        st.subheader("System Info")
-        st.info(f"📊 Messages: {len(get_chat_history())}")
-        st.info("🔧 Status: UI Only (LangGraph pending)")
-    
     # Display chat history
     for message in get_chat_history():
         avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
@@ -77,6 +65,18 @@ def main():
         
         # Add assistant message
         add_message("assistant", response)
+    
+    # Sidebar (moved to end for accurate count)
+    with st.sidebar:
+        st.header("Settings")
+        if st.button("Clear Chat History", use_container_width=True):
+            clear_chat_history()
+            st.rerun()
+        
+        st.divider()
+        st.subheader("System Info")
+        st.info(f"📊 Messages: {len(get_chat_history())}")
+        st.info("🔧 Status: UI Only (LangGraph pending)")
 
 
 if __name__ == "__main__":
