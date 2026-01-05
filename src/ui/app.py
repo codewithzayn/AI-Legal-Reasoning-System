@@ -22,9 +22,6 @@ from utils.chat_helpers import (
 def main():
     """Main Streamlit application"""
     
-    # Configure page
-    st.set_page_config(**PAGE_CONFIG)
-    
     # App header
     st.title(APP_TITLE)
     st.markdown("""
