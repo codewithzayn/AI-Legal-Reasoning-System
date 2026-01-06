@@ -4,6 +4,7 @@ Helper functions for chat interface
 
 import streamlit as st
 from typing import List, Dict
+from agent.agent import process_query
 
 
 def initialize_chat_history() -> None:
@@ -38,14 +39,20 @@ def clear_chat_history() -> None:
     st.session_state.messages = []
 
 
-def mock_assistant_response(user_input: str) -> str:
+def get_agent_response(user_input: str) -> str:
     """
-    Mock assistant response (placeholder for LangGraph agent)
+    Get response from LangGraph agent
     
     Args:
         user_input: User's question
         
     Returns:
-        Mock response string
+        Agent's response string
     """
-    return f"I received your question: '{user_input}'. LangGraph agent integration coming soon!"
+    # Get chat history for context
+    chat_history = get_chat_history()
+    print(chat_history)
+    # Process through LangGraph agent
+    response = process_query(user_input, chat_history)
+    
+    return response

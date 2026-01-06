@@ -9,13 +9,13 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from config.settings import PAGE_CONFIG, APP_TITLE, CHAT_WELCOME_MESSAGE, USER_AVATAR, ASSISTANT_AVATAR
+from config.settings import PAGE_CONFIG, APP_TITLE, CHAT_WELCOME_MESSAGE, USER_AVATAR, ASSISTANT_AVATAR, SYSTEM_STATUS
 from utils.chat_helpers import (
     initialize_chat_history,
     add_message,
     get_chat_history,
     clear_chat_history,
-    mock_assistant_response
+    get_agent_response
 )
 
 
@@ -54,11 +54,11 @@ def main():
         with st.chat_message("user", avatar=USER_AVATAR):
             st.write(prompt)
         
-        # Generate assistant response (mock for now)
+        # Generate assistant response via LangGraph agent
         with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-            with st.spinner("Processing..."):
-                response = mock_assistant_response(prompt)
-                st.write(response)
+            with st.spinner("🤖 Analyzing query through LangGraph workflow..."):
+                response = get_agent_response(prompt)
+                st.markdown(response)
         
         # Add assistant message
         add_message("assistant", response)
@@ -73,7 +73,7 @@ def main():
         st.divider()
         st.subheader("System Info")
         st.info(f"📊 Messages: {len(get_chat_history())}")
-        st.info("🔧 Status: UI Only (LangGraph pending)")
+        st.success(f"{SYSTEM_STATUS}")
 
 
 if __name__ == "__main__":

@@ -52,12 +52,17 @@ streamlit run src/ui/app.py
 
 The app will open at `http://localhost:8501`
 
+## Documentation
+
+- [LangGraph Architecture](docs/LANGGRAPH_ARCHITECTURE.md) - Agent workflow and abstraction layer
+
 ## Current Status
 
-✅ **Phase 1:** Streamlit chat UI (Complete)
-⏳ **Phase 2:** Finlex API integration (Pending)
-⏳ **Phase 3:** LangGraph agent (Pending)
-⏳ **Phase 4:** Neo4j + Supabase storage (Pending)
+✅ **Phase 1:** Streamlit chat UI (Complete)  
+✅ **Phase 2:** LangGraph agent workflow (Complete)  
+⏳ **Phase 3:** Finlex API integration (Pending)  
+⏳ **Phase 4:** Neo4j + Supabase storage (Pending)  
+⏳ **Phase 5:** GPT-4o integration (Pending)
 
 ## MVP Scope
 
