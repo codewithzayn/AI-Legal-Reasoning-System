@@ -6,11 +6,17 @@ langchain>=0.1.0
 langgraph>=0.0.20
 langchain-core>=0.1.0
 
+# Finlex API
+requests>=2.31.0
+
+# NLP Processing
+transformers>=4.35.0
+torch>=2.1.0
+
 # Future dependencies (commented out for now)
 # openai>=1.0.0
 # transformers>=4.35.0
 # torch>=2.1.0
 # neo4j>=5.14.0
 # supabase>=2.0.0
-# requests>=2.31.0
 # python-dotenv>=1.0.0
