@@ -13,10 +13,9 @@ categories = {
 params = {
         "format": "json",
         "langAndVersion": "fin@",
-        "startYear": 2025,
+        "startYear": 2000,
         "endYear": 2025,
-        "limit": 10,
-        "page": 1
+        "limit": 10
     }
 headers = {"User-Agent": "AI-Legal-Reasoning-System/1.0"}
 
