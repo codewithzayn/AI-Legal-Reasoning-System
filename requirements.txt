@@ -13,8 +13,12 @@ requests>=2.31.0
 spacy>=3.8.0
 # Finnish language model: python -m spacy download fi_core_news_sm
 
-# Future dependencies (commented out for now)
-# openai>=1.0.0
-# neo4j>=5.14.0
-# supabase>=2.0.0
-# python-dotenv>=1.0.0
+# OpenAI for embeddings
+openai>=1.0.0
+
+# Supabase for vector storage
+supabase>=2.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
