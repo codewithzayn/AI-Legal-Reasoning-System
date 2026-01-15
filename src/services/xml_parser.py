@@ -100,14 +100,66 @@ class XMLParser:
                 return title_text.strip()
         
         return "Untitled Document"
-
+    
+    def extract_sections(self, xml_content: str) -> List[Dict]:
+        """Extract structured sections from XML"""
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return []
+        
+        sections = []
+        
+        # Find all <section> elements in body
+        section_elements = root.findall('.//akn:body//akn:section', self.ns)
+        if not section_elements:
+            section_elements = root.findall('.//{*}body//{*}section')
+        
+        for section_elem in section_elements:
+            # Extract section number from <num> tag
+            num_elem = section_elem.find('.//akn:num', self.ns)
+            if num_elem is None:
+                num_elem = section_elem.find('.//{*}num')
+            
+            section_number = None
+            if num_elem is not None and num_elem.text:
+                section_number = num_elem.text.strip()
+            
+            # Extract section heading
+            heading_elem = section_elem.find('.//akn:heading', self.ns)
+            if heading_elem is None:
+                heading_elem = section_elem.find('.//{*}heading')
+            
+            heading = None
+            if heading_elem is not None:
+                heading = self._get_element_text(heading_elem)
+            
+            # Extract section content (all text except num and heading)
+            content_parts = []
+            for child in section_elem:
+                tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                if tag_name not in ['num', 'heading']:
+                    content_parts.append(self._get_element_text(child))
+            
+            content = ' '.join(content_parts).strip()
+            
+            if section_number:  # Only add if we found a section number
+                sections.append({
+                    'number': section_number,
+                    'heading': heading,
+                    'content': content
+                })
+        
+        return sections
     
     def parse(self, xml_content: str) -> Dict:
         """Parse XML and return structured data"""
         text = self.extract_text(xml_content)
         title = self.extract_title(xml_content)
+        sections = self.extract_sections(xml_content)
         return {
             "text": text,
             "title": title,
+            "sections": sections,
             "length": len(text)
         }

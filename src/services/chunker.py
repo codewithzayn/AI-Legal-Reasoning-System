@@ -60,7 +60,8 @@ class LegalDocumentChunker:
         document_title: str,
         document_year: int,
         document_type: str = "unknown",
-        document_category: str = "unknown"
+        document_category: str = "unknown",
+        sections: List[Dict] = None
     ) -> List[Chunk]:
         """
         Split document into chunks by § sections
@@ -70,15 +71,27 @@ class LegalDocumentChunker:
             document_uri: Finlex URI for citations
             document_title: Document title
             document_year: Year of document
+            sections: Structured sections from XML (if available)
             
         Returns:
             List of Chunk objects
         """
-        # Find all § section markers
-        sections = self._split_by_sections(text)
+        # Use structured sections if available
+        if sections and len(sections) > 0:
+            return self._chunk_by_xml_sections(
+                sections,
+                document_uri,
+                document_title,
+                document_year,
+                document_type,
+                document_category
+            )
+        
+        # Fallback: Find all § section markers in text
+        text_sections = self._split_by_sections(text)
         
         # If no sections found, split by size
-        if len(sections) <= 1:
+        if len(text_sections) <= 1:
             return self._split_by_size(
                 text, 
                 document_uri, 
@@ -92,7 +105,7 @@ class LegalDocumentChunker:
         chunks = []
         chunk_index = 0
         
-        for section_num, section_text in sections:
+        for section_num, section_text in text_sections:
             # Check if section is too large
             word_count = len(section_text.split())
             
@@ -128,6 +141,73 @@ class LegalDocumentChunker:
                         'document_year': document_year,
                         'document_type': document_type,
                         'document_category': document_category,
+                        'word_count': word_count,
+                        'merged_sections': []
+                    }
+                ))
+                chunk_index += 1
+        
+        return chunks
+    
+    def _chunk_by_xml_sections(
+        self,
+        sections: List[Dict],
+        document_uri: str,
+        document_title: str,
+        document_year: int,
+        document_type: str,
+        document_category: str
+    ) -> List[Chunk]:
+        """
+        Chunk document using structured XML sections
+        
+        Args:
+            sections: List of dicts with 'number', 'heading', 'content'
+        """
+        chunks = []
+        chunk_index = 0
+        
+        # Collect all section numbers for metadata
+        all_section_numbers = [s['number'] for s in sections]
+        
+        for section in sections:
+            section_number = section['number']
+            section_heading = section.get('heading', '')
+            section_content = section['content']
+            
+            # Combine heading and content
+            full_text = f"{section_heading} {section_content}".strip()
+            word_count = len(full_text.split())
+            
+            # Check if section is too large
+            if word_count > self.max_chunk_size:
+                # Split large section
+                sub_chunks = self._split_large_section(
+                    full_text,
+                    section_number,
+                    chunk_index,
+                    document_uri,
+                    document_title,
+                    document_year,
+                    document_type,
+                    document_category
+                )
+                chunks.extend(sub_chunks)
+                chunk_index += len(sub_chunks)
+            else:
+                # Section fits in one chunk
+                chunks.append(Chunk(
+                    text=full_text,
+                    chunk_index=chunk_index,
+                    section_number=section_number,
+                    metadata={
+                        'document_uri': document_uri,
+                        'document_title': document_title,
+                        'document_year': document_year,
+                        'document_type': document_type,
+                        'document_category': document_category,
+                        'section_heading': section_heading,
+                        'all_sections': all_section_numbers,
                         'word_count': word_count,
                         'merged_sections': []
                     }

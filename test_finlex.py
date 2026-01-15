@@ -44,6 +44,7 @@ def main():
         document_year=doc['document_year'],
         document_type=doc['document_type'],
         document_category=doc['document_category'],
+        sections=parsed.get('sections', [])
     )
     print(f"   ✓ Created {len(chunks)} chunks")
     
