@@ -63,8 +63,10 @@ class SupabaseStorage:
                 'metadata': ec.metadata
             })
         
-        # Insert into Supabase
-        print(f"   Inserting {len(rows)} chunks into Supabase...")
-        response = self.client.table('legal_chunks').insert(rows).execute()
+        # Upsert into Supabase (prevents duplicates via unique constraint)
+        print(f"   Upserting {len(rows)} chunks into Supabase...")
+        response = self.client.table('legal_chunks')\
+            .upsert(rows, on_conflict='document_uri,chunk_index')\
+            .execute()
         
         return len(response.data)

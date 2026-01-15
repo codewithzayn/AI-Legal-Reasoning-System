@@ -58,6 +58,7 @@ def ingest_documents(year: int, limit: int = 10):
             
             # Extract metadata
             document_type = api._extract_document_type(uri)
+            document_category = api._extract_document_category(uri)
             document_year = api._extract_year(uri)
             
             # Parse XML
@@ -71,7 +72,8 @@ def ingest_documents(year: int, limit: int = 10):
                 document_uri=uri,
                 document_title=f"Document {idx}",
                 document_year=document_year,
-                document_type=document_type
+                document_type=document_type,
+                document_category=document_category
             )
             print(f"  → Created {len(chunks)} chunks")
             
@@ -93,13 +95,10 @@ def ingest_documents(year: int, limit: int = 10):
             continue
     
     # Summary
-    print(f"\n{'='*70}")
     print(f"INGESTION COMPLETE")
-    print(f"{'='*70}")
     print(f"Successful: {successful}/{len(doc_list)}")
     print(f"Failed: {failed}/{len(doc_list)}")
     print(f"Total chunks stored: {total_chunks}")
-    print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":

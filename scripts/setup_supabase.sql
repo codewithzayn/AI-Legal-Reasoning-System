@@ -1,16 +1,12 @@
--- ============================================================================
 -- Supabase Database Schema for Finnish Legal AI System
--- Hybrid Search: pgvector (semantic) + Full-Text Search (BM25-like)
--- ============================================================================
+-- Hybrid Search: pgvector (semantic) + Full-Text Search (BM25-like) but right now ts_rank for MVP
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
--- ============================================================================
 -- Main Table: legal_chunks
 -- Stores chunked legal documents with embeddings and metadata
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS legal_chunks (
     -- Primary key
@@ -37,12 +33,13 @@ CREATE TABLE IF NOT EXISTS legal_chunks (
     
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    
+    -- Constraints
+    CONSTRAINT legal_chunks_uri_chunk_unique UNIQUE (document_uri, chunk_index)
 );
 
--- ============================================================================
 -- Indexes for Performance
--- ============================================================================
 
 -- 1. Vector similarity search (HNSW index for fast approximate nearest neighbor)
 CREATE INDEX IF NOT EXISTS legal_chunks_embedding_idx 
@@ -67,9 +64,7 @@ ON legal_chunks (document_year);
 CREATE INDEX IF NOT EXISTS legal_chunks_doc_chunk_idx 
 ON legal_chunks (document_uri, chunk_index);
 
--- ============================================================================
 -- Triggers: Auto-update FTS vector and timestamp
--- ============================================================================
 
 -- Function to auto-generate FTS vector from chunk_text
 CREATE OR REPLACE FUNCTION update_fts_vector()
@@ -105,9 +100,7 @@ BEFORE UPDATE ON legal_chunks
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at();
 
--- ============================================================================
 -- Helper Functions for Hybrid Search
--- ============================================================================
 
 -- Function: Vector similarity search
 CREATE OR REPLACE FUNCTION vector_search(
@@ -173,9 +166,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- ============================================================================
 -- Row Level Security (RLS) - Optional but recommended
--- ============================================================================
 
 -- Enable RLS
 ALTER TABLE legal_chunks ENABLE ROW LEVEL SECURITY;
@@ -228,9 +219,7 @@ USING (true);
 -- WHERE document_uri = 'https://finlex.fi/fi/laki/ajantasa/2025/20250001'
 -- ORDER BY chunk_index;
 
--- ============================================================================
 -- Statistics and Monitoring
--- ============================================================================
 
 -- View: Document statistics
 CREATE OR REPLACE VIEW document_stats AS
