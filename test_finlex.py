@@ -16,15 +16,13 @@ from src.services.supabase_storage import SupabaseStorage
 
 
 def main():
-    print("="*70)
     print("FINLEX DOCUMENT PROCESSING PIPELINE TEST")
-    print("="*70)
     
     # Step 1: Fetch document from Finlex
     print("\n1. Fetching document from Finlex API...")
     api = FinlexAPI()
-    doc = api.fetch_single_statute(year=2025)
-    print(f"   ✓ Fetched: {doc['uri']}")
+    doc = api.fetch_single_statute(year=2024)
+    # print(f"   ✓ Fetched: {doc['uri']}")
     
     # Step 2: Parse XML to extract text
     print("\n2. Parsing XML...")
@@ -43,7 +41,8 @@ def main():
         text=parsed['text'],
         document_uri=doc['uri'],
         document_title="Finlex Document",
-        document_year=2025
+        document_year=doc['document_year'],
+        document_type=doc['document_type']
     )
     print(f"   ✓ Created {len(chunks)} chunks")
     
