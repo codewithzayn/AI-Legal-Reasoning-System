@@ -12,6 +12,7 @@ from src.services.finlex_api import FinlexAPI
 from src.services.xml_parser import XMLParser
 from src.services.chunker import LegalDocumentChunker
 from src.services.embedder import DocumentEmbedder
+from src.services.supabase_storage import SupabaseStorage
 
 
 def main():
@@ -64,8 +65,14 @@ def main():
         print(f"  Words: {ec.metadata['word_count']}")
         print(f"  First 5 values: {ec.embedding[:5]}")
     
-    print("\nNext step:")
-    print("  - Store chunks + embeddings in Supabase")
+    # Step 5: Store in Supabase
+    print("\n5. Storing in Supabase...")
+    storage = SupabaseStorage()
+    stored_count = storage.store_chunks(embedded_chunks)
+    print(f"   ✓ Stored {stored_count} chunks in Supabase")
+    
+    print("\n✅ Complete pipeline test successful!")
+    print("\nPipeline: Finlex API → XML Parser → Chunker → Embedder → Supabase ✅")
 
 
 if __name__ == "__main__":
