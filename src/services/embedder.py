@@ -85,10 +85,10 @@ class DocumentEmbedder:
         return embedded_chunks
 
     
-    def get_statistics(self, embedded_chunks: List[EmbeddedChunk]) -> Dict:
-        """Get embedding statistics"""
-        return {
-            'total_embedded': len(embedded_chunks),
-            'embedding_dimensions': len(embedded_chunks[0].embedding) if embedded_chunks else 0,
-            'model': self.model
-        }
+    # def get_statistics(self, embedded_chunks: List[EmbeddedChunk]) -> Dict:
+    #     """Get embedding statistics"""
+    #     return {
+    #         'total_embedded': len(embedded_chunks),
+    #         'embedding_dimensions': len(embedded_chunks[0].embedding) if embedded_chunks else 0,
+    #         'model': self.model
+    #     }

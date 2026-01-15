@@ -242,14 +242,14 @@ class LegalDocumentChunker:
         
         return chunks
     
-    def get_statistics(self, chunks: List[Chunk]) -> Dict:
-        """Get chunking statistics"""
-        return {
-            'total_chunks': len(chunks),
-            'avg_chunk_size': sum(c.metadata['word_count'] for c in chunks) / len(chunks) if chunks else 0,
-            'min_chunk_size': min(c.metadata['word_count'] for c in chunks) if chunks else 0,
-            'max_chunk_size': max(c.metadata['word_count'] for c in chunks) if chunks else 0,
-            'sections_found': len([c for c in chunks if c.section_number.startswith('§')]),
-            'merged_sections': sum(len(c.metadata['merged_sections']) for c in chunks)
-        }
+    # def get_statistics(self, chunks: List[Chunk]) -> Dict:
+    #     """Get chunking statistics"""
+    #     return {
+    #         'total_chunks': len(chunks),
+    #         'avg_chunk_size': sum(c.metadata['word_count'] for c in chunks) / len(chunks) if chunks else 0,
+    #         'min_chunk_size': min(c.metadata['word_count'] for c in chunks) if chunks else 0,
+    #         'max_chunk_size': max(c.metadata['word_count'] for c in chunks) if chunks else 0,
+    #         'sections_found': len([c for c in chunks if c.section_number.startswith('§')]),
+    #         'merged_sections': sum(len(c.metadata['merged_sections']) for c in chunks)
+    #     }
 

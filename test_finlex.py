@@ -40,7 +40,7 @@ def main():
     chunks = chunker.chunk_document(
         text=parsed['text'],
         document_uri=doc['uri'],
-        document_title="Finlex Document",
+        document_title=parsed['title'],
         document_year=doc['document_year'],
         document_type=doc['document_type']
     )
@@ -62,7 +62,6 @@ def main():
     for i, ec in enumerate(embedded_chunks[:3]):
         print(f"\nChunk {i+1}: {ec.section_number}")
         print(f"  Words: {ec.metadata['word_count']}")
-        print(f"  First 5 values: {ec.embedding[:5]}")
     
     # Step 5: Store in Supabase
     print("\n5. Storing in Supabase...")
