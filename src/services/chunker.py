@@ -273,7 +273,7 @@ class LegalDocumentChunker:
             chunks.append(Chunk(
                 text=chunk_text,
                 chunk_index=chunk_index,
-                section_number=f"Part {chunk_index + 1}",
+                section_number=None,
                 metadata={
                     'document_uri': document_uri,
                     'document_title': document_title,
