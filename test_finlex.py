@@ -42,7 +42,8 @@ def main():
         document_uri=doc['uri'],
         document_title=parsed['title'],
         document_year=doc['document_year'],
-        document_type=doc['document_type']
+        document_type=doc['document_type'],
+        document_category=doc['document_category'],
     )
     print(f"   ✓ Created {len(chunks)} chunks")
     

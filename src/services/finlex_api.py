@@ -56,6 +56,15 @@ class FinlexAPI:
         except (ValueError, IndexError):
             return 0
     
+    def _extract_document_category(self, uri: str) -> str:
+        """Extract document category from Finlex URI (act, judgment, or doc)"""
+        parts = uri.split('/')
+        try:
+            category_idx = parts.index('fi') + 1
+            return parts[category_idx]  # act, judgment, or doc
+        except (ValueError, IndexError):
+            return "unknown"
+    
     def fetch_single_statute(self, year: int = 2025) -> Dict[str, str]:
         """Fetch one statute for testing"""
         data = self.get_statute_list(year=year, limit=1)
@@ -66,11 +75,13 @@ class FinlexAPI:
         doc = data[0]
         xml = self.get_document(doc["akn_uri"])
         document_type = self._extract_document_type(doc["akn_uri"])
+        document_category = self._extract_document_category(doc["akn_uri"])
         document_year = self._extract_year(doc["akn_uri"])
         return {
             "uri": doc["akn_uri"],
             "status": doc["status"],
             "document_type": document_type,
             "document_year": document_year,
+            "document_category": document_category,
             "xml": xml
         }

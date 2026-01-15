@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS legal_chunks (
     document_uri TEXT NOT NULL,              -- Finlex URI (e.g., "https://finlex.fi/fi/laki/ajantasa/2025/20250001")
     document_title TEXT NOT NULL,            -- Document title (e.g., "Rahoituslaki")
     document_year INTEGER NOT NULL,          -- Year of document (e.g., 2025)
-    document_type TEXT,                      -- Type: "statute", "decree", etc.
+    document_type TEXT,                      -- Type: "statute" etc.
+    document_category TEXT,                 -- Type: "act", etc.
     
     -- Chunk content
     chunk_text TEXT NOT NULL,                -- Actual text content of the chunk

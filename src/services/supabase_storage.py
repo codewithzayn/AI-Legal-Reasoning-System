@@ -55,6 +55,7 @@ class SupabaseStorage:
                 'document_title': ec.metadata['document_title'],
                 'document_year': ec.metadata['document_year'],
                 'document_type': ec.metadata.get('document_type', 'unknown'),
+                'document_category': ec.metadata.get('document_category', 'unknown'),
                 'chunk_text': ec.text,
                 'chunk_index': ec.chunk_index,
                 'section_number': ec.section_number,

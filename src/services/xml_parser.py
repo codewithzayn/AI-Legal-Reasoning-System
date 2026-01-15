@@ -83,11 +83,31 @@ class XMLParser:
         
         return ' '.join(all_text)
     
+    def extract_title(self, xml_content: str) -> str:
+        """Extract Finnish document title from XML"""
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return "Untitled Document"
+        
+        title_elem = root.find('.//akn:preface//akn:docTitle', self.ns)
+        if title_elem is None:
+            title_elem = root.find('.//{*}preface//{*}docTitle')
+        
+        if title_elem is not None:
+            title_text = self._get_element_text(title_elem)
+            if title_text:
+                return title_text.strip()
+        
+        return "Untitled Document"
+
+    
     def parse(self, xml_content: str) -> Dict:
         """Parse XML and return structured data"""
         text = self.extract_text(xml_content)
-        
+        title = self.extract_title(xml_content)
         return {
             "text": text,
+            "title": title,
             "length": len(text)
         }

@@ -59,7 +59,8 @@ class LegalDocumentChunker:
         document_uri: str,
         document_title: str,
         document_year: int,
-        document_type: str = "unknown"
+        document_type: str = "unknown",
+        document_category: str = "unknown"
     ) -> List[Chunk]:
         """
         Split document into chunks by § sections
@@ -83,7 +84,8 @@ class LegalDocumentChunker:
                 document_uri, 
                 document_title, 
                 document_year,
-                document_type
+                document_type,
+                document_category,
             )
         
         # Process sections into chunks
@@ -103,7 +105,8 @@ class LegalDocumentChunker:
                     document_uri,
                     document_title,
                     document_year,
-                    document_type
+                    document_type,
+                    document_category,
                 )
                 chunks.extend(sub_chunks)
                 chunk_index += len(sub_chunks)
@@ -124,6 +127,7 @@ class LegalDocumentChunker:
                         'document_title': document_title,
                         'document_year': document_year,
                         'document_type': document_type,
+                        'document_category': document_category,
                         'word_count': word_count,
                         'merged_sections': []
                     }
@@ -172,7 +176,8 @@ class LegalDocumentChunker:
         document_uri: str,
         document_title: str,
         document_year: int,
-        document_type: str = "unknown"
+        document_type: str = "unknown",
+        document_category: str = "unknown"
     ) -> List[Chunk]:
         """
         Fallback: Split by size when no § sections found
@@ -194,6 +199,7 @@ class LegalDocumentChunker:
                     'document_title': document_title,
                     'document_year': document_year,
                     'document_type': document_type,
+                    'document_category': document_category,
                     'word_count': len(chunk_words),
                     'merged_sections': [],
                     'split_method': 'size-based'
@@ -211,7 +217,8 @@ class LegalDocumentChunker:
         document_uri: str,
         document_title: str,
         document_year: int,
-        document_type: str = "unknown"
+        document_type: str = "unknown",
+        document_category: str = "unknown"
     ) -> List[Chunk]:
         """
         Split a large § section into multiple chunks
@@ -233,6 +240,7 @@ class LegalDocumentChunker:
                     'document_title': document_title,
                     'document_year': document_year,
                     'document_type': document_type,
+                    'document_category': document_category,
                     'word_count': len(chunk_words),
                     'merged_sections': [],
                     'split_method': 'large-section'
