@@ -145,7 +145,7 @@ RETURNS TABLE (
     document_title TEXT,
     section_number TEXT,
     chunk_text TEXT,
-    rank FLOAT,
+    rank REAL,
     metadata JSONB
 ) AS $$
 BEGIN
