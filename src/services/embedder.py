@@ -83,6 +83,23 @@ class DocumentEmbedder:
                 ))
         
         return embedded_chunks
+    
+    def embed_query(self, query_text: str) -> List[float]:
+        """
+        Generate embedding for a single query
+        
+        Args:
+            query_text: Query string
+            
+        Returns:
+            Embedding vector (1536 dimensions)
+        """
+        response = self.client.embeddings.create(
+            model=self.model,
+            input=[query_text]
+        )
+        
+        return response.data[0].embedding
 
     
     # def get_statistics(self, embedded_chunks: List[EmbeddedChunk]) -> Dict:
