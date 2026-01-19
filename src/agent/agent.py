@@ -25,8 +25,11 @@ def process_query(user_query: str, chat_history: list = None) -> str:
         "query": user_query,
         "messages": chat_history or [],
         "stage": "init",
-        "entities": None,
+        "vector_results": None,
+        "fts_results": None,
+        "rrf_results": None,
         "search_results": None,
+        "retrieval_metadata": None,
         "response": "",
         "error": None
     }
@@ -49,13 +52,14 @@ def get_agent_info() -> Dict[str, Any]:
     """
     return {
         "name": "Finnish Legal Reasoning Agent",
-        "version": "0.1.0-MVP",
-        "workflow_stages": ["analyze", "search", "reason", "respond"],
+        "version": "0.2.0",
+        "workflow_stages": ["search", "reason", "respond"],
         "integrations": {
-            "nlp": "TurkuNLP/FinBERT (pending)",
-            "vector_db": "Supabase pgvector (pending)",
-            "graph_db": "Neo4j (pending)",
+            "vector_db": "Supabase pgvector (active)",
+            "fts": "PostgreSQL ts_rank (active)",
+            "rrf": "Reciprocal Rank Fusion (active)",
+            "reranker": "Cohere Rerank v3 (pending)",
             "llm": "GPT-4o (pending)"
         },
-        "status": "Abstraction layer active - Mock responses"
+        "status": "Hybrid search active - Re-ranking next"
     }

@@ -5,45 +5,43 @@ Each node represents a processing stage in the workflow
 
 from typing import Dict, Any
 from .state import AgentState
-
-
-def analyze_query(state: AgentState) -> AgentState:
-    """
-    Node 1: Analyze user query
-    
-    Future: Extract intent, entities, legal categories
-    Current: Mock implementation
-    """
-    state["stage"] = "analyze"
-    
-    # Mock: Simple query classification
-    query = state["query"].lower()
-    
-    # Placeholder for future NLP processing
-    state["entities"] = [
-        {"type": "placeholder", "value": "entity extraction pending"}
-    ]
-    
-    return state
+from ..services.retrieval import HybridRetrieval
 
 
 def search_knowledge(state: AgentState) -> AgentState:
     """
-    Node 2: Search knowledge base
+    Node 2: Search knowledge base using hybrid retrieval
     
-    Future: Supabase vector DB + Query Neo4j graph
-    Current: Mock implementation
+    Combines vector search (semantic) and full-text search (keywords)
+    using Reciprocal Rank Fusion (RRF) to find relevant legal documents.
+    
+    Returns top 20-30 most relevant chunks from Supabase.
     """
     state["stage"] = "search"
     
-    # Placeholder for future knowledge retrieval
-    state["search_results"] = [
-        {
-            "type": "mock_statute",
-            "content": "Mock legal document (Vector DB integration pending)",
-            "relevance": 0.85
+    try:
+        # Initialize retrieval service
+        retrieval = HybridRetrieval()
+        
+        # Perform hybrid search
+        query = state["query"]
+        results = retrieval.hybrid_search(query, limit=20)
+        
+        # Store results in state
+        state["search_results"] = results
+        state["rrf_results"] = results  # Same for now
+        
+        # Store metadata for debugging
+        state["retrieval_metadata"] = {
+            "total_results": len(results),
+            "query": query,
+            "method": "hybrid_rrf"
         }
-    ]
+        
+    except Exception as e:
+        print(f"Search error: {e}")
+        state["search_results"] = []
+        state["error"] = f"Search failed: {str(e)}"
     
     return state
 
