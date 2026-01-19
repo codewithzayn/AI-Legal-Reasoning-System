@@ -26,9 +26,7 @@ def ingest_documents(year: int, limit: int = 10):
         year: Year to fetch documents from
         limit: Number of documents to fetch
     """
-    print(f"\n{'='*70}")
     print(f"BULK DOCUMENT INGESTION - Year {year}, Limit {limit}")
-    print(f"{'='*70}\n")
     
     # Initialize services
     api = FinlexAPI()

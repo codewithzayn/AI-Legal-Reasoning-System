@@ -9,11 +9,11 @@ langchain-core>=0.1.0
 # Finlex API
 requests>=2.31.0
 
-# NLP Processing (spaCy - lightweight alternative to transformers/torch)
-spacy>=3.8.0
-# Finnish language model: python -m spacy download fi_core_news_sm
+# BGE-Reranker for re-ranking
+sentence-transformers>=2.2.0
+torch>=2.0.0
 
-# OpenAI for embeddings
+# OpenAI for embeddings and LLM
 openai>=1.0.0
 
 # Supabase for vector storage
@@ -21,4 +21,3 @@ supabase>=2.0.0
 
 # Environment variables
 python-dotenv>=1.0.0
-

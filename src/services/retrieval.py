@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from .embedder import DocumentEmbedder
+from .reranker import BGEReranker
 
 load_dotenv()
 
@@ -33,6 +34,13 @@ class HybridRetrieval:
         
         self.client: Client = create_client(self.url, self.key)
         self.embedder = DocumentEmbedder()
+        self.reranker = None
+    
+    def _get_reranker(self) -> BGEReranker:
+        """Lazy load reranker (only when needed)"""
+        if self.reranker is None:
+            self.reranker = BGEReranker()
+        return self.reranker
     
     def vector_search(self, query_embedding: List[float], limit: int = 50) -> List[Dict]:
         """
@@ -168,3 +176,29 @@ class HybridRetrieval:
         
         # Return top N
         return merged_results[:limit]
+    
+    def hybrid_search_with_rerank(
+        self, 
+        query_text: str, 
+        initial_limit: int = 20,
+        final_limit: int = 10
+    ) -> List[Dict]:
+        """
+        Hybrid search + BGE re-ranking
+        
+        Args:
+            query_text: User query
+            initial_limit: Results before re-ranking
+            final_limit: Results after re-ranking
+            
+        Returns:
+            Re-ranked top results
+        """
+        # Get initial results from hybrid search
+        initial_results = self.hybrid_search(query_text, limit=initial_limit)
+        
+        # Re-rank
+        reranker = self._get_reranker()
+        reranked = reranker.rerank(query_text, initial_results, top_k=final_limit)
+        
+        return reranked
