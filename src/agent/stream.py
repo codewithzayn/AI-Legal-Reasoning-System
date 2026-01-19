@@ -31,7 +31,7 @@ def stream_query_response(user_query: str) -> Iterator[str]:
     results = retrieval.hybrid_search_with_rerank(
         user_query, 
         initial_limit=20, 
-        final_limit=10
+        final_limit=5
     )
     
     search_elapsed = time.time() - search_start

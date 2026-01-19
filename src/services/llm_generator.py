@@ -4,6 +4,7 @@ Generates legal responses with mandatory citations
 """
 
 import os
+import time
 from typing import List, Dict
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -60,6 +61,7 @@ class LLMGenerator:
         Returns:
             Response with citations
         """
+        
         # Build context
         context = self._build_context(context_chunks)
         
@@ -70,12 +72,18 @@ class LLMGenerator:
         ]
         
         # Generate response
+        print(f"⏱️  [LLM API] Calling OpenAI...")
+        api_start = time.time()
+        
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=0.1,  # Low temperature for accuracy
             max_tokens=1000
         )
+        
+        api_elapsed = time.time() - api_start
+        print(f"✅ [LLM API] Completed in {api_elapsed:.2f}s")
         
         return response.choices[0].message.content
     
