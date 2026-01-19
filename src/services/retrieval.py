@@ -5,6 +5,7 @@ Combines vector search, full-text search, and RRF ranking
 
 import os
 import re
+import time
 from typing import List, Dict, Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -209,8 +210,14 @@ class HybridRetrieval:
         # Get initial results from hybrid search
         initial_results = self.hybrid_search(query_text, limit=initial_limit)
         
-        # Re-rank
+        # Re-rank with Cohere
+        print(f"⏱️  [RERANK] Starting Cohere rerank on {len(initial_results)} results...")
+        rerank_start = time.time()
+        
         reranker = self._get_reranker()
         reranked = reranker.rerank(query_text, initial_results, top_k=final_limit)
+        
+        rerank_elapsed = time.time() - rerank_start
+        print(f"✅ [RERANK] Completed in {rerank_elapsed:.2f}s - Top {len(reranked)} results")
         
         return reranked

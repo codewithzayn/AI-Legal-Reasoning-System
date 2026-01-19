@@ -14,8 +14,7 @@ from src.utils.chat_helpers import (
     initialize_chat_history,
     add_message,
     get_chat_history,
-    clear_chat_history,
-    get_agent_response
+    clear_chat_history
 )
 from src.agent.stream import stream_query_response
 
