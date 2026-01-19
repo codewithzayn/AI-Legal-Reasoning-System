@@ -56,12 +56,21 @@ def main():
         
         # Generate assistant response via LangGraph agent
         with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-            with st.spinner("🤖 Analyzing query through LangGraph workflow..."):
-                response = get_agent_response(prompt)
-                st.markdown(response)
+            # Use streaming for faster perceived response
+            response_placeholder = st.empty()
+            full_response = ""
+            
+            # Get streaming response
+            from src.agent.stream import stream_query_response
+            
+            for chunk in stream_query_response(prompt):
+                full_response += chunk
+                response_placeholder.markdown(full_response + "▌")
+            
+            response_placeholder.markdown(full_response)
         
         # Add assistant message
-        add_message("assistant", response)
+        add_message("assistant", full_response)
     
     # Sidebar (moved to end for accurate count)
     with st.sidebar:

@@ -1,9 +1,10 @@
 """
 Hybrid Retrieval Service
-Combines vector search and full-text search using RRF
+Combines vector search, full-text search, and RRF ranking
 """
 
 import os
+import re
 from typing import List, Dict, Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
@@ -70,7 +71,6 @@ class HybridRetrieval:
     
     def _sanitize_fts_query(self, query: str) -> str:
         """Remove special characters that break to_tsquery"""
-        import re
         # Remove special chars, keep only letters, numbers, spaces
         sanitized = re.sub(r'[^\w\s]', ' ', query)
         # Replace multiple spaces with single space

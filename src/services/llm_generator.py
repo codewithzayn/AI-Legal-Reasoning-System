@@ -79,6 +79,43 @@ class LLMGenerator:
         
         return response.choices[0].message.content
     
+    def stream_response(
+        self, 
+        query: str, 
+        context_chunks: List[Dict]
+    ):
+        """
+        Stream response with citations (for Streamlit)
+        
+        Args:
+            query: User question
+            context_chunks: Retrieved chunks with metadata
+            
+        Yields:
+            Response chunks as they're generated
+        """
+        # Build context
+        context = self._build_context(context_chunks)
+        
+        # Create messages
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"}
+        ]
+        
+        # Stream response
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.1,
+            max_tokens=1000,
+            stream=True
+        )
+        
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    
     def _build_context(self, chunks: List[Dict]) -> str:
         """Build context string from chunks"""
         context_parts = []

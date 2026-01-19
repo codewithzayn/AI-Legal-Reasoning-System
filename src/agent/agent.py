@@ -1,8 +1,8 @@
 """
-Main Agent Interface
-Single entry point for the LangGraph agent
+Main agent interface for Finnish Legal Reasoning System
 """
 
+import time
 from typing import Dict, Any
 from .graph import agent_graph
 from .state import AgentState
@@ -10,15 +10,18 @@ from .state import AgentState
 
 def process_query(user_query: str, chat_history: list = None) -> str:
     """
-    Process user query through LangGraph workflow
+    Process user query through LangGraph agent
     
     Args:
-        user_query: User's legal question
-        chat_history: Previous conversation messages (optional)
-    
+        user_query: User's question
+        chat_history: Previous conversation (optional)
+        
     Returns:
         Agent's response string
     """
+    
+    total_start = time.time()
+    print(f"🔍 QUERY: {user_query}")
     
     # Initialize state
     initial_state: AgentState = {
@@ -35,11 +38,13 @@ def process_query(user_query: str, chat_history: list = None) -> str:
     }
     
     try:
-        # Run through LangGraph workflow
+        # Run agent
         final_state = agent_graph.invoke(initial_state)
         
-        # Return final response
-        return final_state["response"]
+        total_elapsed = time.time() - total_start
+        print(f"⏱️  TOTAL TIME: {total_elapsed:.2f}s")
+        
+        return final_state.get("response", "Error: No response generated")
     
     except Exception as e:
         # Error handling

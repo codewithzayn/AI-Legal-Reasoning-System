@@ -3,6 +3,7 @@ LangGraph Node Functions (Abstraction Layer)
 Each node represents a processing stage in the workflow
 """
 
+import time
 from typing import Dict, Any
 from .state import AgentState
 from ..services.retrieval import HybridRetrieval
@@ -13,12 +14,11 @@ def search_knowledge(state: AgentState) -> AgentState:
     """
     Node 2: Search knowledge base using hybrid retrieval
     
-    Combines vector search (semantic) and full-text search (keywords)
-    using Reciprocal Rank Fusion (RRF) to find relevant legal documents.
-    
-    Returns top 20-30 most relevant chunks from Supabase.
+    Performs: Vector Search + FTS + RRF + Cohere Rerank
     """
     state["stage"] = "search"
+    start_time = time.time()
+    print(f"\n⏱️  [SEARCH] Starting hybrid search + reranking...")
     
     try:
         # Initialize retrieval service
@@ -32,6 +32,9 @@ def search_knowledge(state: AgentState) -> AgentState:
             final_limit=10
         )
         
+        elapsed = time.time() - start_time
+        print(f"✅ [SEARCH] Completed in {elapsed:.2f}s - Retrieved {len(results)} results")
+        
         # Store results in state
         state["search_results"] = results
         state["rrf_results"] = results
@@ -40,13 +43,14 @@ def search_knowledge(state: AgentState) -> AgentState:
         state["retrieval_metadata"] = {
             "total_results": len(results),
             "query": query,
-            "method": "hybrid_rrf_rerank"
+            "method": "hybrid_rrf_rerank",
+            "search_time": elapsed
         }
         
     except Exception as e:
-        print(f"Search error: {e}")
-        state["search_results"] = []
+        print(f"❌ [SEARCH] Error: {str(e)}")
         state["error"] = f"Search failed: {str(e)}"
+        state["search_results"] = []
     
     return state
 
@@ -63,10 +67,14 @@ def reason_legal(state: AgentState) -> AgentState:
     results = state.get("search_results", [])
     
     if not results:
+        print("⚠️  [LLM] No search results found")
         state["response"] = "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja."
         return state
     
     # Generate response with LLM
+    start_time = time.time()
+    print(f"⏱️  [LLM] Generating response with {len(results)} chunks...")
+    
     try:
         llm = LLMGenerator()
         response = llm.generate_response(
@@ -74,7 +82,12 @@ def reason_legal(state: AgentState) -> AgentState:
             context_chunks=results
         )
         state["response"] = response
+        
+        elapsed = time.time() - start_time
+        print(f"✅ [LLM] Completed in {elapsed:.2f}s")
+        
     except Exception as e:
+        print(f"❌ [LLM] Error: {str(e)}")
         state["error"] = f"LLM generation failed: {str(e)}"
         state["response"] = "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen."
     
