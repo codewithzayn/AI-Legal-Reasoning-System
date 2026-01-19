@@ -12,7 +12,7 @@ from src.services.finlex_api import FinlexAPI
 from src.services.xml_parser import XMLParser
 from src.services.chunker import LegalDocumentChunker
 from src.services.embedder import DocumentEmbedder
-from src.services.supabase_storage import SupabaseStorage
+from src.services.supabase import SupabaseStorage
 
 
 def main():
