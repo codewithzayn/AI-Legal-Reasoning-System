@@ -1,24 +1,31 @@
 """
-BGE-Reranker Service
-Re-ranks search results using BAAI/bge-reranker-v2-m3
+Cohere Reranker Service
+Re-ranks search results using Cohere Rerank v3
 """
 
+import os
 from typing import List, Dict
-from sentence_transformers import CrossEncoder
+from dotenv import load_dotenv
+import cohere
+
+load_dotenv()
 
 
-class BGEReranker:
+class CohereReranker:
     """
-    Re-rank search results using BGE cross-encoder
+    Re-rank search results using Cohere Rerank v3
     
-    Model: BAAI/bge-reranker-v2-m3 (multilingual)
+    Model: rerank-multilingual-v3.0 (supports Finnish)
     """
     
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3"):
-        """Initialize BGE reranker model"""
-        print(f"Loading BGE reranker: {model_name}...")
-        self.model = CrossEncoder(model_name, max_length=512)
-        print("✓ Model loaded")
+    def __init__(self):
+        """Initialize Cohere client"""
+        api_key = os.getenv("COHERE_API_KEY")
+        if not api_key:
+            raise ValueError("COHERE_API_KEY not found in environment")
+        
+        self.client = cohere.Client(api_key)
+        print("✓ Cohere Rerank initialized")
     
     def rerank(
         self, 
@@ -27,7 +34,7 @@ class BGEReranker:
         top_k: int = 10
     ) -> List[Dict]:
         """
-        Re-rank search results
+        Re-rank search results using Cohere
         
         Args:
             query: User query
@@ -40,17 +47,22 @@ class BGEReranker:
         if not results:
             return []
         
-        # Prepare pairs for cross-encoder
-        pairs = [[query, result['chunk_text']] for result in results]
+        # Prepare documents for Cohere
+        documents = [result['chunk_text'] for result in results]
         
-        # Get scores
-        scores = self.model.predict(pairs)
+        # Call Cohere Rerank API
+        response = self.client.rerank(
+            model="rerank-v4.0-fast",
+            query=query,
+            documents=documents,
+            top_n=top_k
+        )
         
-        # Add scores to results
-        for result, score in zip(results, scores):
-            result['rerank_score'] = float(score)
+        # Map scores back to results
+        reranked = []
+        for item in response.results:
+            result = results[item.index].copy()
+            result['rerank_score'] = item.relevance_score
+            reranked.append(result)
         
-        # Sort by rerank score
-        results.sort(key=lambda x: x['rerank_score'], reverse=True)
-        
-        return results[:top_k]
+        return reranked

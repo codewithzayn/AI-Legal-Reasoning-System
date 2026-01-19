@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 from supabase import create_client, Client
 from dotenv import load_dotenv
 from .embedder import DocumentEmbedder
-from .reranker import BGEReranker
+from .reranker import CohereReranker
 
 load_dotenv()
 
@@ -36,10 +36,10 @@ class HybridRetrieval:
         self.embedder = DocumentEmbedder()
         self.reranker = None
     
-    def _get_reranker(self) -> BGEReranker:
+    def _get_reranker(self) -> CohereReranker:
         """Lazy load reranker (only when needed)"""
         if self.reranker is None:
-            self.reranker = BGEReranker()
+            self.reranker = CohereReranker()
         return self.reranker
     
     def vector_search(self, query_embedding: List[float], limit: int = 50) -> List[Dict]:
@@ -196,7 +196,7 @@ class HybridRetrieval:
         final_limit: int = 10
     ) -> List[Dict]:
         """
-        Hybrid search + BGE re-ranking
+        Hybrid search + Cohere re-ranking
         
         Args:
             query_text: User query

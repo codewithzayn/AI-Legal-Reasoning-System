@@ -9,7 +9,7 @@ User Query (Finnish)
     ↓
 Hybrid Search (Vector + FTS + RRF)
     ↓
-BGE Re-ranking
+Cohere Re-ranking
     ↓
 GPT-4o-mini (LLM Reasoning)
     ↓
@@ -20,7 +20,7 @@ Finnish Response with Citations
 
 ✅ **Full RAG Pipeline**
 - Hybrid search (semantic + keyword)
-- BGE-Reranker v2-m3 for re-ranking
+- Cohere Rerank v4.0-fast for re-ranking
 - GPT-4o-mini for response generation
 - Mandatory source citations
 - Finnish language support
@@ -90,7 +90,7 @@ Open http://localhost:8501
 | **Vector DB** | Supabase pgvector | ✅ Active |
 | **FTS** | PostgreSQL ts_rank (Finnish) | ✅ Active |
 | **Ranking** | RRF (k=60) | ✅ Active |
-| **Re-ranking** | BGE-Reranker v2-m3 | ✅ Active |
+| **Re-ranking** | Cohere Rerank v4.0-fast | ✅ Active |
 | **LLM** | GPT-4o-mini | ✅ Active |
 | **Workflow** | LangGraph | ✅ Active |
 | **UI** | Streamlit | ⏳ Pending |
@@ -109,7 +109,7 @@ Query → Embedding → Vector (50) + FTS (50) → RRF → Top 20
 
 ### Response
 ```
-Top 20 → BGE Rerank → Top 10 → GPT-4o-mini → Finnish Response + Citations
+Top 20 → Cohere Rerank → Top 10 → GPT-4o-mini → Finnish Response + Citations
 ```
 
 ## System Prompt
@@ -149,7 +149,7 @@ print(response)
 
 ## Notes
 
-- **CPU-only:** BGE reranker runs on CPU (slower but works)
+- **API-based:** Cohere Rerank via API (fast, $1/1000 queries)
 - **Finnish:** Full Finnish language support
 - **Citations:** Mandatory source citations prevent hallucinations
 - **Idempotent:** Re-ingestion updates existing chunks

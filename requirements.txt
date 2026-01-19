@@ -9,9 +9,8 @@ langchain-core>=0.1.0
 # Finlex API
 requests>=2.31.0
 
-# BGE-Reranker for re-ranking
-sentence-transformers>=2.2.0
-torch>=2.0.0
+# Cohere for re-ranking
+cohere>=5.0.0
 
 # OpenAI for embeddings and LLM
 openai>=1.0.0

@@ -30,8 +30,8 @@ def test_hybrid_search():
 
 
 def test_reranking():
-    """Test hybrid search + BGE reranking"""
-    print("TEST 2: HYBRID SEARCH + BGE RERANKING")
+    """Test hybrid search + Cohere reranking"""
+    print("TEST 2: HYBRID SEARCH + COHERE RERANKING")
     
     retrieval = HybridRetrieval()
     query = "työterveyshuolto"
