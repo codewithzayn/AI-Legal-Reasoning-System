@@ -68,6 +68,15 @@ class HybridRetrieval:
             print(f"Vector search error: {e}")
             return []
     
+    def _sanitize_fts_query(self, query: str) -> str:
+        """Remove special characters that break to_tsquery"""
+        import re
+        # Remove special chars, keep only letters, numbers, spaces
+        sanitized = re.sub(r'[^\w\s]', ' ', query)
+        # Replace multiple spaces with single space
+        sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+        return sanitized
+    
     def fts_search(self, query_text: str, limit: int = 50) -> List[Dict]:
         """
         Full-text search using PostgreSQL ts_rank
@@ -80,10 +89,13 @@ class HybridRetrieval:
             List of chunks with relevance scores
         """
         try:
+            # Sanitize query for FTS
+            sanitized_query = self._sanitize_fts_query(query_text)
+            
             response = self.client.rpc(
                 'fts_search',
                 {
-                    'query_text': query_text,
+                    'query_text': sanitized_query,
                     'match_count': limit
                 }
             ).execute()

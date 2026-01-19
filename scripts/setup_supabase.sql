@@ -159,7 +159,7 @@ BEGIN
         ts_rank_cd(lc.fts, query) AS rank,
         lc.metadata
     FROM legal_chunks lc,
-         to_tsquery('finnish', query_text) query
+         plainto_tsquery('finnish', query_text) query
     WHERE lc.fts @@ query
     ORDER BY ts_rank_cd(lc.fts, query) DESC
     LIMIT match_count;

@@ -3,8 +3,14 @@ Helper functions for chat interface
 """
 
 import streamlit as st
+import sys
+from pathlib import Path
 from typing import List, Dict
-from agent.agent import process_query
+
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+from src.agent.agent import process_query
 
 
 def initialize_chat_history() -> None:
@@ -51,7 +57,6 @@ def get_agent_response(user_input: str) -> str:
     """
     # Get chat history for context
     chat_history = get_chat_history()
-    print(chat_history)
     # Process through LangGraph agent
     response = process_query(user_input, chat_history)
     

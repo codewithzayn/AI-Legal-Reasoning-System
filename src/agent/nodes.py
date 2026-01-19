@@ -6,6 +6,7 @@ Each node represents a processing stage in the workflow
 from typing import Dict, Any
 from .state import AgentState
 from ..services.retrieval import HybridRetrieval
+from ..services.llm_generator import LLMGenerator
 
 
 def search_knowledge(state: AgentState) -> AgentState:
@@ -23,19 +24,23 @@ def search_knowledge(state: AgentState) -> AgentState:
         # Initialize retrieval service
         retrieval = HybridRetrieval()
         
-        # Perform hybrid search
+        # Perform hybrid search + reranking
         query = state["query"]
-        results = retrieval.hybrid_search(query, limit=20)
+        results = retrieval.hybrid_search_with_rerank(
+            query, 
+            initial_limit=20, 
+            final_limit=10
+        )
         
         # Store results in state
         state["search_results"] = results
-        state["rrf_results"] = results  # Same for now
+        state["rrf_results"] = results
         
         # Store metadata for debugging
         state["retrieval_metadata"] = {
             "total_results": len(results),
             "query": query,
-            "method": "hybrid_rrf"
+            "method": "hybrid_rrf_rerank"
         }
         
     except Exception as e:
@@ -48,50 +53,45 @@ def search_knowledge(state: AgentState) -> AgentState:
 
 def reason_legal(state: AgentState) -> AgentState:
     """
-    Node 3: Legal reasoning
+    Node 3: Legal reasoning with LLM
     
-    Future: LLM-based reasoning over retrieved documents
-    Current: Mock implementation
+    Analyzes search results and generates response with citations
     """
     state["stage"] = "reason"
     
-    # Placeholder for LLM reasoning
-    # Future: GPT-4o will analyze search results and provide legal reasoning
+    # Get search results
+    results = state.get("search_results", [])
+    
+    if not results:
+        state["response"] = "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja."
+        return state
+    
+    # Generate response with LLM
+    try:
+        llm = LLMGenerator()
+        response = llm.generate_response(
+            query=state["query"],
+            context_chunks=results
+        )
+        state["response"] = response
+    except Exception as e:
+        state["error"] = f"LLM generation failed: {str(e)}"
+        state["response"] = "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen."
     
     return state
 
 
 def generate_response(state: AgentState) -> AgentState:
     """
-    Node 4: Generate final response
+    Node 4: Return final response
     
-    Future: Stream LLM response to UI
-    Current: Mock implementation
+    Response already generated in reason_legal node
     """
     state["stage"] = "respond"
     
-    query = state["query"]
-    
-    # Mock response showing workflow stages
-    state["response"] = f"""
-🔍 **Query Analyzed:** {query}
-
-📊 **Workflow Status:**
-- ✅ Query Analysis (Entity extraction ready)
-- ✅ Knowledge Search (Vector DB integration pending)
-- ✅ Legal Reasoning (LLM integration pending)
-- ✅ Response Generation
-
-🤖 **Mock Response:**
-I've processed your query through the LangGraph workflow. 
-
-**Next integrations:**
-1. TurkuNLP/FinBERT for entity extraction
-2. Neo4j + Supabase for knowledge retrieval
-3. GPT-4o for legal reasoning
-
-This is the abstraction layer working! Real legal analysis coming soon.
-    """.strip()
+    # Response already set by reason_legal
+    if not state.get("response"):
+        state["response"] = "Pahoittelut, vastausta ei voitu luoda. Yritä uudelleen."
     
     return state
 

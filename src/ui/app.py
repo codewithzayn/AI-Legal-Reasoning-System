@@ -6,11 +6,11 @@ import streamlit as st
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from config.settings import PAGE_CONFIG, APP_TITLE, CHAT_WELCOME_MESSAGE, USER_AVATAR, ASSISTANT_AVATAR, SYSTEM_STATUS
-from utils.chat_helpers import (
+from src.config.settings import PAGE_CONFIG, APP_TITLE, CHAT_WELCOME_MESSAGE, USER_AVATAR, ASSISTANT_AVATAR, SYSTEM_STATUS
+from src.utils.chat_helpers import (
     initialize_chat_history,
     add_message,
     get_chat_history,

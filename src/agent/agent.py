@@ -52,14 +52,14 @@ def get_agent_info() -> Dict[str, Any]:
     """
     return {
         "name": "Finnish Legal Reasoning Agent",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "workflow_stages": ["search", "reason", "respond"],
         "integrations": {
             "vector_db": "Supabase pgvector (active)",
             "fts": "PostgreSQL ts_rank (active)",
             "rrf": "Reciprocal Rank Fusion (active)",
-            "reranker": "Cohere Rerank v3 (pending)",
-            "llm": "GPT-4o (pending)"
+            "reranker": "BGE-Reranker v2-m3 (active)",
+            "llm": "GPT-4o-mini (active)"
         },
-        "status": "Hybrid search active - Re-ranking next"
+        "status": "Full RAG pipeline active"
     }
