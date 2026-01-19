@@ -17,6 +17,7 @@ from src.utils.chat_helpers import (
     clear_chat_history,
     get_agent_response
 )
+from src.agent.stream import stream_query_response
 
 
 def main():
@@ -54,23 +55,13 @@ def main():
         with st.chat_message("user", avatar=USER_AVATAR):
             st.write(prompt)
         
-        # Generate assistant response via LangGraph agent
+        # Generate assistant response with streaming
         with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-            # Use streaming for faster perceived response
-            response_placeholder = st.empty()
-            full_response = ""
-            
-            # Get streaming response
-            from src.agent.stream import stream_query_response
-            
-            for chunk in stream_query_response(prompt):
-                full_response += chunk
-                response_placeholder.markdown(full_response + "▌")
-            
-            response_placeholder.markdown(full_response)
+            with st.spinner("🔍 Searching knowledge base..."):
+                response = st.write_stream(stream_query_response(prompt))
         
         # Add assistant message
-        add_message("assistant", full_response)
+        add_message("assistant", response)
     
     # Sidebar (moved to end for accurate count)
     with st.sidebar:
