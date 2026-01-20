@@ -152,14 +152,94 @@ class XMLParser:
         
         return sections
     
+    def _extract_table_text(self, table_elem) -> str:
+        """Convert table to readable text format"""
+        rows = []
+        
+        # Find all table rows
+        tr_elements = table_elem.findall('.//{*}tr')
+        
+        for tr in tr_elements:
+            cells = []
+            # Find all cells in row
+            td_elements = tr.findall('.//{*}td')
+            
+            for td in td_elements:
+                cell_text = self._get_element_text(td).strip()
+                if cell_text:
+                    cells.append(cell_text)
+            
+            if cells:
+                rows.append(' | '.join(cells))
+        
+        return '\n'.join(rows)
+    
+    def extract_attachments(self, xml_content: str) -> List[Dict]:
+        """Extract attachments including tables"""
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return []
+        
+        attachments = []
+        
+        # Find attachment containers
+        attachment_containers = root.findall('.//{*}hcontainer[@name="attachments"]')
+        
+        for container in attachment_containers:
+            # Find individual attachments
+            attachment_elems = container.findall('.//{*}hcontainer[@name="attachment"]')
+            
+            for attach_elem in attachment_elems:
+                # Extract heading
+                heading_elem = attach_elem.find('.//{*}heading')
+                heading = self._get_element_text(heading_elem) if heading_elem is not None else "Liite"
+                
+                # Extract content
+                content_parts = []
+                content_elem = attach_elem.find('.//{*}content')
+                
+                if content_elem is not None:
+                    # Process all children in content
+                    for child in content_elem:
+                        tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                        
+                        if tag_name == 'table':
+                            # Convert table to text
+                            table_text = self._extract_table_text(child)
+                            if table_text:
+                                content_parts.append(table_text)
+                        elif tag_name == 'p':
+                            # Regular paragraph
+                            p_text = self._get_element_text(child)
+                            if p_text:
+                                content_parts.append(p_text)
+                
+                if content_parts:
+                    attachments.append({
+                        'heading': heading,
+                        'content': '\n\n'.join(content_parts)
+                    })
+        
+        return attachments
+    
     def parse(self, xml_content: str) -> Dict:
         """Parse XML and return structured data"""
         text = self.extract_text(xml_content)
         title = self.extract_title(xml_content)
         sections = self.extract_sections(xml_content)
+        attachments = self.extract_attachments(xml_content)
+        
+        # Combine text with attachment content for full text search
+        full_text = text
+        if attachments:
+            attachment_texts = [f"{att['heading']}\n{att['content']}" for att in attachments]
+            full_text = text + '\n\n' + '\n\n'.join(attachment_texts)
+        
         return {
-            "text": text,
+            "text": full_text,
             "title": title,
             "sections": sections,
-            "length": len(text)
+            "attachments": attachments,
+            "length": len(full_text)
         }

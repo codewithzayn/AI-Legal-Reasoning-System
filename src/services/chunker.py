@@ -61,10 +61,11 @@ class LegalDocumentChunker:
         document_year: int,
         document_type: str = "unknown",
         document_category: str = "unknown",
-        sections: List[Dict] = None
+        sections: List[Dict] = None,
+        attachments: List[Dict] = None
     ) -> List[Chunk]:
         """
-        Split document into chunks by § sections
+        Split document into chunks by § sections and attachments
         
         Args:
             text: Full document text
@@ -72,13 +73,17 @@ class LegalDocumentChunker:
             document_title: Document title
             document_year: Year of document
             sections: Structured sections from XML (if available)
+            attachments: Structured attachments (if available)
             
         Returns:
             List of Chunk objects
         """
+        chunks = []
+        chunk_index = 0
+        
         # Use structured sections if available
         if sections and len(sections) > 0:
-            return self._chunk_by_xml_sections(
+            chunks = self._chunk_by_xml_sections(
                 sections,
                 document_uri,
                 document_title,
@@ -86,55 +91,76 @@ class LegalDocumentChunker:
                 document_type,
                 document_category
             )
-        
-        # Fallback: Find all § section markers in text
-        text_sections = self._split_by_sections(text)
-        
-        # If no sections found, split by size
-        if len(text_sections) <= 1:
-            return self._split_by_size(
-                text, 
-                document_uri, 
-                document_title, 
-                document_year,
-                document_type,
-                document_category,
-            )
-        
-        # Process sections into chunks
-        chunks = []
-        chunk_index = 0
-        
-        for section_num, section_text in text_sections:
-            # Check if section is too large
-            word_count = len(section_text.split())
+            chunk_index = len(chunks)
+        else:
+            # Fallback: Find all § section markers in text
+            text_sections = self._split_by_sections(text)
             
-            if word_count > self.max_chunk_size:
-                # Split large section into sub-chunks
-                sub_chunks = self._split_large_section(
-                    section_text,
-                    section_num,
-                    chunk_index,
-                    document_uri,
-                    document_title,
+            # If no sections found, split by size
+            if len(text_sections) <= 1:
+                chunks = self._split_by_size(
+                    text, 
+                    document_uri, 
+                    document_title, 
                     document_year,
                     document_type,
                     document_category,
                 )
-                chunks.extend(sub_chunks)
-                chunk_index += len(sub_chunks)
-            
-            elif word_count < self.min_chunk_size and chunks:
-                # Merge small section with previous chunk
-                chunks[-1].text += f"\n\n{section_text}"
-                chunks[-1].metadata['merged_sections'].append(section_num)
-            
+                chunk_index = len(chunks)
             else:
-                # Normal-sized section
+                # Process sections into chunks
+                for section_num, section_text in text_sections:
+                    # Check if section is too large
+                    word_count = len(section_text.split())
+                    
+                    if word_count > self.max_chunk_size:
+                        # Split large section into sub-chunks
+                        sub_chunks = self._split_large_section(
+                            section_text,
+                            section_num,
+                            chunk_index,
+                            document_uri,
+                            document_title,
+                            document_year,
+                            document_type,
+                            document_category,
+                        )
+                        chunks.extend(sub_chunks)
+                        chunk_index += len(sub_chunks)
+                    
+                    elif word_count < self.min_chunk_size and chunks:
+                        # Merge small section with previous chunk
+                        chunks[-1].text += f"\n\n{section_text}"
+                        chunks[-1].metadata['merged_sections'].append(section_num)
+                    
+                    else:
+                        # Normal-sized section
+                        chunks.append(Chunk(
+                            text=section_text.strip(),
+                            chunk_index=chunk_index,
+                            section_number=section_num,
+                            metadata={
+                                'document_uri': document_uri,
+                                'document_title': document_title,
+                                'document_year': document_year,
+                                'document_type': document_type,
+                                'document_category': document_category,
+                                'word_count': word_count,
+                                'merged_sections': []
+                            }
+                        ))
+                        chunk_index += 1
+        
+        # Add attachment chunks (tables, appendices)
+        if attachments:
+            for attachment in attachments:
+                attachment_text = f"{attachment['heading']}\n\n{attachment['content']}"
+                word_count = len(attachment_text.split())
+                
                 chunks.append(Chunk(
-                    text=section_text.strip(),
+                    text=attachment_text.strip(),
                     chunk_index=chunk_index,
-                    section_number=section_num,
+                    section_number=f"Liite: {attachment['heading']}",
                     metadata={
                         'document_uri': document_uri,
                         'document_title': document_title,
@@ -142,11 +168,12 @@ class LegalDocumentChunker:
                         'document_type': document_type,
                         'document_category': document_category,
                         'word_count': word_count,
-                        'merged_sections': []
+                        'merged_sections': [],
+                        'is_attachment': True
                     }
                 ))
                 chunk_index += 1
-        
+
         return chunks
     
     def _chunk_by_xml_sections(

@@ -132,7 +132,8 @@ async def ingest_document(request: IngestRequest):
             document_year=document_year,
             document_type=document_type,
             document_category=document_category,
-            sections=parsed.get('sections', [])
+            sections=parsed.get('sections', []),
+            attachments=parsed.get('attachments', [])
         )
         
         # Step 4: Generate embeddings

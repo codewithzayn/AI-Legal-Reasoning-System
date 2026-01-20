@@ -138,7 +138,8 @@ class BulkIngestionManager:
                 document_year=document_year,
                 document_type=doc_type,
                 document_category=category,
-                sections=parsed.get('sections', [])
+                sections=parsed.get('sections', []),
+                attachments=parsed.get('attachments', [])
             )
             
             # Generate embeddings
