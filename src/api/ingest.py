@@ -26,6 +26,7 @@ class IngestRequest(BaseModel):
     """Request model for document ingestion"""
     document_uri: Optional[str] = None
     year: Optional[int] = 2025
+    status: str = "NEW"  # NEW or MODIFIED
     force_reprocess: bool = False
 
 
@@ -83,6 +84,27 @@ async def ingest_document(request: IngestRequest):
                 'document_uri', document_uri
             ).execute()
         
+        # Check if document exists
+        exists_result = storage.client.table('legal_chunks').select('document_uri').eq(
+            'document_uri', document_uri
+        ).limit(1).execute()
+        exists = len(exists_result.data) > 0
+        # Handle based on status
+        if request.status == "NEW" and exists:
+            return IngestResponse(
+                success=True,
+                message="Document already exists, skipped",
+                document_uri=document_uri,
+                chunks_stored=0,
+                document_title="Skipped"
+            )
+        
+        if request.status == "MODIFIED" and exists:
+            # Delete old chunks
+            storage.client.table('legal_chunks').delete().eq(
+                'document_uri', document_uri
+            ).execute()
+        
         # Step 2: Parse XML
         parsed = parser.parse(xml)
         
@@ -90,15 +112,17 @@ async def ingest_document(request: IngestRequest):
         if not request.document_uri:
             pass
         
-        # Update tracking: mark as in_progress
-        storage.client.table('ingestion_tracking').upsert({
-            'document_category': document_category,
-            'document_type': document_type,
-            'year': document_year,
-            'status': 'in_progress',
-            'started_at': 'now()',
-            'last_updated': 'now()'
-        }).execute()
+        # Update tracking if exists (don't create new)
+        tracking_check = storage.client.table('ingestion_tracking').select('*').eq(
+            'document_category', document_category
+        ).eq('document_type', document_type).eq('year', document_year).execute()
+        
+        if tracking_check.data:
+            # Update existing tracking
+            storage.client.table('ingestion_tracking').update({
+                'status': 'in_progress',
+                'last_updated': 'now()'
+            }).eq('document_category', document_category).eq('document_type', document_type).eq('year', document_year).execute()
         
         # Step 3: Chunk document
         chunks = chunker.chunk_document(
@@ -117,19 +141,16 @@ async def ingest_document(request: IngestRequest):
         # Step 5: Store in Supabase
         stored_count = storage.store_chunks(embedded_chunks)
         
-        # Update tracking: mark as completed
-        tracking = storage.client.table('ingestion_tracking').select('*').eq(
-            'document_category', document_category
-        ).eq('document_type', document_type).eq('year', document_year).execute()
-        
-        current_processed = tracking.data[0]['documents_processed'] if tracking.data else 0
-        
-        storage.client.table('ingestion_tracking').update({
-            'documents_processed': current_processed + 1,
-            'status': 'completed',
-            'completed_at': 'now()',
-            'last_updated': 'now()'
-        }).eq('document_category', document_category).eq('document_type', document_type).eq('year', document_year).execute()
+        # Update tracking: mark as completed (only if exists)
+        if tracking_check.data:
+            current_processed = tracking_check.data[0]['documents_processed'] if tracking_check.data[0]['documents_processed'] else 0
+            
+            storage.client.table('ingestion_tracking').update({
+                'documents_processed': current_processed + 1,
+                'status': 'completed',
+                'completed_at': 'now()',
+                'last_updated': 'now()'
+            }).eq('document_category', document_category).eq('document_type', document_type).eq('year', document_year).execute()
         
         return IngestResponse(
             success=True,

@@ -28,8 +28,8 @@ CATEGORIES = {
 }
 
 # Year range (only 2026)
-START_YEAR = 2026
-END_YEAR = 2026
+START_YEAR = 2025
+END_YEAR = 2025
 
 
 class BulkIngestionManager:
@@ -158,7 +158,6 @@ class BulkIngestionManager:
         
         # Get or init tracking
         tracking = self.get_tracking_status(category, doc_type, year)
-        print("tracking", tracking)
         if tracking and tracking['status'] == 'completed':
             print(f"✅ Already completed, skipping...")
             return
@@ -221,11 +220,9 @@ class BulkIngestionManager:
                 break
     
     def run(self) -> None:
-        """Run full bulk ingestion"""
         print("🚀 BULK DOCUMENT INGESTION")
         print(f"Years: {START_YEAR} → {END_YEAR}")
         print(f"Categories: {list(CATEGORIES.keys())}")
-        print("items",CATEGORIES.items())
         total_start = time.time()
         
         # Process each year (newest first)
