@@ -22,7 +22,6 @@ def main():
     print("\n1. Fetching document from Finlex API...")
     api = FinlexAPI()
     doc = api.fetch_single_statute(year=2025)
-    # print(f"   ✓ Fetched: {doc['uri']}")
     
     # Step 2: Parse XML to extract text
     print("\n2. Parsing XML...")
