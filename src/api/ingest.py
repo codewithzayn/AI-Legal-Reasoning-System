@@ -88,7 +88,6 @@ async def ingest_document(request: IngestRequest):
         
         # Extract category and type from URI
         if not request.document_uri:
-            # Already have from fetch_single_statute
             pass
         
         # Update tracking: mark as in_progress
