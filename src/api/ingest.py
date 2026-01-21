@@ -60,6 +60,13 @@ async def ingest_document(request: IngestRequest):
         embedder = DocumentEmbedder()
         storage = SupabaseStorage()
         
+        # Initialize variables for error handler
+        language = None
+        document_uri = None
+        document_type = None
+        document_category = None
+        document_year = None
+        
         # Step 1: Fetch document
         if request.document_uri:
             # Fetch specific document
@@ -77,6 +84,9 @@ async def ingest_document(request: IngestRequest):
             document_category = doc['document_category']
             document_year = doc['document_year']
         
+        # Extract language from URI
+        language = api._extract_language(document_uri)
+        print(language)
         # Check if exists and handle force_reprocess
         if request.force_reprocess:
             # Delete existing chunks
@@ -123,7 +133,7 @@ async def ingest_document(request: IngestRequest):
                 'status': 'in_progress',
                 'last_updated': 'now()'
             }).eq('document_category', document_category).eq('document_type', document_type).eq('year', document_year).execute()
-        
+        print("language", language)
         # Step 3: Chunk document
         chunks = chunker.chunk_document(
             text=parsed['text'],
@@ -132,10 +142,10 @@ async def ingest_document(request: IngestRequest):
             document_year=document_year,
             document_type=document_type,
             document_category=document_category,
+            language=language,
             sections=parsed.get('sections', []),
             attachments=parsed.get('attachments', [])
         )
-        
         # Step 4: Generate embeddings
         embedded_chunks = embedder.embed_chunks(chunks)
         
@@ -162,7 +172,22 @@ async def ingest_document(request: IngestRequest):
         )
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        # Log failure
+        # try:
+        #     storage.log_failed_document(
+        #         document_uri=locals().get('document_uri', request.document_uri),
+        #         error_message=error_msg,
+        #         error_type='api_error',
+        #         document_category=locals().get('document_category'),
+        #         document_type=locals().get('document_type'),
+        #         document_year=locals().get('document_year'),
+        #         language=locals().get('language')
+        #     )
+        # except:
+        #     pass
+        
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.get("/health")

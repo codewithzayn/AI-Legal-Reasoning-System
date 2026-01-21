@@ -61,6 +61,7 @@ class LegalDocumentChunker:
         document_year: int,
         document_type: str = "unknown",
         document_category: str = "unknown",
+        language: str = "fin",
         sections: List[Dict] = None,
         attachments: List[Dict] = None
     ) -> List[Chunk]:
@@ -89,7 +90,8 @@ class LegalDocumentChunker:
                 document_title,
                 document_year,
                 document_type,
-                document_category
+                document_category,
+                language
             )
             chunk_index = len(chunks)
         else:
@@ -105,6 +107,7 @@ class LegalDocumentChunker:
                     document_year,
                     document_type,
                     document_category,
+                language
                 )
                 chunk_index = len(chunks)
             else:
@@ -124,6 +127,7 @@ class LegalDocumentChunker:
                             document_year,
                             document_type,
                             document_category,
+                            language,
                         )
                         chunks.extend(sub_chunks)
                         chunk_index += len(sub_chunks)
@@ -145,6 +149,7 @@ class LegalDocumentChunker:
                                 'document_year': document_year,
                                 'document_type': document_type,
                                 'document_category': document_category,
+                                'language': language,
                                 'word_count': word_count,
                                 'merged_sections': []
                             }
@@ -167,6 +172,7 @@ class LegalDocumentChunker:
                         'document_year': document_year,
                         'document_type': document_type,
                         'document_category': document_category,
+                        'language': language,
                         'word_count': word_count,
                         'merged_sections': [],
                         'is_attachment': True
@@ -183,7 +189,8 @@ class LegalDocumentChunker:
         document_title: str,
         document_year: int,
         document_type: str,
-        document_category: str
+        document_category: str,
+        language: str = "fin"
     ) -> List[Chunk]:
         """
         Chunk document using structured XML sections
@@ -217,7 +224,8 @@ class LegalDocumentChunker:
                     document_title,
                     document_year,
                     document_type,
-                    document_category
+                    document_category,
+                    language,
                 )
                 chunks.extend(sub_chunks)
                 chunk_index += len(sub_chunks)
@@ -233,6 +241,7 @@ class LegalDocumentChunker:
                         'document_year': document_year,
                         'document_type': document_type,
                         'document_category': document_category,
+                        'language': language,
                         'section_heading': section_heading,
                         'all_sections': all_section_numbers,
                         'word_count': word_count,
@@ -307,6 +316,7 @@ class LegalDocumentChunker:
                     'document_year': document_year,
                     'document_type': document_type,
                     'document_category': document_category,
+                    'language': language,
                     'word_count': len(chunk_words),
                     'merged_sections': [],
                     'split_method': 'size-based'
@@ -325,7 +335,8 @@ class LegalDocumentChunker:
         document_title: str,
         document_year: int,
         document_type: str = "unknown",
-        document_category: str = "unknown"
+        document_category: str = "unknown",
+        language: str = "fin"
     ) -> List[Chunk]:
         """
         Split a large § section into multiple chunks
@@ -348,6 +359,7 @@ class LegalDocumentChunker:
                     'document_year': document_year,
                     'document_type': document_type,
                     'document_category': document_category,
+                    'language': language,
                     'word_count': len(chunk_words),
                     'merged_sections': [],
                     'split_method': 'large-section'
@@ -356,15 +368,3 @@ class LegalDocumentChunker:
             sub_index += 1
         
         return chunks
-    
-    # def get_statistics(self, chunks: List[Chunk]) -> Dict:
-    #     """Get chunking statistics"""
-    #     return {
-    #         'total_chunks': len(chunks),
-    #         'avg_chunk_size': sum(c.metadata['word_count'] for c in chunks) / len(chunks) if chunks else 0,
-    #         'min_chunk_size': min(c.metadata['word_count'] for c in chunks) if chunks else 0,
-    #         'max_chunk_size': max(c.metadata['word_count'] for c in chunks) if chunks else 0,
-    #         'sections_found': len([c for c in chunks if c.section_number.startswith('§')]),
-    #         'merged_sections': sum(len(c.metadata['merged_sections']) for c in chunks)
-    #     }
-

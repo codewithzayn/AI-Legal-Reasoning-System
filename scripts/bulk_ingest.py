@@ -126,6 +126,7 @@ class BulkIngestionManager:
             
             # Extract metadata from URI
             document_year = self.api._extract_year(document_uri)
+            language = self.api._extract_language(document_uri)
             
             # Parse XML
             parsed = self.parser.parse(xml_content)
@@ -138,6 +139,7 @@ class BulkIngestionManager:
                 document_year=document_year,
                 document_type=doc_type,
                 document_category=category,
+                language=language,
                 sections=parsed.get('sections', []),
                 attachments=parsed.get('attachments', [])
             )
@@ -150,7 +152,37 @@ class BulkIngestionManager:
             return True
             
         except Exception as e:
-            print(f"  ❌ Error processing {document_uri}: {str(e)}")
+            error_msg = str(e)
+            print(f"  ❌ Error processing {document_uri}: {error_msg}")
+            
+            # Log failure to database
+            try:
+                language = self.api._extract_language(document_uri)
+                document_year = self.api._extract_year(document_uri)
+                
+                # Determine error type
+                error_type = 'unknown'
+                if 'parse' in error_msg.lower() or 'xml' in error_msg.lower():
+                    error_type = 'parse_error'
+                elif 'api' in error_msg.lower() or 'request' in error_msg.lower():
+                    error_type = 'api_error'
+                elif 'embed' in error_msg.lower():
+                    error_type = 'embedding_error'
+                elif 'storage' in error_msg.lower() or 'database' in error_msg.lower():
+                    error_type = 'storage_error'
+                
+                self.storage.log_failed_document(
+                    document_uri=document_uri,
+                    error_message=error_msg,
+                    error_type=error_type,
+                    document_category=category,
+                    document_type=doc_type,
+                    document_year=document_year,
+                    language=language
+                )
+            except:
+                pass  # Don't fail if logging fails
+            
             return False
     
     def process_year(self, category: str, doc_type: str, year: int) -> None:

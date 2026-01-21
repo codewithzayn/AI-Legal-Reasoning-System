@@ -56,6 +56,7 @@ class SupabaseStorage:
                 'document_year': ec.metadata['document_year'],
                 'document_type': ec.metadata.get('document_type', 'unknown'),
                 'document_category': ec.metadata.get('document_category', 'unknown'),
+                'language': ec.metadata.get('language', 'fin'),
                 'chunk_text': ec.text,
                 'chunk_index': ec.chunk_index,
                 'section_number': ec.section_number,
@@ -70,3 +71,50 @@ class SupabaseStorage:
             .execute()
         
         return len(response.data)
+    
+    def log_failed_document(self, document_uri: str, error_message: str, 
+                           error_type: str = 'unknown', 
+                           document_category: str = None,
+                           document_type: str = None,
+                           document_year: int = None,
+                           language: str = None) -> None:
+        """
+        Log a failed document to failed_documents table
+        
+        Args:
+            document_uri: URI of failed document
+            error_message: Error message
+            error_type: Type of error (parse_error, api_error, embedding_error, storage_error)
+            document_category: Document category
+            document_type: Document type
+            document_year: Document year
+            language: Document language
+        """
+        try:
+            # Check if already exists
+            existing = self.client.table('failed_documents').select('id, retry_count').eq(
+                'document_uri', document_uri
+            ).execute()
+            
+            if existing.data:
+                # Update retry count
+                self.client.table('failed_documents').update({
+                    'error_message': error_message,
+                    'error_type': error_type,
+                    'retry_count': existing.data[0]['retry_count'] + 1,
+                    'last_retry_at': 'now()'
+                }).eq('document_uri', document_uri).execute()
+            else:
+                # Insert new failure
+                self.client.table('failed_documents').insert({
+                    'document_uri': document_uri,
+                    'document_category': document_category,
+                    'document_type': document_type,
+                    'document_year': document_year,
+                    'language': language,
+                    'error_message': error_message,
+                    'error_type': error_type,
+                    'retry_count': 0
+                }).execute()
+        except Exception as e:
+            print(f"  ⚠️  Failed to log error: {str(e)}")

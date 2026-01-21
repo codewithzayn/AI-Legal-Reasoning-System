@@ -88,7 +88,6 @@ class FinlexAPI:
         url = f"{self.BASE_URL}/akn/fi/{category}/{doc_type}/list"
         
         params = {
-            "langAndVersion": "fin@",
             "startYear": year,
             "page": page,
             "limit": limit
@@ -101,6 +100,24 @@ class FinlexAPI:
         except requests.exceptions.RequestException as e:
             print(f"API error: {str(e)}")
             return []
+    
+    def _extract_language(self, uri: str) -> str:
+        """
+        Extract language code from Finlex URI
+        
+        Args:
+            uri: Finlex document URI
+            
+        Returns:
+            Language code (fin, swe, eng)
+        """
+        if '/fin@' in uri:
+            return 'fin'
+        elif '/swe@' in uri:
+            return 'swe'
+        elif '/eng@' in uri:
+            return 'eng'
+        return 'fin'  # Default to Finnish
     
     def fetch_document_xml(self, akn_uri: str) -> str:
         """
