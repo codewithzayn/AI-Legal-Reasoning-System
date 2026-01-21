@@ -14,7 +14,7 @@ from src.services.xml_parser import XMLParser
 from src.services.chunker import LegalDocumentChunker
 from src.services.embedder import DocumentEmbedder
 from src.services.supabase import SupabaseStorage
-
+from src.services.pdf_extractor import PDFExtractor
 app = FastAPI(title="Finlex Document Ingestion API")
 
 
@@ -117,12 +117,11 @@ async def ingest_documents(request: IngestRequest):
             
             # Handle PDF-only documents
             if parsed.get('is_pdf_only', False):
-                from src.services.pdf_extractor import PDFExtractor
                 
                 # Construct PDF URL
                 pdf_filename = parsed.get('pdf_ref', 'main.pdf')
                 pdf_url = f"{document_uri}/{pdf_filename}"
-                
+                print("pdf_url", pdf_url)
                 try:
                     # Extract text from PDF
                     pdf_extractor = PDFExtractor()
@@ -151,13 +150,12 @@ async def ingest_documents(request: IngestRequest):
             
             # Step 3: Handle embedded PDF links (e.g. for judgments)
             if parsed.get('pdf_links'):
-                from src.services.pdf_extractor import PDFExtractor
                 pdf_extractor = PDFExtractor()
                 
                 for pdf_rel_path in parsed['pdf_links']:
                     # Construct full PDF URL (it's relative to the document URI)
                     pdf_url = f"{document_uri}/{pdf_rel_path}"
-                    
+                    print("pdf_url..", pdf_url)
                     try:
                         pdf_data = pdf_extractor.extract_from_url(pdf_url)
                         
@@ -195,10 +193,21 @@ async def ingest_documents(request: IngestRequest):
                 attachments=parsed.get('attachments', [])
             )
             
-            # Add PDF metadata to chunks if it's a PDF document
-            if parsed.get('is_pdf_only', False):
+            # Add PDF metadata to chunks if available
+            pdf_metadata = parsed.get('pdf_metadata')
+            if pdf_metadata:
+                # Normalize to list
+                if isinstance(pdf_metadata, dict):
+                    pdf_metadata = [pdf_metadata]
+                    
                 for chunk in chunks:
-                    chunk.metadata.update(parsed.get('pdf_metadata', {}))
+                    # Update chunk metadata with PDF info
+                    # We take the first PDF's info as primary if multiple
+                    if pdf_metadata:
+                         chunk.metadata.update(pdf_metadata[0])
+                    
+                    # Store full list in a specific field
+                    chunk.metadata['pdf_files'] = pdf_metadata
             # Step 4: Generate embeddings
             embedded_chunks = embedder.embed_chunks(chunks)
             
@@ -349,7 +358,6 @@ async def retry_failed_documents(request: RetryRequest):
             
             # Handle PDF-only documents
             if parsed.get('is_pdf_only', False):
-                from src.services.pdf_extractor import PDFExtractor
                 
                 # Construct PDF URL
                 pdf_filename = parsed.get('pdf_ref', 'main.pdf')
