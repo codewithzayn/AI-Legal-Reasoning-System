@@ -82,6 +82,7 @@ async def ingest_documents(request: IngestRequest):
             document_type = None
             document_category = None
             document_year = None
+            document_number = None
             
             # Step 1: Fetch document
             xml = api.fetch_document_xml(document_uri)
@@ -89,7 +90,7 @@ async def ingest_documents(request: IngestRequest):
             document_category = api._extract_document_category(document_uri)
             document_year = api._extract_year(document_uri)
             language = api._extract_language(document_uri)
-            
+            document_number = api.extract_document_number(document_uri)
             # Check if exists
             exists = storage.client.table('legal_chunks').select('id').eq(
                 'document_uri', document_uri
@@ -112,7 +113,7 @@ async def ingest_documents(request: IngestRequest):
                 ).execute()
             
             # Step 2: Parse XML
-            parsed = parser.parse(xml, language=language)
+            parsed = parser.parse(xml, language=language, document_uri=document_uri)
             
             # Handle PDF-only documents
             if parsed.get('is_pdf_only', False):
@@ -148,7 +149,39 @@ async def ingest_documents(request: IngestRequest):
                     failed += 1
                     continue
             
-            # Step 3: Chunk document
+            # Step 3: Handle embedded PDF links (e.g. for judgments)
+            if parsed.get('pdf_links'):
+                from src.services.pdf_extractor import PDFExtractor
+                pdf_extractor = PDFExtractor()
+                
+                for pdf_rel_path in parsed['pdf_links']:
+                    # Construct full PDF URL (it's relative to the document URI)
+                    pdf_url = f"{document_uri}/{pdf_rel_path}"
+                    
+                    try:
+                        pdf_data = pdf_extractor.extract_from_url(pdf_url)
+                        
+                        # Append PDF content to main text
+                        parsed['text'] += f"\n\n[PDF CONTENT START]\n{pdf_data['text']}\n[PDF CONTENT END]"
+                        parsed['length'] += pdf_data['char_count']
+                        
+                        # Add PDF metadata
+                        if 'pdf_metadata' not in parsed:
+                            parsed['pdf_metadata'] = []
+                        elif isinstance(parsed['pdf_metadata'], dict):
+                             # Convert dict to list if it was a single dict (legacy compat)
+                             parsed['pdf_metadata'] = [parsed['pdf_metadata']]
+                             
+                        parsed['pdf_metadata'].append({
+                            'pdf_url': pdf_url,
+                            'page_count': pdf_data['page_count'],
+                            'source_type': 'embedded_pdf'
+                        })
+                        
+                    except Exception as pdf_error:
+                        print(f"   ⚠️ Failed to extract embedded PDF {pdf_url}: {pdf_error}")
+
+            # Step 4: Chunk document
             chunks = chunker.chunk_document(
                 text=parsed['text'],
                 document_uri=document_uri,
@@ -157,6 +190,7 @@ async def ingest_documents(request: IngestRequest):
                 document_type=document_type,
                 document_category=document_category,
                 language=language,
+                document_number=document_number,
                 sections=parsed.get('sections', []),
                 attachments=parsed.get('attachments', [])
             )
@@ -459,4 +493,5 @@ async def health_check():
 
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

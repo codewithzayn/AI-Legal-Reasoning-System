@@ -19,7 +19,7 @@
    - Click on "SQL Editor" in the left sidebar
 
 2. **Run Setup Script**:
-   - Copy the entire contents of `scripts/setup_supabase.sql`
+   - Copy the entire contents of `scripts/legal_chunks.sql`
    - Paste into the SQL Editor
    - Click "Run" button
 
@@ -41,7 +41,7 @@ supabase = create_client(
 )
 
 # Read and execute SQL
-with open("scripts/setup_supabase.sql", "r") as f:
+with open("scripts/legal_chunks.sql", "r") as f:
     sql = f.read()
     # Note: Supabase Python client doesn't support raw SQL execution
     # Use the dashboard method instead
@@ -183,7 +183,7 @@ After setup is complete:
 - **Row Level Security (RLS)** is enabled by default
 - Public read access is allowed
 - Insert/update/delete requires authentication
-- Adjust policies in `setup_supabase.sql` based on your needs
+- Adjust policies in `legal_chunks.sql` based on your needs
 
 ## Maintenance
 

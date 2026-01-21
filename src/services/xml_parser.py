@@ -84,6 +84,17 @@ class XMLParser:
         if conclusions is not None:
             all_text.append(self._get_element_text(conclusions))
         
+            conclusions = root.find('.//{*}conclusions')
+        if conclusions is not None:
+            all_text.append(self._get_element_text(conclusions))
+            
+        # 5. Judgment Body (for decisions)
+        judgment_body = root.find('.//akn:judgmentBody', self.ns)
+        if judgment_body is None:
+            judgment_body = root.find('.//{*}judgmentBody')
+        if judgment_body is not None:
+            all_text.append(self._get_element_text(judgment_body))
+        
         return ' '.join(all_text)
     
     def extract_title(self, xml_content: str, language: str = 'fin') -> str:
@@ -98,21 +109,41 @@ class XMLParser:
         except ET.ParseError:
             return "Untitled Document"
         
-        # Try finlex:title (used in translations)
-        finlex_title = root.find(f'.//finlex:title[@lang="{language}"]', self.ns)
+        # 1. Try finlex:title with specific language (Best for translations)
+        # e.g. <finlex:title language="eng">...</finlex:title>
+        finlex_title = root.find(f'.//finlex:title[@language="{language}"]', self.ns)
+        if finlex_title is None:
+             # Try 'lang' attribute as fallback (some files typically use 'language', others 'lang')
+            finlex_title = root.find(f'.//finlex:title[@lang="{language}"]', self.ns)
+            
         if finlex_title is not None and finlex_title.text:
             return finlex_title.text.strip()
-        
-        # Fallback to Finnish if requested language not found
+            
+        # 2. Key Fallback: If requesting English/Sami but not found, try finding ANY English title
+        if language == 'eng':
+             # Try any english title
+            finlex_title = root.find('.//finlex:title[@language="en"]', self.ns) or \
+                           root.find('.//finlex:title[@lang="en"]', self.ns)
+            if finlex_title is not None and finlex_title.text:
+                return finlex_title.text.strip()
+
+        # 3. Fallback to Finnish metadata title (often present even in translations)
         if language != 'fin':
-            finlex_title = root.find('.//finlex:title[@lang="fin"]', self.ns)
+            finlex_title = root.find('.//finlex:title[@language="fin"]', self.ns) or \
+                           root.find('.//finlex:title[@lang="fin"]', self.ns)
             if finlex_title is not None and finlex_title.text:
                 return finlex_title.text.strip()
         
-        # Try standard docTitle (used in regular statutes)
+        # 4. Try standard docTitle (used in regular statutes)
         title_elem = root.find('.//akn:preface//akn:docTitle', self.ns)
         if title_elem is None:
             title_elem = root.find('.//{*}preface//{*}docTitle')
+            
+        # 5. Try header docTitle (used in judgments)
+        if title_elem is None:
+            title_elem = root.find('.//akn:header//akn:docTitle', self.ns)
+        if title_elem is None:
+            title_elem = root.find('.//{*}header//{*}docTitle')
         
         if title_elem is not None:
             title_text = self._get_element_text(title_elem)
@@ -243,12 +274,38 @@ class XMLParser:
         
         return attachments
     
-    def parse(self, xml_content: str, language: str = 'fin') -> Dict:
+    def extract_pdf_links(self, xml_content: str) -> List[str]:
+        """Extract PDF links from document body"""
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return []
+            
+        links = []
+        # Find all PDF links
+        a_elems = root.findall('.//akn:body//akn:a', self.ns)
+        if not a_elems:
+            # Fallback for judgment body
+            a_elems = root.findall('.//akn:judgmentBody//akn:a', self.ns)
+        
+        # Generic fallback
+        if not a_elems:
+            a_elems = root.findall('.//{*}a')
+            
+        for a in a_elems:
+            href = a.get('href', '')
+            if href.lower().endswith('.pdf'):
+                links.append(href)
+                
+        return list(set(links))  # Deduplicate
+    
+    def parse(self, xml_content: str, language: str = 'fin', document_uri: str = None) -> Dict:
         """Parse XML and return structured data
         
         Args:
             xml_content: XML string
             language: Language code (fin, swe, eng, sme)
+            document_uri: Optional URI for fallback extraction
         """
         # Check if this is a PDF-only document
         try:
@@ -274,6 +331,8 @@ class XMLParser:
         title = self.extract_title(xml_content, language)
         sections = self.extract_sections(xml_content)
         attachments = self.extract_attachments(xml_content)
+        attachments = self.extract_attachments(xml_content)
+        pdf_links = self.extract_pdf_links(xml_content)
         
         # Combine text with attachment content for full text search
         full_text = text
@@ -286,6 +345,7 @@ class XMLParser:
             "title": title,
             "sections": sections,
             "attachments": attachments,
+            "pdf_links": pdf_links,
             "length": len(full_text),
             "is_pdf_only": False
         }

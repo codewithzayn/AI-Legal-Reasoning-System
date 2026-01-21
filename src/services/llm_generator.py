@@ -132,10 +132,14 @@ class LLMGenerator:
             text = chunk.get('chunk_text', '')
             title = chunk.get('document_title', 'Unknown')
             uri = chunk.get('document_uri', '')
+            doc_num = chunk.get('document_number')
+            source_info = f"Lähde: {title}"
+            if doc_num:
+                source_info += f" (Dnro: {doc_num})"
             
             context_parts.append(
                 f"[§{i}] {text}\n"
-                f"Lähde: {title}\n"
+                f"{source_info}\n"
                 f"URI: {uri}\n"
             )
         

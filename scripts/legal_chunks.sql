@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS legal_chunks (
     document_year INTEGER NOT NULL,          -- Year of document (e.g., 2025)
     document_type TEXT,                      -- Type: "statute" etc.
     document_category TEXT,                 -- Type: "act", etc.
+    document_number TEXT,                   -- Document number (e.g., "OKV/484/10/2024", "162/2024")
+    language VARCHAR(10) DEFAULT 'fin',     -- Document language (fin, swe, eng, sme)
     
     -- Chunk content
     chunk_text TEXT NOT NULL,                -- Actual text content of the chunk
@@ -112,6 +114,8 @@ RETURNS TABLE (
     id UUID,
     document_uri TEXT,
     document_title TEXT,
+    document_number TEXT,
+    language TEXT,
     section_number TEXT,
     chunk_text TEXT,
     similarity FLOAT,
@@ -123,6 +127,8 @@ BEGIN
         lc.id,
         lc.document_uri,
         lc.document_title,
+        lc.document_number,
+        lc.language,
         lc.section_number,
         lc.chunk_text,
         1 - (lc.embedding <=> query_embedding) AS similarity,
@@ -143,6 +149,8 @@ RETURNS TABLE (
     id UUID,
     document_uri TEXT,
     document_title TEXT,
+    document_number TEXT,
+    language TEXT,
     section_number TEXT,
     chunk_text TEXT,
     rank REAL,
@@ -154,6 +162,8 @@ BEGIN
         lc.id,
         lc.document_uri,
         lc.document_title,
+        lc.document_number,
+        lc.language,
         lc.section_number,
         lc.chunk_text,
         ts_rank_cd(lc.fts, query) AS rank,

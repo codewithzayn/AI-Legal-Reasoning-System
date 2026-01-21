@@ -63,7 +63,7 @@ COHERE_API_KEY=your_cohere_key  # For re-ranking
 
 ### 3. Setup Database
 
-Run `scripts/setup_supabase.sql` in Supabase SQL Editor.
+Run `scripts/legal_chunks.sql` in Supabase SQL Editor.
 
 ### 4. Ingest Documents
 

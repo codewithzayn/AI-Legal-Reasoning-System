@@ -3,6 +3,7 @@ Finlex Open Data API Client
 """
 
 import requests
+import re
 from typing import Dict
 
 
@@ -134,3 +135,15 @@ class FinlexAPI:
         response = requests.get(akn_uri, headers=self.headers, timeout=30)
         response.raise_for_status()
         return response.text
+    
+    def extract_document_number(self, uri: str) -> str:
+        """
+        Extract document number from Finlex URI 
+        e.g. .../2025/11017/fin -> 11017/2025
+        """
+        # Match pattern: .../year/number/...
+        match = re.search(r'/(\d{4})/(\d+)/', uri)
+        if match:
+            year, number = match.groups()
+            return number
+        return None

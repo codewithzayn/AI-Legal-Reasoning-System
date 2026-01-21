@@ -30,7 +30,6 @@ class PDFExtractor:
         
         try:
             # Step 1: Download PDF to temp file
-            print(f"   Downloading PDF from {pdf_url}...")
             response = requests.get(pdf_url, timeout=self.timeout, stream=True)
             response.raise_for_status()
             
