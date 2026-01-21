@@ -117,6 +117,8 @@ class FinlexAPI:
             return 'swe'
         elif '/eng@' in uri:
             return 'eng'
+        elif '/sme@' in uri:
+            return 'sme'
         return 'fin'  # Default to Finnish
     
     def fetch_document_xml(self, akn_uri: str) -> str:
