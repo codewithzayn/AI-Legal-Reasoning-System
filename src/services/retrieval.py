@@ -92,7 +92,6 @@ class HybridRetrieval:
         try:
             # Sanitize query for FTS
             sanitized_query = self._sanitize_fts_query(query_text)
-            
             response = self.client.rpc(
                 'fts_search',
                 {

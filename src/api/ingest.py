@@ -155,7 +155,6 @@ async def ingest_documents(request: IngestRequest):
                 for pdf_rel_path in parsed['pdf_links']:
                     # Construct full PDF URL (it's relative to the document URI)
                     pdf_url = f"{document_uri}/{pdf_rel_path}"
-                    print("pdf_url..", pdf_url)
                     try:
                         pdf_data = pdf_extractor.extract_from_url(pdf_url)
                         

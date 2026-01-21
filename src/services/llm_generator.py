@@ -35,6 +35,7 @@ RESPONSE STRUCTURE:
 LÄHTEET:
 - [§X] Document title
   URI: https://...
+  PDF: https://... (vain jos "PDF:" on mainittu kontekstissa / only if "PDF:" is in context)
 """
 
 
@@ -133,14 +134,24 @@ class LLMGenerator:
             title = chunk.get('document_title', 'Unknown')
             uri = chunk.get('document_uri', '')
             doc_num = chunk.get('document_number')
+            # Try to get PDF URL from various possible locations in chunk
+            metadata = chunk.get('metadata', {})
+            pdf_url = chunk.get('pdf_url') or metadata.get('pdf_url')
+            
+            # If not found, check pdf_files list
+            if not pdf_url and metadata.get('pdf_files'):
+                pdf_files = metadata['pdf_files']
+                if isinstance(pdf_files, list) and len(pdf_files) > 0:
+                     pdf_url = pdf_files[0].get('pdf_url')
+
             source_info = f"Lähde: {title}"
             if doc_num:
                 source_info += f" (Dnro: {doc_num})"
             
-            context_parts.append(
-                f"[§{i}] {text}\n"
-                f"{source_info}\n"
-                f"URI: {uri}\n"
-            )
+            context_str = f"[§{i}] {text}\n{source_info}\nURI: {uri}"
+            if pdf_url:
+                context_str += f"\nPDF: {pdf_url}"
+            
+            context_parts.append(f"{context_str}\n")
         
         return "\n".join(context_parts)
