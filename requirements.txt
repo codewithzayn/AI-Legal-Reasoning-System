@@ -24,3 +24,6 @@ python-dotenv>=1.0.0
 # API
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
+
+# PDF processing
+PyPDF2>=3.0.0

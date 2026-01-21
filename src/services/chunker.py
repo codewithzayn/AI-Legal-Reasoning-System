@@ -107,7 +107,7 @@ class LegalDocumentChunker:
                     document_year,
                     document_type,
                     document_category,
-                language
+                    language
                 )
                 chunk_index = len(chunks)
             else:
@@ -293,7 +293,8 @@ class LegalDocumentChunker:
         document_title: str,
         document_year: int,
         document_type: str = "unknown",
-        document_category: str = "unknown"
+        document_category: str = "unknown",
+        language: str = "fin"
     ) -> List[Chunk]:
         """
         Fallback: Split by size when no § sections found

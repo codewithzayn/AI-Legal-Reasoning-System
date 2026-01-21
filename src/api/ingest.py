@@ -28,8 +28,6 @@ class IngestRequest(BaseModel):
     """Request model for document ingestion"""
     documents: Optional[List[DocumentItem]] = None  # List of documents with individual status
     year: Optional[int] = 2025
-    force_reprocess: bool = False
-
 
 class IngestResponse(BaseModel):
     """Response model for document ingestion"""
@@ -53,7 +51,6 @@ async def ingest_documents(request: IngestRequest):
     
     - **documents**: List of documents with individual URIs and status
     - **year**: Year to fetch if no documents provided
-    - **force_reprocess**: Force reprocessing even if exists
     """
     # Initialize services
     api = FinlexAPI()
@@ -108,14 +105,48 @@ async def ingest_documents(request: IngestRequest):
                 successful += 1
                 continue
             
-            if request.force_reprocess or (status == "MODIFIED" and exists.data):
+            if status == "MODIFIED" and exists.data:
                 # Delete existing chunks
                 storage.client.table('legal_chunks').delete().eq(
                     'document_uri', document_uri
                 ).execute()
             
             # Step 2: Parse XML
-            parsed = parser.parse(xml)
+            parsed = parser.parse(xml, language=language)
+            
+            # Handle PDF-only documents
+            if parsed.get('is_pdf_only', False):
+                from src.services.pdf_extractor import PDFExtractor
+                
+                # Construct PDF URL
+                pdf_filename = parsed.get('pdf_ref', 'main.pdf')
+                pdf_url = f"{document_uri}/{pdf_filename}"
+                
+                try:
+                    # Extract text from PDF
+                    pdf_extractor = PDFExtractor()
+                    pdf_data = pdf_extractor.extract_from_url(pdf_url)
+                    
+                    # Update parsed data with PDF text
+                    parsed['text'] = pdf_data['text']
+                    parsed['length'] = pdf_data['char_count']
+                    parsed['pdf_metadata'] = {
+                        'pdf_url': pdf_url,
+                        'page_count': pdf_data['page_count'],
+                        'source_type': 'pdf'
+                    }
+                    
+                except Exception as pdf_error:
+                    # PDF extraction failed
+                    results.append({
+                        "document_uri": document_uri,
+                        "success": False,
+                        "message": f"PDF extraction failed: {str(pdf_error)}",
+                        "chunks_stored": 0,
+                        "document_title": parsed['title']
+                    })
+                    failed += 1
+                    continue
             
             # Step 3: Chunk document
             chunks = chunker.chunk_document(
@@ -130,6 +161,10 @@ async def ingest_documents(request: IngestRequest):
                 attachments=parsed.get('attachments', [])
             )
             
+            # Add PDF metadata to chunks if it's a PDF document
+            if parsed.get('is_pdf_only', False):
+                for chunk in chunks:
+                    chunk.metadata.update(parsed.get('pdf_metadata', {}))
             # Step 4: Generate embeddings
             embedded_chunks = embedder.embed_chunks(chunks)
             
@@ -145,6 +180,7 @@ async def ingest_documents(request: IngestRequest):
                 current_processed = tracking_check.data[0].get('documents_processed', 0) or 0
                 storage.client.table('ingestion_tracking').update({
                     'documents_processed': current_processed + 1,
+                    'status': 'completed',
                     'last_updated': 'now()'
                 }).eq('document_category', document_category).eq('document_type', document_type).eq('year', document_year).execute()
             else:
@@ -275,7 +311,50 @@ async def retry_failed_documents(request: RetryRequest):
             ).execute()
             
             # Step 2: Parse XML
-            parsed = parser.parse(xml)
+            parsed = parser.parse(xml, language=language)
+            
+            # Handle PDF-only documents
+            if parsed.get('is_pdf_only', False):
+                from src.services.pdf_extractor import PDFExtractor
+                
+                # Construct PDF URL
+                pdf_filename = parsed.get('pdf_ref', 'main.pdf')
+                pdf_url = f"{document_uri}/{pdf_filename}"
+                
+                try:
+                    # Extract text from PDF
+                    pdf_extractor = PDFExtractor()
+                    pdf_data = pdf_extractor.extract_from_url(pdf_url)
+                    
+                    # Update parsed data with PDF text
+                    parsed['text'] = pdf_data['text']
+                    parsed['length'] = pdf_data['char_count']
+                    parsed['pdf_metadata'] = {
+                        'pdf_url': pdf_url,
+                        'page_count': pdf_data['page_count'],
+                        'source_type': 'pdf'
+                    }
+                    
+                except Exception as pdf_error:
+                    # PDF extraction failed - increment retry count
+                    new_retry_count = doc.get('retry_count', 0) + 1
+                    
+                    storage.client.table('failed_documents').update({
+                        'retry_count': new_retry_count,
+                        'last_retry_at': 'now()',
+                        'error_message': f"PDF extraction failed: {str(pdf_error)}"
+                    }).eq('document_uri', document_uri).execute()
+                    
+                    results.append({
+                        "document_uri": document_uri,
+                        "success": False,
+                        "message": f"PDF extraction failed: {str(pdf_error)}",
+                        "chunks_stored": 0,
+                        "retry_count": new_retry_count,
+                        "max_retries_reached": new_retry_count >= request.max_retries
+                    })
+                    failed += 1
+                    continue
             
             # Step 3: Chunk document
             chunks = chunker.chunk_document(
@@ -289,6 +368,11 @@ async def retry_failed_documents(request: RetryRequest):
                 sections=parsed.get('sections', []),
                 attachments=parsed.get('attachments', [])
             )
+            
+            # Add PDF metadata to chunks if it's a PDF document
+            if parsed.get('is_pdf_only', False):
+                for chunk in chunks:
+                    chunk.metadata.update(parsed.get('pdf_metadata', {}))
             
             # Step 4: Generate embeddings
             embedded_chunks = embedder.embed_chunks(chunks)
@@ -305,6 +389,7 @@ async def retry_failed_documents(request: RetryRequest):
                 current_processed = tracking_check.data[0].get('documents_processed', 0) or 0
                 storage.client.table('ingestion_tracking').update({
                     'documents_processed': current_processed + 1,
+                    'status': 'completed',
                     'last_updated': 'now()'
                 }).eq('document_category', document_category).eq('document_type', document_type).eq('year', document_year).execute()
             else:

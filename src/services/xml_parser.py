@@ -10,7 +10,10 @@ class XMLParser:
     """Parse Finlex Akoma Ntoso XML"""
     
     def __init__(self):
-        self.ns = {'akn': 'http://docs.oasis-open.org/legaldocml/ns/akn/3.0'}
+        self.ns = {
+            'akn': 'http://docs.oasis-open.org/legaldocml/ns/akn/3.0',
+            'finlex': 'http://data.finlex.fi/schema/finlex'
+        }
     
     def _get_element_text(self, element) -> str:
         """Helper to extract all text from element and preserve order"""
@@ -83,13 +86,30 @@ class XMLParser:
         
         return ' '.join(all_text)
     
-    def extract_title(self, xml_content: str) -> str:
-        """Extract Finnish document title from XML"""
+    def extract_title(self, xml_content: str, language: str = 'fin') -> str:
+        """Extract document title from XML
+        
+        Args:
+            xml_content: XML string
+            language: Language code (fin, swe, eng, sme)
+        """
         try:
             root = ET.fromstring(xml_content)
         except ET.ParseError:
             return "Untitled Document"
         
+        # Try finlex:title (used in translations)
+        finlex_title = root.find(f'.//finlex:title[@lang="{language}"]', self.ns)
+        if finlex_title is not None and finlex_title.text:
+            return finlex_title.text.strip()
+        
+        # Fallback to Finnish if requested language not found
+        if language != 'fin':
+            finlex_title = root.find('.//finlex:title[@lang="fin"]', self.ns)
+            if finlex_title is not None and finlex_title.text:
+                return finlex_title.text.strip()
+        
+        # Try standard docTitle (used in regular statutes)
         title_elem = root.find('.//akn:preface//akn:docTitle', self.ns)
         if title_elem is None:
             title_elem = root.find('.//{*}preface//{*}docTitle')
@@ -223,10 +243,35 @@ class XMLParser:
         
         return attachments
     
-    def parse(self, xml_content: str) -> Dict:
-        """Parse XML and return structured data"""
+    def parse(self, xml_content: str, language: str = 'fin') -> Dict:
+        """Parse XML and return structured data
+        
+        Args:
+            xml_content: XML string
+            language: Language code (fin, swe, eng, sme)
+        """
+        # Check if this is a PDF-only document
+        try:
+            root = ET.fromstring(xml_content)
+            component_ref = root.find('.//akn:body//akn:componentRef', self.ns)
+            if component_ref is not None:
+                # PDF-only document
+                title = self.extract_title(xml_content, language)
+                return {
+                    "text": "",
+                    "title": title,
+                    "sections": [],
+                    "attachments": [],
+                    "length": 0,
+                    "is_pdf_only": True,
+                    "pdf_ref": component_ref.get('src', '')
+                }
+        except ET.ParseError:
+            pass
+        
+        # Regular document with text content
         text = self.extract_text(xml_content)
-        title = self.extract_title(xml_content)
+        title = self.extract_title(xml_content, language)
         sections = self.extract_sections(xml_content)
         attachments = self.extract_attachments(xml_content)
         
@@ -241,5 +286,6 @@ class XMLParser:
             "title": title,
             "sections": sections,
             "attachments": attachments,
-            "length": len(full_text)
+            "length": len(full_text),
+            "is_pdf_only": False
         }
