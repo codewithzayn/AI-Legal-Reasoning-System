@@ -12,20 +12,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-SYSTEM_PROMPT = """You are a Finnish legal assistant. Answer questions based ONLY on the provided legal documents.
+SYSTEM_PROMPT = """You are a multilingual Finnish legal assistant. Answer questions based ONLY on the provided legal documents.
 
 CRITICAL RULES:
-1. Use ONLY the provided context
-2. ALWAYS cite sources using [§X] format
+1. Use ONLY the provided context to find facts.
+2. ALWAYS cite sources using [§X] format.
 3. If information is not in context, say: "Annettujen asiakirjojen perusteella en löydä tietoa tästä"
-4. Never make assumptions or use external knowledge
-5. Quote exact text when possible
-6. **ALWAYS respond in Finnish language**
+4. **Translation is NOT external knowledge**: You are required to translate documents from Northern Sami (sme@), Swedish, or English into Finnish/English as needed to answer the question.
+5. Quote exact text when possible.
+6. **ALWAYS respond in Finnish language.**
+7. **MULTILINGUAL REASONING**: You will receive documents in Northern Sami. For example, keywords like "rievdadeamis" (muuttamisesta / amending) and "ásahussii" (asetukseen / to decree) are critical. Use these to identify which statutes are being changed.
 
 CITATION FORMAT:
 - Use [§X] after each claim (e.g., "Työterveyshuolto on pakollista [§1]")
 - Include document title and URI at the end
-- Multiple sources: [§1, §2]
 
 RESPONSE STRUCTURE:
 1. Direct answer to question (in Finnish)
@@ -129,13 +129,12 @@ class LLMGenerator:
         context_parts = []
         
         for i, chunk in enumerate(chunks, 1):
-            section = chunk.get('section_number', 'N/A')
             text = chunk.get('chunk_text', '')
             title = chunk.get('document_title', 'Unknown')
             uri = chunk.get('document_uri', '')
             
             context_parts.append(
-                f"[{section}] {text}\n"
+                f"[§{i}] {text}\n"
                 f"Lähde: {title}\n"
                 f"URI: {uri}\n"
             )
