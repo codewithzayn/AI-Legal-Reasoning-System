@@ -121,7 +121,6 @@ async def ingest_documents(request: IngestRequest):
                 # Construct PDF URL
                 pdf_filename = parsed.get('pdf_ref', 'main.pdf')
                 pdf_url = f"{document_uri}/{pdf_filename}"
-                print("pdf_url", pdf_url)
                 try:
                     # Extract text from PDF
                     pdf_extractor = PDFExtractor()
