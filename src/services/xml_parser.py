@@ -83,11 +83,8 @@ class XMLParser:
             conclusions = root.find('.//{*}conclusions')
         if conclusions is not None:
             all_text.append(self._get_element_text(conclusions))
-        
-            conclusions = root.find('.//{*}conclusions')
-        if conclusions is not None:
-            all_text.append(self._get_element_text(conclusions))
             
+
         # 5. Judgment Body (for decisions)
         judgment_body = root.find('.//akn:judgmentBody', self.ns)
         if judgment_body is None:
@@ -330,7 +327,6 @@ class XMLParser:
         text = self.extract_text(xml_content)
         title = self.extract_title(xml_content, language)
         sections = self.extract_sections(xml_content)
-        attachments = self.extract_attachments(xml_content)
         attachments = self.extract_attachments(xml_content)
         pdf_links = self.extract_pdf_links(xml_content)
         
