@@ -6,17 +6,19 @@ Downloads and extracts text from PDF documents
 import os
 import tempfile
 import requests
-from typing import Dict
+from typing import Dict, Any
 from PyPDF2 import PdfReader
+from src.config.logging_config import setup_logger
+logger = setup_logger(__name__)
 
 
 class PDFExtractor:
     """Extract text from PDF documents"""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.timeout = 30  # seconds
     
-    def extract_from_url(self, pdf_url: str) -> Dict[str, str]:
+    def extract_from_url(self, pdf_url: str) -> Dict[str, Any]:
         """
         Download PDF from URL, extract text, and delete the file
         
@@ -40,10 +42,10 @@ class PDFExtractor:
                 for chunk in response.iter_content(chunk_size=8192):
                     temp_pdf.write(chunk)
             
-            print(f"   PDF downloaded to {temp_pdf_path}")
+            logger.debug(f"PDF downloaded to {temp_pdf_path}")
             
             # Step 2: Extract text from PDF
-            print(f"   Extracting text from PDF...")
+            logger.debug("Extracting text from PDF...")
             reader = PdfReader(temp_pdf_path)
             page_count = len(reader.pages)
             
@@ -56,7 +58,7 @@ class PDFExtractor:
             
             full_text = '\n\n'.join(text_parts)
             
-            print(f"   Extracted {len(full_text)} characters from {page_count} pages")
+            logger.info(f"Extracted {len(full_text)} characters from {page_count} pages")
             
             return {
                 'text': full_text,
@@ -73,6 +75,6 @@ class PDFExtractor:
             if temp_pdf_path and os.path.exists(temp_pdf_path):
                 try:
                     os.remove(temp_pdf_path)
-                    print(f"   Deleted temp PDF: {temp_pdf_path}")
+                    logger.debug(f"Deleted temp PDF: {temp_pdf_path}")
                 except Exception as e:
-                    print(f"   Warning: Failed to delete temp PDF {temp_pdf_path}: {str(e)}")
+                    logger.warning(f"Failed to delete temp PDF {temp_pdf_path}: {e}")

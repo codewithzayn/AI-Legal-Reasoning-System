@@ -7,8 +7,10 @@ import os
 from typing import List, Dict
 from dotenv import load_dotenv
 import cohere
+from src.config.logging_config import setup_logger
 
 load_dotenv()
+logger = setup_logger(__name__)
 
 
 class CohereReranker:
@@ -25,7 +27,7 @@ class CohereReranker:
             raise ValueError("COHERE_API_KEY not found in environment")
         
         self.client = cohere.Client(api_key)
-        print("✓ Cohere Rerank initialized")
+        logger.debug("Cohere Rerank initialized")
     
     def rerank(
         self, 

@@ -4,11 +4,13 @@ Stores document chunks with embeddings in Supabase
 """
 
 import os
-from typing import List
+from typing import List, Optional, Any
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from src.config.logging_config import setup_logger
 
 load_dotenv()
+logger = setup_logger(__name__)
 
 
 class SupabaseStorage:
@@ -21,7 +23,7 @@ class SupabaseStorage:
     - Error handling
     """
     
-    def __init__(self, url: str = None, key: str = None):
+    def __init__(self, url: Optional[str] = None, key: Optional[str] = None) -> None:
         """
         Initialize Supabase client
         
@@ -66,19 +68,23 @@ class SupabaseStorage:
             })
         
         # Upsert into Supabase (prevents duplicates via unique constraint)
-        print(f"   Upserting {len(rows)} chunks into Supabase...")
+        logger.info(f"Upserting {len(rows)} chunks into Supabase...")
         response = self.client.table('legal_chunks')\
             .upsert(rows, on_conflict='document_uri,chunk_index')\
             .execute()
         
         return len(response.data)
     
-    def log_failed_document(self, document_uri: str, error_message: str, 
-                           error_type: str = 'unknown', 
-                           document_category: str = None,
-                           document_type: str = None,
-                           document_year: int = None,
-                           language: str = None) -> None:
+    def log_failed_document(
+        self, 
+        document_uri: str, 
+        error_message: str, 
+        error_type: str = 'unknown', 
+        document_category: Optional[str] = None,
+        document_type: Optional[str] = None,
+        document_year: Optional[int] = None,
+        language: Optional[str] = None
+    ) -> None:
         """
         Log a failed document to failed_documents table
         
@@ -118,4 +124,4 @@ class SupabaseStorage:
                     'retry_count': 0
                 }).execute()
         except Exception as e:
-            print(f"  ⚠️  Failed to log error: {str(e)}")
+            logger.error(f"Failed to log error: {e}")

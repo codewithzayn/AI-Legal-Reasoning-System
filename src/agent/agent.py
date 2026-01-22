@@ -6,6 +6,8 @@ import time
 from typing import Dict, Any
 from .graph import agent_graph
 from .state import AgentState
+from src.config.logging_config import setup_logger
+logger = setup_logger(__name__)
 
 
 def process_query(user_query: str, chat_history: list = None) -> str:
@@ -21,7 +23,7 @@ def process_query(user_query: str, chat_history: list = None) -> str:
     """
     
     total_start = time.time()
-    print(f"🔍 QUERY: {user_query}")
+    logger.info(f"QUERY: {user_query}")
     
     # Initialize state
     initial_state: AgentState = {
@@ -42,7 +44,7 @@ def process_query(user_query: str, chat_history: list = None) -> str:
         final_state = agent_graph.invoke(initial_state)
         
         total_elapsed = time.time() - total_start
-        print(f"⏱️  TOTAL TIME: {total_elapsed:.2f}s")
+        logger.info(f"TOTAL TIME: {total_elapsed:.2f}s")
         
         return final_state.get("response", "Error: No response generated")
     

@@ -4,7 +4,9 @@ Finlex Open Data API Client
 
 import requests
 import re
-from typing import Dict
+from typing import Dict, List, Optional
+from src.config.logging_config import setup_logger
+logger = setup_logger(__name__)
 
 
 class FinlexAPI:
@@ -12,7 +14,7 @@ class FinlexAPI:
     
     BASE_URL = "https://opendata.finlex.fi/finlex/avoindata/v1"
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.headers = {"User-Agent": "AI-Legal-Reasoning-System/1.0"}
     
 
@@ -99,7 +101,7 @@ class FinlexAPI:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            print(f"API error: {str(e)}")
+            logger.error(f"API error: {e}")
             return []
     
     def _extract_language(self, uri: str) -> str:

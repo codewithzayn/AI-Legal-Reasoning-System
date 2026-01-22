@@ -8,6 +8,8 @@ from typing import Dict, Any
 from .state import AgentState
 from ..services.retrieval import HybridRetrieval
 from ..services.llm_generator import LLMGenerator
+from src.config.logging_config import setup_logger
+logger = setup_logger(__name__)
 
 
 def search_knowledge(state: AgentState) -> AgentState:
@@ -18,7 +20,7 @@ def search_knowledge(state: AgentState) -> AgentState:
     """
     state["stage"] = "search"
     start_time = time.time()
-    print(f"\n⏱️  [SEARCH] Starting hybrid search + reranking...")
+    logger.info("[SEARCH] Starting hybrid search + reranking...")
     
     try:
         # Initialize retrieval service
@@ -33,7 +35,7 @@ def search_knowledge(state: AgentState) -> AgentState:
         )
         
         elapsed = time.time() - start_time
-        print(f"✅ [SEARCH] Completed in {elapsed:.2f}s - Retrieved {len(results)} results")
+        logger.info(f"[SEARCH] Completed in {elapsed:.2f}s - Retrieved {len(results)} results")
         
         # Store results in state
         state["search_results"] = results
@@ -48,7 +50,7 @@ def search_knowledge(state: AgentState) -> AgentState:
         }
         
     except Exception as e:
-        print(f"❌ [SEARCH] Error: {str(e)}")
+        logger.error(f"[SEARCH] Error: {e}")
         state["error"] = f"Search failed: {str(e)}"
         state["search_results"] = []
     
@@ -67,13 +69,13 @@ def reason_legal(state: AgentState) -> AgentState:
     results = state.get("search_results", [])
     
     if not results:
-        print("⚠️  [LLM] No search results found")
+        logger.warning("[LLM] No search results found")
         state["response"] = "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja."
         return state
     
     # Generate response with LLM
     start_time = time.time()
-    print(f"⏱️  [LLM] Generating response with {len(results)} chunks...")
+    logger.info(f"[LLM] Generating response with {len(results)} chunks...")
     
     try:
         llm = LLMGenerator()
@@ -84,10 +86,10 @@ def reason_legal(state: AgentState) -> AgentState:
         state["response"] = response
         
         elapsed = time.time() - start_time
-        print(f"✅ [LLM] Completed in {elapsed:.2f}s")
+        logger.info(f"[LLM] Completed in {elapsed:.2f}s")
         
     except Exception as e:
-        print(f"❌ [LLM] Error: {str(e)}")
+        logger.error(f"[LLM] Error: {e}")
         state["error"] = f"LLM generation failed: {str(e)}"
         state["response"] = "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen."
     

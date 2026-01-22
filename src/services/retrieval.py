@@ -11,8 +11,10 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 from .embedder import DocumentEmbedder
 from .reranker import CohereReranker
+from src.config.logging_config import setup_logger
 
 load_dotenv()
+logger = setup_logger(__name__)
 
 
 class HybridRetrieval:
@@ -67,7 +69,7 @@ class HybridRetrieval:
             
             return response.data or []
         except Exception as e:
-            print(f"Vector search error: {e}")
+            logger.error(f"Vector search error: {e}")
             return []
     
     def _sanitize_fts_query(self, query: str) -> str:
@@ -102,7 +104,7 @@ class HybridRetrieval:
             
             return response.data or []
         except Exception as e:
-            print(f"FTS search error: {e}")
+            logger.error(f"FTS search error: {e}")
             return []
     
     def rrf_merge(
@@ -210,13 +212,13 @@ class HybridRetrieval:
         initial_results = self.hybrid_search(query_text, limit=initial_limit)
         
         # Re-rank with Cohere
-        print(f"⏱️  [RERANK] Starting Cohere rerank on {len(initial_results)} results...")
+        logger.info(f"[RERANK] Starting Cohere rerank on {len(initial_results)} results...")
         rerank_start = time.time()
         
         reranker = self._get_reranker()
         reranked = reranker.rerank(query_text, initial_results, top_k=final_limit)
         
         rerank_elapsed = time.time() - rerank_start
-        print(f"✅ [RERANK] Completed in {rerank_elapsed:.2f}s - Top {len(reranked)} results")
+        logger.info(f"[RERANK] Completed in {rerank_elapsed:.2f}s - Top {len(reranked)} results")
         
         return reranked

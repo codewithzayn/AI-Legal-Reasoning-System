@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
 import sys
+import logging
 from pathlib import Path
 
 # Add project root to path
@@ -15,6 +16,8 @@ from src.services.chunker import LegalDocumentChunker
 from src.services.embedder import DocumentEmbedder
 from src.services.supabase import SupabaseStorage
 from src.services.pdf_extractor import PDFExtractor
+from src.config.logging_config import setup_logger
+logger = setup_logger(__name__)
 app = FastAPI(title="Finlex Document Ingestion API")
 
 
@@ -131,7 +134,7 @@ def _process_single_document(
                 })
                 
             except Exception as pdf_error:
-                print(f"   ⚠️ Failed to extract embedded PDF {pdf_url}: {pdf_error}")
+                logger.warning(f"Failed to extract embedded PDF {pdf_url}: {pdf_error}")
     
     # Step 4: Chunk document
     chunks = chunker.chunk_document(
@@ -287,7 +290,7 @@ async def ingest_documents(request: IngestRequest):
                     error_type='api_error'
                 )
             except Exception as log_error:
-                print(f"  ⚠️  Failed to log error: {str(log_error)}")
+                logger.error(f"Failed to log error: {log_error}")
             
             results.append({
                 "document_uri": document_uri,

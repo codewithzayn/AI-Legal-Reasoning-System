@@ -7,6 +7,8 @@ import os
 from typing import List, Dict
 from openai import OpenAI
 from dataclasses import dataclass
+from src.config.logging_config import setup_logger
+logger = setup_logger(__name__)
 
 
 @dataclass
@@ -66,7 +68,7 @@ class DocumentEmbedder:
             texts = [chunk.text for chunk in batch]
             
             # Generate embeddings
-            print(f"   Generating embeddings for batch {i//batch_size + 1} ({len(batch)} chunks)...")
+            logger.info(f"Generating embeddings for batch {i//batch_size + 1} ({len(batch)} chunks)...")
             response = self.client.embeddings.create(
                 model=self.model,
                 input=texts

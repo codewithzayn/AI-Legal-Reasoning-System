@@ -5,11 +5,13 @@ Generates legal responses with mandatory citations
 
 import os
 import time
-from typing import List, Dict
+from typing import List, Dict, Generator
 from openai import OpenAI
 from dotenv import load_dotenv
+from src.config.logging_config import setup_logger
 
 load_dotenv()
+logger = setup_logger(__name__)
 
 
 SYSTEM_PROMPT = """You are a multilingual Finnish legal assistant. Answer questions based ONLY on the provided legal documents.
@@ -73,7 +75,7 @@ class LLMGenerator:
         ]
         
         # Generate response
-        print(f"⏱️  [LLM API] Calling OpenAI...")
+        logger.info("[LLM API] Calling OpenAI...")
         api_start = time.time()
         
         response = self.client.chat.completions.create(
@@ -84,7 +86,7 @@ class LLMGenerator:
         )
         
         api_elapsed = time.time() - api_start
-        print(f"✅ [LLM API] Completed in {api_elapsed:.2f}s")
+        logger.info(f"[LLM API] Completed in {api_elapsed:.2f}s")
         
         return response.choices[0].message.content
     
