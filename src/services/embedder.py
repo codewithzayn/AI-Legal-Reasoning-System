@@ -8,6 +8,7 @@ from typing import List, Dict
 from openai import OpenAI
 from dataclasses import dataclass
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 logger = setup_logger(__name__)
 
 
@@ -31,7 +32,7 @@ class DocumentEmbedder:
     - Error handling and retries
     """
     
-    def __init__(self, api_key: str = None, model: str = "text-embedding-3-small"):
+    def __init__(self, api_key: str = None, model: str = None):
         """
         Initialize embedder
         
@@ -44,8 +45,8 @@ class DocumentEmbedder:
             raise ValueError("OpenAI API key required. Set OPENAI_API_KEY env var or pass api_key parameter.")
         
         self.client = OpenAI(api_key=self.api_key)
-        self.model = model
-        self.dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
+        self.model = model or config.EMBEDDING_MODEL
+        self.dimensions = config.EMBEDDING_DIMENSIONS
     
     def embed_chunks(self, chunks: List, batch_size: int = 100) -> List[EmbeddedChunk]:
         """

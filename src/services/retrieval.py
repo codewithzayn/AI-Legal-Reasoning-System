@@ -47,7 +47,7 @@ class HybridRetrieval:
             self.reranker = CohereReranker()
         return self.reranker
     
-    def vector_search(self, query_embedding: List[float], limit: int = 50) -> List[Dict]:
+    def vector_search(self, query_embedding: List[float], limit: int = None) -> List[Dict]:
         """
         Vector similarity search using cosine distance
         
@@ -64,7 +64,7 @@ class HybridRetrieval:
                 {
                     'query_embedding': query_embedding,
                     'match_threshold': config.MATCH_THRESHOLD,
-                    'match_count': limit
+                    'match_count': limit or config.VECTOR_SEARCH_TOP_K
                 }
             ).execute()
             
@@ -81,7 +81,7 @@ class HybridRetrieval:
         sanitized = re.sub(r'\s+', ' ', sanitized).strip()
         return sanitized
     
-    def fts_search(self, query_text: str, limit: int = 50) -> List[Dict]:
+    def fts_search(self, query_text: str, limit: int = None) -> List[Dict]:
         """
         Full-text search using PostgreSQL ts_rank
         
@@ -99,7 +99,7 @@ class HybridRetrieval:
                 'fts_search',
                 {
                     'query_text': sanitized_query,
-                    'match_count': limit
+                    'match_count': limit or config.FTS_SEARCH_TOP_K
                 }
             ).execute()
             
@@ -184,8 +184,8 @@ class HybridRetrieval:
         query_embedding = self.embedder.embed_query(query_text)
         
         # Perform both searches
-        vector_results = self.vector_search(query_embedding, limit=50)
-        fts_results = self.fts_search(query_text, limit=50)
+        vector_results = self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K)
+        fts_results = self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K)
         # Merge with RRF
         merged_results = self.rrf_merge(vector_results, fts_results)
         
@@ -217,7 +217,7 @@ class HybridRetrieval:
         rerank_start = time.time()
         
         reranker = self._get_reranker()
-        reranked = reranker.rerank(query_text, initial_results, top_k=final_limit)
+        reranked = reranker.rerank(query_text, initial_results, top_k=final_limit or config.RERANK_TOP_K)
         
         rerank_elapsed = time.time() - rerank_start
         logger.info(f"[RERANK] Completed in {rerank_elapsed:.2f}s - Top {len(reranked)} results")

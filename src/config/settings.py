@@ -28,7 +28,6 @@ class Config:
     VECTOR_SEARCH_TOP_K: int = int(os.getenv("VECTOR_SEARCH_TOP_K", "50"))
     FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "50"))
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "5"))
-    SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.5"))
     
     # Embedding Settings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -36,9 +35,6 @@ class Config:
     
     # PDF Processing
     PDF_MAX_WORKERS: int = int(os.getenv("PDF_MAX_WORKERS", "4"))
-    
-    # Logging
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 
 # Singleton instance
