@@ -2,12 +2,14 @@
 LLM Response Generator
 Generates legal responses with mandatory citations
 Handles different document types: statutes (with § sections) and decisions (without)
+Uses LangChain ChatOpenAI for automatic LangSmith tracing
 """
 
 import os
 import time
 from typing import List, Dict, Generator
-from openai import OpenAI
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 from src.config.logging_config import setup_logger
 
@@ -44,11 +46,16 @@ LÄHTEET:
 
 
 class LLMGenerator:
-    """Generate responses using GPT-4o with citations"""
+    """Generate responses using GPT-4o with citations and LangSmith tracing"""
     
     def __init__(self, model: str = "gpt-4o-mini"):
-        """Initialize OpenAI client"""
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        """Initialize LangChain ChatOpenAI client with LangSmith tracing"""
+        self.llm = ChatOpenAI(
+            model=model,
+            temperature=0.1,  # Low temperature for accuracy
+            max_tokens=1000,
+            api_key=os.getenv("OPENAI_API_KEY")
+        )
         self.model = model
     
     def generate_response(
@@ -70,27 +77,22 @@ class LLMGenerator:
         # Build context
         context = self._build_context(context_chunks)
         
-        # Create messages
+        # Create messages using LangChain message types
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"}
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}")
         ]
         
-        # Generate response
-        logger.info("[LLM API] Calling OpenAI...")
+        # Generate response with automatic LangSmith tracing
+        logger.info("[LLM API] Calling ChatOpenAI (LangSmith traced)...")
         api_start = time.time()
         
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.1,  # Low temperature for accuracy
-            max_tokens=1000
-        )
+        response = self.llm.invoke(messages)
         
         api_elapsed = time.time() - api_start
         logger.info(f"[LLM API] Completed in {api_elapsed:.2f}s")
         
-        return response.choices[0].message.content
+        return response.content
     
     def stream_response(
         self, 
@@ -110,24 +112,16 @@ class LLMGenerator:
         # Build context
         context = self._build_context(context_chunks)
         
-        # Create messages
+        # Create messages using LangChain message types
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"}
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}")
         ]
         
-        # Stream response
-        stream = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.1,
-            max_tokens=1000,
-            stream=True
-        )
-        
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        # Stream response with automatic LangSmith tracing
+        for chunk in self.llm.stream(messages):
+            if chunk.content:
+                yield chunk.content
     
     def _build_context(self, chunks: List[Dict]) -> str:
         """
