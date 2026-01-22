@@ -17,6 +17,7 @@ from src.services.embedder import DocumentEmbedder
 from src.services.supabase import SupabaseStorage
 from src.services.pdf_extractor import PDFExtractor
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 logger = setup_logger(__name__)
 app = FastAPI(title="Finlex Document Ingestion API")
 
@@ -110,31 +111,44 @@ def _process_single_document(
             'source_type': 'pdf'
         }
     
-    # Step 3: Handle embedded PDF links (e.g. for judgments)
+    # Step 3: Handle embedded PDF links (e.g. for judgments) - PARALLEL DOWNLOAD
     if parsed.get('pdf_links'):
-        pdf_extractor = PDFExtractor()
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         
-        for pdf_rel_path in parsed['pdf_links']:
-            pdf_url = f"{document_uri}/{pdf_rel_path}"
+        # Reuse single PDFExtractor instance
+        pdf_extractor = PDFExtractor()
+        pdf_urls = [f"{document_uri}/{pdf_rel_path}" for pdf_rel_path in parsed['pdf_links']]
+        
+        def extract_pdf(pdf_url: str) -> Dict[str, Any]:
+            """Helper for parallel PDF extraction"""
             try:
                 pdf_data = pdf_extractor.extract_from_url(pdf_url)
-                
-                parsed['text'] += f"\n\n[PDF CONTENT START]\n{pdf_data['text']}\n[PDF CONTENT END]"
-                parsed['length'] += pdf_data['char_count']
-                
-                if 'pdf_metadata' not in parsed:
-                    parsed['pdf_metadata'] = []
-                elif isinstance(parsed['pdf_metadata'], dict):
-                    parsed['pdf_metadata'] = [parsed['pdf_metadata']]
-                
-                parsed['pdf_metadata'].append({
-                    'pdf_url': pdf_url,
-                    'page_count': pdf_data['page_count'],
-                    'source_type': 'embedded_pdf'
-                })
-                
-            except Exception as pdf_error:
-                logger.warning(f"Failed to extract embedded PDF {pdf_url}: {pdf_error}")
+                return {'success': True, 'url': pdf_url, 'data': pdf_data}
+            except Exception as e:
+                logger.warning(f"Failed to extract embedded PDF {pdf_url}: {e}")
+                return {'success': False, 'url': pdf_url, 'error': str(e)}
+        
+        # Download PDFs in parallel (max 4 workers)
+        with ThreadPoolExecutor(max_workers=config.PDF_MAX_WORKERS) as executor:
+            futures = {executor.submit(extract_pdf, url): url for url in pdf_urls}
+            
+            for future in as_completed(futures):
+                result = future.result()
+                if result['success']:
+                    pdf_data = result['data']
+                    parsed['text'] += f"\n\n[PDF CONTENT START]\n{pdf_data['text']}\n[PDF CONTENT END]"
+                    parsed['length'] += pdf_data['char_count']
+                    
+                    if 'pdf_metadata' not in parsed:
+                        parsed['pdf_metadata'] = []
+                    elif isinstance(parsed['pdf_metadata'], dict):
+                        parsed['pdf_metadata'] = [parsed['pdf_metadata']]
+                    
+                    parsed['pdf_metadata'].append({
+                        'pdf_url': result['url'],
+                        'page_count': pdf_data['page_count'],
+                        'source_type': 'embedded_pdf'
+                    })
     
     # Step 4: Chunk document
     chunks = chunker.chunk_document(
@@ -223,7 +237,11 @@ async def ingest_documents(request: IngestRequest):
     # Initialize services
     api = FinlexAPI()
     parser = XMLParser()
-    chunker = LegalDocumentChunker(max_chunk_size=1000, min_chunk_size=100, overlap=50)
+    chunker = LegalDocumentChunker(
+        max_chunk_size=config.CHUNK_SIZE, 
+        min_chunk_size=config.CHUNK_MIN_SIZE, 
+        overlap=config.CHUNK_OVERLAP
+    )
     embedder = DocumentEmbedder()
     storage = SupabaseStorage()
     
@@ -337,7 +355,11 @@ async def retry_failed_documents(request: RetryRequest):
     # Initialize services
     api = FinlexAPI()
     parser = XMLParser()
-    chunker = LegalDocumentChunker(max_chunk_size=1000, min_chunk_size=100, overlap=50)
+    chunker = LegalDocumentChunker(
+        max_chunk_size=config.CHUNK_SIZE, 
+        min_chunk_size=config.CHUNK_MIN_SIZE, 
+        overlap=config.CHUNK_OVERLAP
+    )
     embedder = DocumentEmbedder()
     
     results = []

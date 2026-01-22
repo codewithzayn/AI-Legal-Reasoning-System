@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from .embedder import DocumentEmbedder
 from .reranker import CohereReranker
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 
 load_dotenv()
 logger = setup_logger(__name__)
@@ -62,7 +63,7 @@ class HybridRetrieval:
                 'vector_search',
                 {
                     'query_embedding': query_embedding,
-                    'match_threshold': 0.3,
+                    'match_threshold': config.MATCH_THRESHOLD,
                     'match_count': limit
                 }
             ).execute()
