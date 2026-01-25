@@ -53,26 +53,6 @@ class FinlexAPI:
         except (ValueError, IndexError):
             return "unknown"
     
-    def fetch_single_statute(self, year: int = 2025) -> Dict[str, str]:
-        """Fetch one statute for testing"""
-        data = self.fetch_document_list(category="act", doc_type="statute", year=year, page=1, limit=1)
-        # data is already a list
-        if not data or len(data) == 0:
-            raise ValueError(f"No statutes found for {year}")
-        
-        doc = data[0]
-        xml = self.get_document(doc["akn_uri"])
-        document_type = self._extract_document_type(doc["akn_uri"])
-        document_category = self._extract_document_category(doc["akn_uri"])
-        document_year = self._extract_year(doc["akn_uri"])
-        return {
-            "uri": doc["akn_uri"],
-            "status": doc["status"],
-            "document_type": document_type,
-            "document_year": document_year,
-            "document_category": document_category,
-            "xml": xml
-        }
     
     def fetch_document_list(self, category: str, doc_type: str, year: int, 
                            page: int = 1, limit: int = 10) -> list:

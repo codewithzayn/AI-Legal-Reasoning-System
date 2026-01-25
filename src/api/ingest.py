@@ -246,13 +246,9 @@ async def ingest_documents(request: IngestRequest):
     storage = SupabaseStorage()
     
     # Get list of documents to process
-    documents_to_process = []
-    if request.documents:
-        documents_to_process = request.documents
-    else:
-        # Fetch single statute if no documents provided
-        doc = api.fetch_single_statute(year=request.year)
-        documents_to_process = [DocumentItem(document_uri=doc['uri'], status="NEW")]
+    if not request.documents:
+        raise HTTPException(status_code=400, detail="No documents provided. Please specify documents list.")
+    documents_to_process = request.documents
     
     # Process each document
     results = []
