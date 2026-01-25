@@ -88,22 +88,18 @@ class FinlexAPI:
     
     def _extract_language(self, uri: str) -> str:
         """
-        Extract language code from Finlex URI
+        Extract language code from Finlex URI dynamically
         
         Args:
-            uri: Finlex document URI
+            uri: Finlex document URI (e.g. .../fin@ or .../swe@ or .../eng@)
             
         Returns:
-            Language code (fin, swe, eng)
+            Language code extracted from URI, defaults to 'fin'
         """
-        if '/fin@' in uri:
-            return 'fin'
-        elif '/swe@' in uri:
-            return 'swe'
-        elif '/eng@' in uri:
-            return 'eng'
-        elif '/sme@' in uri:
-            return 'sme'
+        # Match pattern: /xxx@ where xxx is the language code
+        match = re.search(r'/([a-z]{2,3})@', uri)
+        if match:
+            return match.group(1)
         return 'fin'  # Default to Finnish
     
     async def fetch_document_xml(self, akn_uri: str) -> str:
