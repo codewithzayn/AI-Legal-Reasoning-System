@@ -30,3 +30,4 @@ uvicorn[standard]==0.40.0
 PyPDF2==3.0.1
 defusedxml==0.7.1
 httpx==0.28.1
+python-json-logger==2.0.7

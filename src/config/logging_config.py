@@ -1,27 +1,26 @@
 """
 Logging Configuration for AI Legal Reasoning System
-Provides consistent logging across all modules
+Provides consistent JSON logging across all modules for production observability
 """
 
 import logging
 import os
 import sys
 from typing import Optional
+from pythonjsonlogger import jsonlogger
 
 
 def setup_logger(
     name: str = "legal_ai",
     level: Optional[str] = None,
-    log_format: Optional[str] = None
 ) -> logging.Logger:
     """
-    Create and configure a logger instance.
+    Create and configure a logger instance with JSON output.
     
     Args:
         name: Logger name (usually __name__ of calling module)
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
                Defaults to LOG_LEVEL env var or INFO
-        log_format: Custom log format string
         
     Returns:
         Configured logger instance
@@ -32,17 +31,19 @@ def setup_logger(
     
     numeric_level = getattr(logging, level, logging.INFO)
     
-    # Default format
-    if log_format is None:
-        log_format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-    
     # Create logger
     logger = logging.getLogger(name)
     
     # Only add handler if not already configured
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter(log_format, datefmt="%Y-%m-%d %H:%M:%S"))
+        
+        # JSON formatter for production
+        formatter = jsonlogger.JsonFormatter(
+            '%(asctime)s %(levelname)s %(name)s %(message)s',
+            datefmt="%Y-%m-%dT%H:%M:%S"
+        )
+        handler.setFormatter(formatter)
         logger.addHandler(handler)
     
     logger.setLevel(numeric_level)
