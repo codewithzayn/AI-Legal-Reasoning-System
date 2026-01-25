@@ -48,9 +48,10 @@ def process_query(user_query: str, chat_history: list = None) -> str:
         
         return final_state.get("response", "Error: No response generated")
     
-    except Exception as e:
+    except Exception:
         # Error handling
-        return f"Agent Error: {str(e)}\n\nPlease try again or rephrase your question."
+        logger.exception("Agent execution failed")
+        return "An internal error occurred. Please check the logs for details or try again later."
 
 
 def get_agent_info() -> Dict[str, Any]:
