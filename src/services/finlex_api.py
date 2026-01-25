@@ -1,8 +1,8 @@
 """
-Finlex Open Data API Client
+Finlex Open Data API Client (Async)
 """
 
-import requests
+import httpx
 import re
 from typing import Dict, List, Optional
 from src.config.logging_config import setup_logger
@@ -10,7 +10,7 @@ logger = setup_logger(__name__)
 
 
 class FinlexAPI:
-    """Client for Finlex Open Data API"""
+    """Async client for Finlex Open Data API"""
     
     BASE_URL = "https://opendata.finlex.fi/finlex/avoindata/v1"
     
@@ -18,11 +18,12 @@ class FinlexAPI:
         self.headers = {"User-Agent": "AI-Legal-Reasoning-System/1.0"}
     
 
-    def get_document(self, uri: str) -> str:
+    async def get_document(self, uri: str) -> str:
         """Fetch XML document from URI"""
-        response = requests.get(uri, headers=self.headers)
-        response.raise_for_status()
-        return response.text
+        async with httpx.AsyncClient() as client:
+            response = await client.get(uri, headers=self.headers, timeout=30)
+            response.raise_for_status()
+            return response.text
     
     def _extract_document_type(self, uri: str) -> str:
         """Extract document type from Finlex URI"""
@@ -54,7 +55,7 @@ class FinlexAPI:
             return "unknown"
     
     
-    def fetch_document_list(self, category: str, doc_type: str, year: int, 
+    async def fetch_document_list(self, category: str, doc_type: str, year: int, 
                            page: int = 1, limit: int = 10) -> list:
         """
         Fetch list of documents for bulk ingestion
@@ -77,10 +78,11 @@ class FinlexAPI:
         }
         
         try:
-            response = requests.get(url, headers=self.headers, params=params, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=self.headers, params=params, timeout=30)
+                response.raise_for_status()
+                return response.json()
+        except httpx.RequestError as e:
             logger.error(f"API error: {e}")
             return []
     
@@ -104,7 +106,7 @@ class FinlexAPI:
             return 'sme'
         return 'fin'  # Default to Finnish
     
-    def fetch_document_xml(self, akn_uri: str) -> str:
+    async def fetch_document_xml(self, akn_uri: str) -> str:
         """
         Fetch XML content for a document
         
@@ -114,9 +116,10 @@ class FinlexAPI:
         Returns:
             XML content as string
         """
-        response = requests.get(akn_uri, headers=self.headers, timeout=30)
-        response.raise_for_status()
-        return response.text
+        async with httpx.AsyncClient() as client:
+            response = await client.get(akn_uri, headers=self.headers, timeout=30)
+            response.raise_for_status()
+            return response.text
     
     def extract_document_number(self, uri: str) -> str:
         """

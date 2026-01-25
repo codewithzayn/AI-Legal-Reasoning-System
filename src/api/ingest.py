@@ -47,7 +47,7 @@ class RetryRequest(BaseModel):
     """Request model for retrying failed documents"""
     max_retries: int = 3
 
-def _process_single_document(
+async def _process_single_document(
     document_uri: str,
     api: FinlexAPI,
     parser: XMLParser,
@@ -77,8 +77,8 @@ def _process_single_document(
     Returns:
         Dict with success status, message, chunks_stored, etc.
     """
-    # Step 1: Fetch document
-    xml = api.fetch_document_xml(document_uri)
+    # Step 1: Fetch document (async)
+    xml = await api.fetch_document_xml(document_uri)
     
     # Extract metadata if not provided
     if not document_type:
@@ -281,7 +281,7 @@ async def ingest_documents(request: IngestRequest):
                 ).execute()
             
             # Process document using shared helper
-            result = _process_single_document(
+            result = await _process_single_document(
                 document_uri=document_uri,
                 api=api,
                 parser=parser,
@@ -372,7 +372,7 @@ async def retry_failed_documents(request: RetryRequest):
             ).execute()
             
             # Process document using shared helper (uses pre-extracted metadata if available)
-            result = _process_single_document(
+            result = await _process_single_document(
                 document_uri=document_uri,
                 api=api,
                 parser=parser,
