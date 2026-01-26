@@ -155,9 +155,9 @@ BEGIN
         s.content,
         c.keywords,
         1 - (s.embedding <=> query_embedding) AS vector_score,
-        ts_rank(s.fts_vector, plainto_tsquery('finnish', query_text)) AS fts_score,
+        ts_rank(s.fts_vector, plainto_tsquery('finnish', query_text))::float8 AS fts_score,
         (0.7 * (1 - (s.embedding <=> query_embedding))) + 
-        (0.3 * ts_rank(s.fts_vector, plainto_tsquery('finnish', query_text))) AS combined_score
+        (0.3 * ts_rank(s.fts_vector, plainto_tsquery('finnish', query_text))::float8) AS combined_score
     FROM case_law_sections s
     JOIN case_law c ON s.case_law_id = c.id
     WHERE 

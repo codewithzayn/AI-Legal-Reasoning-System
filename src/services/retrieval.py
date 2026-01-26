@@ -178,32 +178,93 @@ class HybridRetrieval:
         
         return merged
     
+    async def search_case_law(self, query_embedding: List[float], query_text: str, limit: int = None) -> List[Dict]:
+        """
+        Search case law using the specific SQL function (Hybrid internally)
+        """
+        try:
+            # Sanitize query for FTS part of the internal function
+            sanitized_query = self._sanitize_fts_query(query_text)
+            
+            client = await self._get_client()
+            response = await client.rpc(
+                'search_case_law',
+                {
+                    'query_embedding': query_embedding,
+                    'query_text': sanitized_query,
+                    'match_count': limit or config.VECTOR_SEARCH_TOP_K
+                }
+            ).execute()
+            
+            # Normalize to common format
+            results = []
+            for item in (response.data or []):
+                results.append({
+                    'id': item['section_id'],
+                    'text': item['content'],
+                    'source': 'case_law',
+                    'metadata': {
+                        'case_id': item['case_id'],
+                        'court': item['court'],
+                        'year': item['year'],
+                        'type': item['section_type'],
+                        'keywords': item.get('keywords', [])
+                    },
+                    'score': item['combined_score']
+                })
+            return results
+        except Exception as e:
+            logger.error(f"Case law search error: {e}")
+            return []
+
     async def hybrid_search(self, query_text: str, limit: int = 20) -> List[Dict]:
         """
-        Hybrid search: Vector + FTS + RRF
-        
-        Args:
-            query_text: User query in Finnish
-            limit: Number of final results to return
-            
-        Returns:
-            Top ranked chunks with metadata
+        Global Hybrid Search: (Statutes Hybrid) + (Case Law Hybrid)
         """
         # Generate query embedding
         query_embedding = self.embedder.embed_query(query_text)
         
-        # Perform both searches concurrently
-        vector_task = self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K)
-        fts_task = self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K)
+        # 1. Statutes Search (Vector + FTS via RRF)
+        # We start independent tasks
+        statute_vector_task = self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K)
+        statute_fts_task = self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K)
         
-        vector_results, fts_results = await asyncio.gather(vector_task, fts_task)
+        # 2. Case Law Search (Hybrid internally)
+        case_law_task = self.search_case_law(query_embedding, query_text, limit=limit)
         
-        # Merge with RRF
-        merged_results = self.rrf_merge(vector_results, fts_results)
+        # Run all concurrently
+        stat_vec, stat_fts, case_results = await asyncio.gather(
+            statute_vector_task, 
+            statute_fts_task, 
+            case_law_task
+        )
         
-        # Return top N
-        return merged_results[:limit]
-    
+        # Process Statute Results (Merge Vector + FTS)
+        statute_results = self.rrf_merge(stat_vec, stat_fts)
+        
+        # Normalize Statute Results
+        normalized_statutes = []
+        for item in statute_results:
+            normalized_statutes.append({
+                'id': item['id'],
+                'text': item.get('chunk_text', ''),
+                'source': 'statute',
+                'metadata': {
+                    'title': item.get('document_title'),
+                    'uri': item.get('document_uri'),
+                    'section': item.get('section_number'),
+                    'raw_metadata': item.get('metadata')
+                },
+                'score': item.get('rrf_score', 0)
+            })
+            
+        # Combine all results
+        # We assume Case Law results are already "good" candidates. 
+        # We combine them and let the Re-ranker sort it out.
+        combined_results = normalized_statutes + case_results
+        
+        return combined_results
+
     async def hybrid_search_with_rerank(
         self, 
         query_text: str, 
@@ -212,28 +273,23 @@ class HybridRetrieval:
     ) -> List[Dict]:
         """
         Hybrid search + Cohere re-ranking
-        
-        Args:
-            query_text: User query
-            initial_limit: Results before re-ranking
-            final_limit: Results after re-ranking
-            
-        Returns:
-            Re-ranked top results
         """
-        # Get initial results from hybrid search
+        # Get initial results from hybrid search (Statutes + Case Law)
+        # We ask for more initially to feed the reranker
         initial_results = await self.hybrid_search(query_text, limit=initial_limit)
         
+        if not initial_results:
+            return []
+
         # Re-rank with Cohere
         logger.info(f"[RERANK] Starting Cohere rerank on {len(initial_results)} results...")
         rerank_start = time.time()
         
         reranker = self._get_reranker()
-        # Reranker is currently sync, which is fine, or we can make it async if needed
-        # Cohere client calls are typically blocking unless using AsyncClient
-        # For now we keep reranker sync or wrap it if needed. 
-        # But 'rerank' method might block. 
-        # Assuming cohere sync client:
+        
+        # Reranker expects a list of strings or dicts with 'text'
+        # Our normalized results have 'text' key.
+        # reranker.rerank needs to be robust to our new dict format
         reranked = reranker.rerank(query_text, initial_results, top_k=final_limit or config.RERANK_TOP_K)
         
         rerank_elapsed = time.time() - rerank_start

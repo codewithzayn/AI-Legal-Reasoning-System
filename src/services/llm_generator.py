@@ -125,29 +125,46 @@ class LLMGenerator:
     def _build_context(self, chunks: List[Dict]) -> str:
         """
         Build context string from chunks with intelligent citation labels.
-        
-        - For statutes (with section numbers): Uses real § numbers like [§ 4]
-        - For decisions/judgments (no sections): Uses [Lähde 1], [Lähde 2], etc.
-        - For attachments: Uses [Liite: heading]
-        - Always includes PDF URLs when available
+        Supports both Statutes (legacy format) and Case Law (new unified format).
         """
         context_parts = []
         source_counter = 1  # Counter for documents without section numbers
         
         for i, chunk in enumerate(chunks, 1):
-            text = chunk.get('chunk_text', '')
-            title = chunk.get('document_title', 'Unknown')
-            uri = chunk.get('document_uri', '')
-            doc_num = chunk.get('document_number')
+            # 1. Normalize Content
+            text = chunk.get('text') or chunk.get('chunk_text') or chunk.get('content') or ''
             
-            # Get the REAL section number from the chunk metadata
-            section_number = chunk.get('section_number')
+            # 2. Extract Metadata based on Source Type
+            source = chunk.get('source', 'unknown')
+            metadata = chunk.get('metadata', {})
             
-            # Build the citation reference label
+            if source == 'case_law':
+                # Case Law Format
+                case_id = metadata.get('case_id', 'Unknown Case')
+                court = metadata.get('court', '').upper()
+                year = metadata.get('year')
+                section_type = metadata.get('type', 'Section')
+                
+                title = f"{court} {case_id} ({year})"
+                uri = metadata.get('url', f"https://finlex.fi/fi/oikeuskaytanto/{court.lower()}/ennakkopaatokset/{year}/{case_id.split(':')[-1]}")
+                doc_num = metadata.get('case_number')
+                
+                # Use section type as the "section number" for labeling
+                section_number = section_type.capitalize()
+                
+            else:
+                # Statute / Legacy Format
+                title = chunk.get('document_title') or metadata.get('title') or 'Unknown Document'
+                uri = chunk.get('document_uri') or metadata.get('uri') or ''
+                doc_num = chunk.get('document_number') or metadata.get('case_number')
+                section_number = chunk.get('section_number') or metadata.get('section')
+
+            # 3. Build Citation Label
             ref_label = self._get_reference_label(section_number, source_counter)
-            if not section_number or not section_number.startswith('§'):
+            if not section_number or (not str(section_number).startswith('§') and source != 'case_law'):
                 source_counter += 1
             
+            # 4. formatting
             # Get PDF URL from various possible locations
             pdf_url = self._extract_pdf_url(chunk)
             

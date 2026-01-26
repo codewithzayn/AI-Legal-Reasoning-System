@@ -50,11 +50,15 @@ class CohereReranker:
             return []
         
         # Prepare documents for Cohere
-        documents = [result['chunk_text'] for result in results]
+        documents = []
+        for result in results:
+            # specialized logic: try 'text', then 'chunk_text', then 'content'
+            doc_text = result.get('text') or result.get('chunk_text') or result.get('content') or ""
+            documents.append(doc_text)
         
         # Call Cohere Rerank API
         response = self.client.rerank(
-            model="rerank-v4.0-fast",
+            model="rerank-multilingual-v3.0",  # Better for Finnish than v4-fast
             query=query,
             documents=documents,
             top_n=top_k
