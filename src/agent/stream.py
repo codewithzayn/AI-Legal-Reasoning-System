@@ -24,37 +24,53 @@ async def stream_query_response(user_query: str) -> AsyncIterator[str]:
     Yields:
         Response chunks as they're generated
     """
-    total_start = time.time()
-    logger.info(f"QUERY: {user_query}")
+    initial_state: AgentState = {
+        "query": user_query,
+        "messages": [],
+        "stage": "init",
+        "search_attempts": 0,
+        "original_query": user_query,
+        "intent": "",
+        "search_results": [],
+        "response": "",
+        "error": None
+    }
     
-    # Step 1: Search (non-streaming)
-    logger.info("[SEARCH] Starting hybrid search + reranking...")
-    search_start = time.time()
-    
-    retrieval = HybridRetrieval()
-    results = await retrieval.hybrid_search_with_rerank(
-        user_query, 
-        initial_limit=20, 
-        final_limit=5
-    )
-    
-    search_elapsed = time.time() - search_start
-    logger.info(f"[SEARCH] Completed in {search_elapsed:.2f}s - Retrieved {len(results)} results")
-    
-    # Step 2: Stream LLM response
-    if not results:
-        yield "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja."
-        return
-    
-    logger.info(f"[LLM] Streaming response with {len(results)} chunks...")
-    llm_start = time.time()
-    
-    llm = LLMGenerator()
-    for chunk in llm.stream_response(user_query, results):
-        yield chunk
-    
-    llm_elapsed = time.time() - llm_start
-    total_elapsed = time.time() - total_start
-    
-    logger.info(f"[LLM] Completed in {llm_elapsed:.2f}s")
-    logger.info(f"TOTAL TIME: {total_elapsed:.2f}s")
+    # Stream events from the graph
+    # We yield status messages for intermediate steps
+    async for event in agent_graph.astream(initial_state):
+        for key, value in event.items():
+            stage = key
+            
+            if stage == "analyze":
+                yield "🤔 Analysoidaan kysymystä...\n\n"
+            
+            elif stage == "search":
+                count = len(value.get("search_results", []))
+                yield f"🔍 Etsitään tietoa... (Löydetty {count} tulosta)\n\n"
+            
+            elif stage == "reformulate":
+                new_query = value.get("query", "")
+                yield f"🔄 Hakutuloksia ei löytynyt. Tarkennetaan hakua: '{new_query}'...\n\n"
+            
+            elif stage == "clarify":
+                # Yield the clarification question
+                response = value.get("response", "")
+                yield response
+                return
+            
+            elif stage == "chat":
+                 # Yield the chat response
+                response = value.get("response", "")
+                yield response
+                return
+
+            elif stage == "respond":
+                # Yield the final answer
+                response = value.get("response", "")
+                yield response
+                return
+                
+            elif stage == "error":
+                yield f"❌ Virhe: {value.get('error')}"
+                return

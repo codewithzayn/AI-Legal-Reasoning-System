@@ -29,6 +29,13 @@ class AgentState(TypedDict):
     # Retrieval metadata (for debugging/monitoring)
     retrieval_metadata: Optional[dict]
     
+    # Intent routing
+    intent: str  # 'legal_search', 'general', 'clarification'
+    
+    # Self-correction
+    original_query: str
+    search_attempts: int  # To prevent infinite loops
+    
     # Final response
     response: str
     
