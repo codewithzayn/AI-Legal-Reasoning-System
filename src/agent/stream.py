@@ -12,7 +12,9 @@ import time
 logger = setup_logger(__name__)
 
 
-def stream_query_response(user_query: str) -> Iterator[str]:
+from typing import AsyncIterator
+
+async def stream_query_response(user_query: str) -> AsyncIterator[str]:
     """
     Stream response from agent
     
@@ -30,7 +32,7 @@ def stream_query_response(user_query: str) -> Iterator[str]:
     search_start = time.time()
     
     retrieval = HybridRetrieval()
-    results = retrieval.hybrid_search_with_rerank(
+    results = await retrieval.hybrid_search_with_rerank(
         user_query, 
         initial_limit=20, 
         final_limit=5

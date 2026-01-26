@@ -12,7 +12,7 @@ from src.config.logging_config import setup_logger
 logger = setup_logger(__name__)
 
 
-def search_knowledge(state: AgentState) -> AgentState:
+async def search_knowledge(state: AgentState) -> AgentState:
     """
     Node 2: Search knowledge base using hybrid retrieval
     
@@ -28,7 +28,7 @@ def search_knowledge(state: AgentState) -> AgentState:
         
         # Perform hybrid search + reranking
         query = state["query"]
-        results = retrieval.hybrid_search_with_rerank(
+        results = await retrieval.hybrid_search_with_rerank(
             query, 
             initial_limit=20, 
             final_limit=10

@@ -25,8 +25,10 @@ def run_streamlit():
     subprocess.run(["streamlit", "run", str(app_path)], check=True)
 
 
-def run_cli():
-    """Run interactive CLI mode"""
+import asyncio
+
+async def run_cli_async():
+    """Run interactive CLI mode (Async)"""
     logger.info("=" * 60)
     logger.info("🇫🇮 AI Legal Reasoning System - CLI Mode")
     logger.info("=" * 60)
@@ -34,19 +36,31 @@ def run_cli():
 
     while True:
         try:
-            query = input("You: ").strip()
+            # Use asyncio.to_thread for blocking input if needed, but input() is blocking main thread anyway.
+            # Simple input() is fine for CLI demo.
+            print("You: ", end="", flush=True)
+            query = await asyncio.to_thread(sys.stdin.readline)
+            query = query.strip()
+            
             if query.lower() in ("exit", "quit", "q"):
                 logger.info("Goodbye!")
                 break
             if not query:
                 continue
             logger.info("\nAssistant: ")
-            for chunk in stream_query_response(query):
+            async for chunk in stream_query_response(query):
                 print(chunk, end="", flush=True)
             logger.info("\n")
         except KeyboardInterrupt:
             logger.info("\nGoodbye!")
             break
+
+def run_cli():
+    """Wrapper for async CLI"""
+    try:
+        asyncio.run(run_cli_async())
+    except KeyboardInterrupt:
+        pass
 
 
 def main():

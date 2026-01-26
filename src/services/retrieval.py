@@ -6,8 +6,9 @@ Combines vector search, full-text search, and RRF ranking
 import os
 import re
 import time
+import asyncio
 from typing import List, Dict, Optional
-from supabase import create_client, Client
+from supabase import create_async_client, AsyncClient, Client
 from dotenv import load_dotenv
 from .embedder import DocumentEmbedder
 from .reranker import CohereReranker
@@ -37,9 +38,15 @@ class HybridRetrieval:
         if not self.url or not self.key:
             raise ValueError("Supabase URL and KEY required")
         
-        self.client: Client = create_client(self.url, self.key)
+        self.client: Optional[AsyncClient] = None
         self.embedder = DocumentEmbedder()
         self.reranker = None
+    
+    async def _get_client(self) -> AsyncClient:
+        """Lazy load async client"""
+        if self.client is None:
+            self.client = await create_async_client(self.url, self.key)
+        return self.client
     
     def _get_reranker(self) -> CohereReranker:
         """Lazy load reranker (only when needed)"""
@@ -47,7 +54,7 @@ class HybridRetrieval:
             self.reranker = CohereReranker()
         return self.reranker
     
-    def vector_search(self, query_embedding: List[float], limit: int = None) -> List[Dict]:
+    async def vector_search(self, query_embedding: List[float], limit: int = None) -> List[Dict]:
         """
         Vector similarity search using cosine distance
         
@@ -59,7 +66,8 @@ class HybridRetrieval:
             List of chunks with similarity scores
         """
         try:
-            response = self.client.rpc(
+            client = await self._get_client()
+            response = await client.rpc(
                 'vector_search',
                 {
                     'query_embedding': query_embedding,
@@ -81,7 +89,7 @@ class HybridRetrieval:
         sanitized = re.sub(r'\s+', ' ', sanitized).strip()
         return sanitized
     
-    def fts_search(self, query_text: str, limit: int = None) -> List[Dict]:
+    async def fts_search(self, query_text: str, limit: int = None) -> List[Dict]:
         """
         Full-text search using PostgreSQL ts_rank
         
@@ -95,7 +103,8 @@ class HybridRetrieval:
         try:
             # Sanitize query for FTS
             sanitized_query = self._sanitize_fts_query(query_text)
-            response = self.client.rpc(
+            client = await self._get_client()
+            response = await client.rpc(
                 'fts_search',
                 {
                     'query_text': sanitized_query,
@@ -169,7 +178,7 @@ class HybridRetrieval:
         
         return merged
     
-    def hybrid_search(self, query_text: str, limit: int = 20) -> List[Dict]:
+    async def hybrid_search(self, query_text: str, limit: int = 20) -> List[Dict]:
         """
         Hybrid search: Vector + FTS + RRF
         
@@ -183,16 +192,19 @@ class HybridRetrieval:
         # Generate query embedding
         query_embedding = self.embedder.embed_query(query_text)
         
-        # Perform both searches
-        vector_results = self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K)
-        fts_results = self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K)
+        # Perform both searches concurrently
+        vector_task = self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K)
+        fts_task = self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K)
+        
+        vector_results, fts_results = await asyncio.gather(vector_task, fts_task)
+        
         # Merge with RRF
         merged_results = self.rrf_merge(vector_results, fts_results)
         
         # Return top N
         return merged_results[:limit]
     
-    def hybrid_search_with_rerank(
+    async def hybrid_search_with_rerank(
         self, 
         query_text: str, 
         initial_limit: int = 20,
@@ -210,13 +222,18 @@ class HybridRetrieval:
             Re-ranked top results
         """
         # Get initial results from hybrid search
-        initial_results = self.hybrid_search(query_text, limit=initial_limit)
+        initial_results = await self.hybrid_search(query_text, limit=initial_limit)
         
         # Re-rank with Cohere
         logger.info(f"[RERANK] Starting Cohere rerank on {len(initial_results)} results...")
         rerank_start = time.time()
         
         reranker = self._get_reranker()
+        # Reranker is currently sync, which is fine, or we can make it async if needed
+        # Cohere client calls are typically blocking unless using AsyncClient
+        # For now we keep reranker sync or wrap it if needed. 
+        # But 'rerank' method might block. 
+        # Assuming cohere sync client:
         reranked = reranker.rerank(query_text, initial_results, top_k=final_limit or config.RERANK_TOP_K)
         
         rerank_elapsed = time.time() - rerank_start
