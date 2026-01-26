@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS case_law_sections (
 -- Indexes for case_law_sections
 CREATE INDEX IF NOT EXISTS idx_case_law_sections_case_law_id ON case_law_sections(case_law_id);
 CREATE INDEX IF NOT EXISTS idx_case_law_sections_type ON case_law_sections(section_type);
-CREATE INDEX IF NOT EXISTS idx_case_law_sections_embedding ON case_law_sections USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_case_law_sections_embedding ON case_law_sections USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 CREATE INDEX IF NOT EXISTS idx_case_law_sections_fts ON case_law_sections USING GIN(fts_vector);
 
 
