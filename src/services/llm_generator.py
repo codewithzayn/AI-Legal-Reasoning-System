@@ -22,7 +22,10 @@ SYSTEM_PROMPT = """You are a highly capable AI legal assistant specialized in Fi
 CORE RESPONSIBILITIES:
 1. **Analyze**: Carefully review the provided legal documents (statutes, case law, regulations).
 2. **Reason**: Apply logical reasoning to connect facts from the documents to the user's question.
-3. **Cite**: Support every claim with precise citations using the provided reference labels (e.g., [§ 4], [Lähde 1]).
+3. **Cite**: Support every claim with precise citations using the provided reference labels.
+   - For statutes: use section labels (e.g., [§ 4]).
+   - For case law: use the Case ID (e.g., [KKO:2026:5]).
+   - DO NOT hallucinate citations. Use ONLY the labels provided in the context.
 4. **Translate**: If documents are in Swedish, Northern Sami, or English, translate relevant parts to Finnish for your answer.
 
 CRITICAL RULES:
@@ -138,31 +141,51 @@ class LLMGenerator:
             source = chunk.get('source', 'unknown')
             metadata = chunk.get('metadata', {})
             
-            if source == 'case_law':
-                # Case Law Format
-                case_id = metadata.get('case_id', 'Unknown Case')
-                court = metadata.get('court', '').upper()
-                year = metadata.get('year')
-                section_type = metadata.get('type', 'Section')
+            # --- DYNAMIC CITATION LOGIC ---
+            
+            # Extract common fields
+            case_id = metadata.get('case_id')
+            section_number = chunk.get('section_number') or metadata.get('section')
+            doc_title = chunk.get('document_title') or metadata.get('title') or metadata.get('document_title') or 'Unknown Document'
+            doc_num = chunk.get('document_number') or metadata.get('case_number')
+            
+            # Determine Label Strategy
+            if case_id:
+                # 1. CASE LAW STRATEGY
+                ref_label = f"[{case_id}]"
+                title = f"{metadata.get('court', '').upper()} {case_id} ({metadata.get('year')})"
                 
-                title = f"{court} {case_id} ({year})"
-                uri = metadata.get('url', f"https://finlex.fi/fi/oikeuskaytanto/{court.lower()}/ennakkopaatokset/{year}/{case_id.split(':')[-1]}")
-                doc_num = metadata.get('case_number')
-                
-                # Use section type as the "section number" for labeling
-                section_number = section_type.capitalize()
+            elif section_number and str(section_number).strip().startswith('§'):
+                # 2. STATUTE STRATEGY
+                ref_label = f"[{section_number}]"
+                title = doc_title # Keep original title
                 
             else:
-                # Statute / Legacy Format
-                title = chunk.get('document_title') or metadata.get('title') or 'Unknown Document'
-                uri = chunk.get('document_uri') or metadata.get('uri') or ''
-                doc_num = chunk.get('document_number') or metadata.get('case_number')
-                section_number = chunk.get('section_number') or metadata.get('section')
-
-            # 3. Build Citation Label
-            ref_label = self._get_reference_label(section_number, source_counter)
-            if not section_number or (not str(section_number).startswith('§') and source != 'case_law'):
+                # 3. GENERIC DOCUMENT / PDF STRATEGY
+                # Try to use a short title if available, otherwise generic
+                if doc_title and len(doc_title) < 50:
+                    ref_label = f"[{doc_title}]"
+                else:
+                     ref_label = f"[Lähde {source_counter}]"
+                
                 source_counter += 1
+                title = doc_title
+
+            # Determine URI Strategy
+            uri = metadata.get('document_uri') or chunk.get('document_uri')
+            if not uri:
+                uri = metadata.get('url') # Try direct URL
+            
+            # Fallback URL construction for known types if URI is missing
+            if not uri and case_id and metadata.get('year'):
+                 court = metadata.get('court', '').upper()
+                 court_path = "korkein-oikeus" if court == "KKO" else "korkein-hallinto-oikeus"
+                 case_num = case_id.split(':')[-1]
+                 uri = f"https://www.finlex.fi/fi/oikeuskaytanto/{court_path}/ennakkopaatokset/{metadata.get('year')}/{case_num}"
+            
+            if not uri:
+                 uri = "" # Ensure string
+            
             
             # 4. formatting
             # Get PDF URL from various possible locations
