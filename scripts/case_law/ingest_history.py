@@ -21,9 +21,7 @@ async def ingest_history(start_year: int, end_year: int, court: str):
     """
     Ingest case law for a range of years
     """
-    print("=" * 70)
-    print(f"📚 STARTING HISTORICAL INGESTION: {court.upper()} {start_year}-{end_year}")
-    print("=" * 70)
+    logger.info(f"📚 STARTING HISTORICAL INGESTION: {court.upper()} {start_year}-{end_year}")
     
     start_time = datetime.now()
     
@@ -34,9 +32,7 @@ async def ingest_history(start_year: int, end_year: int, court: str):
     total_years = len(years)
     
     for i, year in enumerate(years):
-        print("\n" + "-" * 70)
-        print(f"📅 PROCESSING YEAR {year} ({i+1}/{total_years})")
-        print("-" * 70)
+        logger.info(f"📅 PROCESSING YEAR {year} ({i+1}/{total_years})")
         
         try:
             # Run ingestion for this year
@@ -48,14 +44,11 @@ async def ingest_history(start_year: int, end_year: int, court: str):
             
         except Exception as e:
             logger.error(f"Failed processing year {year}: {e}")
-            print(f"❌ ERROR in year {year}: {e}")
             continue
             
     duration = datetime.now() - start_time
-    print("\n" + "=" * 70)
-    print(f"🏁 HISTORICAL INGESTION COMPLETE")
-    print(f"⏱️  Duration: {duration}")
-    print("=" * 70)
+    logger.info(f"🏁 HISTORICAL INGESTION COMPLETE")
+    logger.info(f"⏱️  Duration: {duration}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest historical case law")

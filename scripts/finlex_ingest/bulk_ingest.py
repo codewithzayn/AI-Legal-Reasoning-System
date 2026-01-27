@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from src.config.logging_config import setup_logger
 from src.services.finlex_api import FinlexAPI
 from src.services.xml_parser import XMLParser
 from src.services.chunker import LegalDocumentChunker
@@ -21,6 +22,8 @@ from src.services.embedder import DocumentEmbedder
 from src.services.supabase import SupabaseStorage
 
 load_dotenv()
+
+logger = setup_logger(__name__)
 
 # Document categories and types to process
 CATEGORIES = {
@@ -99,7 +102,7 @@ class BulkIngestionManager:
         self.storage.client.table('legal_chunks').delete().eq(
             'document_uri', document_uri
         ).execute()
-        print(f"  🗑️  Deleted old chunks for: {document_uri}")
+        logger.info(f"🗑️  Deleted old chunks for: {document_uri}")
     
     def process_document(self, document_uri: str, status: str, category: str, doc_type: str) -> bool:
         """
@@ -114,14 +117,14 @@ class BulkIngestionManager:
             
             # Handle based on status
             if status == "NEW" and exists:
-                print(f"  ⏭️  Skipping (already processed): {document_uri}")
+                logger.info(f"⏭️  Skipping (already processed): {document_uri}")
                 return True
             
             if status == "MODIFIED" and exists:
                 self.delete_document_chunks(document_uri)
             
             # Fetch XML
-            print(f"  📥 Fetching: {document_uri}")
+            logger.info(f"📥 Fetching: {document_uri}")
             xml_content = self.api.fetch_document_xml(document_uri)
             
             # Extract metadata from URI
@@ -153,7 +156,7 @@ class BulkIngestionManager:
             
         except Exception as e:
             error_msg = str(e)
-            print(f"  ❌ Error processing {document_uri}: {error_msg}")
+            logger.error(f"❌ Error processing {document_uri}: {error_msg}")
             
             # Log failure to database
             try:
@@ -187,12 +190,12 @@ class BulkIngestionManager:
     
     def process_year(self, category: str, doc_type: str, year: int) -> None:
         """Process all documents for a specific category/type/year"""
-        print(f"Processing: {category}/{doc_type}/{year}")
+        logger.info(f"Processing: {category}/{doc_type}/{year}")
         
         # Get or init tracking
         tracking = self.get_tracking_status(category, doc_type, year)
         if tracking and tracking['status'] == 'completed':
-            print(f"✅ Already completed, skipping...")
+            logger.info(f"✅ Already completed, skipping...")
             return
         
         start_page = tracking['last_processed_page'] + 1 if tracking else 1
@@ -205,7 +208,7 @@ class BulkIngestionManager:
         # Fetch documents page by page
         page = start_page
         while True:
-            print(f"\n📄 Page {page}...")
+            logger.info(f"📄 Page {page}...")
             
             try:
                 # Fetch page
@@ -220,10 +223,10 @@ class BulkIngestionManager:
                 # Check if empty
                 if not documents:
                     if page == 1:
-                        print(f"  ℹ️  No documents found")
+                        logger.info(f"ℹ️  No documents found")
                         self.mark_no_documents(category, doc_type, year)
                     else:
-                        print(f"  ✅ Completed all pages")
+                        logger.info(f"✅ Completed all pages")
                         self.mark_completed(category, doc_type, year)
                     break
                 
@@ -243,24 +246,24 @@ class BulkIngestionManager:
                 
                 # Update tracking
                 self.update_tracking(category, doc_type, year, page, processed, failed)
-                print(f"  📊 Progress: {processed} processed, {failed} failed")
+                logger.info(f"📊 Progress: {processed} processed, {failed} failed")
                 
                 # Next page
                 page += 1
                 
             except Exception as e:
-                print(f"  ❌ Error on page {page}: {str(e)}")
+                logger.error(f"❌ Error on page {page}: {str(e)}")
                 break
     
     def run(self) -> None:
-        print("🚀 BULK DOCUMENT INGESTION")
-        print(f"Years: {START_YEAR} → {END_YEAR}")
-        print(f"Categories: {list(CATEGORIES.keys())}")
+        logger.info("🚀 BULK DOCUMENT INGESTION")
+        logger.info(f"Years: {START_YEAR} → {END_YEAR}")
+        logger.info(f"Categories: {list(CATEGORIES.keys())}")
         total_start = time.time()
         
         # Process each year (newest first)
         for year in range(START_YEAR, END_YEAR - 1, -1):
-            print(f"# YEAR: {year}")
+            logger.info(f"# YEAR: {year}")
             
             # Process each category/type
             for category, doc_types in CATEGORIES.items():
@@ -268,8 +271,8 @@ class BulkIngestionManager:
                     self.process_year(category, doc_type, year)
         
         total_elapsed = time.time() - total_start
-        print(f"✅ BULK INGESTION COMPLETED")
-        print(f"⏱️  TOTAL TIME: {total_elapsed:.2f}s")
+        logger.info(f"✅ BULK INGESTION COMPLETED")
+        logger.info(f"⏱️  TOTAL TIME: {total_elapsed:.2f}s")
 
 
 def main():

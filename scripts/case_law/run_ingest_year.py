@@ -26,10 +26,7 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
         year: Year to ingest
         force_scrape: If True, ignores existing JSON files and scrapes fresh
     """
-    print("=" * 70)
-    print(f"🚀 Starting Ingestion: {court.upper()} {year}")
-    print("=" * 70)
-    
+    logger.info(f"🚀 Starting Ingestion: {court.upper()} {year}")    
     # Setup paths
     json_dir = Path(f"data/case_law/{court}")
     json_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +58,7 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
     
     # 1. SCRAPING / LOADING
     if json_file.exists() and not force_scrape:
-        print(f"📂 Loading existing data from {json_file}...")
+        logger.info(f"📂 Loading existing data from {json_file}...")
         # Load from JSON
         import json
         with open(json_file, "r", encoding="utf-8") as f:
@@ -91,10 +88,10 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
                 full_text=d.get('full_text', '')
             )
             documents.append(doc)
-        print(f"   Loaded {len(documents)} cases")
+        logger.info(f"   Loaded {len(documents)} cases")
         
     else:
-        print(f"📡 Scraping fresh data from Finlex...")
+        logger.info(f"📡 Scraping fresh data from Finlex...")
         # Scrape fresh
         async with CaseLawScraper() as scraper:
             documents = await scraper.fetch_year(court, year)
@@ -111,10 +108,10 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
                 
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, ensure_ascii=False, indent=2)
-            print(f"   Saved backup to {json_file}")
+            logger.info(f"   Saved backup to {json_file}")
     
     if not documents:
-        print("❌ No documents found to store.")
+        logger.info("❌ No documents found to store.")
         # Track FAILURE/EMPTY
         try:
             sb_client.table('case_law_ingestion_tracking').update({
@@ -129,7 +126,7 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
         return
 
     # 2. STORAGE
-    print("\n🗄️  Storing in Supabase (with embeddings)...")
+    logger.info("\n🗄️  Storing in Supabase (with embeddings)...")
     storage = CaseLawStorage()
     
     # Store in batches
@@ -148,10 +145,7 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
     except Exception as e:
         logger.warning(f"Failed to update tracking completion: {e}")
     
-    print("\n" + "=" * 70)
-    print(f"✅ COMPLETED: {stored_count}/{len(documents)} cases stored")
-    print("=" * 70)
-
+    logger.info(f"✅ COMPLETED: {stored_count}/{len(documents)} cases stored")
 if __name__ == "__main__":
     # Parse arguments
     parser = argparse.ArgumentParser(description="Ingest case law for a specific year")
