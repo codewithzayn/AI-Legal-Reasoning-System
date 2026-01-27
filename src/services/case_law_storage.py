@@ -156,6 +156,8 @@ class CaseLawStorage:
             'language': 'fin',
             'full_text': doc.full_text,
             'url': doc.url,
+            'metadata': doc.metadata,
+            'document_uri': doc.document_uri,
         }
         
         # Upsert to handle re-runs

@@ -32,7 +32,9 @@ class CaseLawDocument:
     diary_number: Optional[str] = None  # R2024/357
     keywords: List[str] = field(default_factory=list)
     references: List[Reference] = field(default_factory=list)  # Extracted references
-    url: str = ""
+    metadata: Dict = field(default_factory=dict) # JSONB metadata
+    document_uri: str = "" # Unique URI (e.g. finlex/kko/2026/1)
+    url: str = "" 
     
     # Content sections
     abstract: str = ""
@@ -108,11 +110,13 @@ class CaseLawScraper:
         if court not in self.URL_PATTERNS:
             raise ValueError(f"Invalid court: {court}. Must be 'kko' or 'kho'")
         
-        url = self.URL_PATTERNS[court].format(year=year, number=number)
-        logger.info(f"Fetching case: {court.upper()}:{year}:{number} from {url}")
+        initial_url = self.URL_PATTERNS[court].format(year=year, number=number)
         
         try:
-            response = await self.page.goto(url, wait_until="networkidle")
+            response = await self.page.goto(initial_url, wait_until="networkidle")
+            
+            # Get actual final URL (handling redirects)
+            final_url = self.page.url
             
             # Check for 404
             if response and response.status == 404:
@@ -136,7 +140,7 @@ class CaseLawScraper:
             }''')
             
             # Parse the content
-            document = self._parse_case_text(full_text, court, year, number, url)
+            document = self._parse_case_text(full_text, court, year, number, final_url)
             
             logger.info(f"Successfully extracted: {document.case_id} ({len(document.full_text)} chars)")
             return document
@@ -207,6 +211,13 @@ class CaseLawScraper:
             diary_number=diary_match.group(1) if diary_match else None,
             keywords=keywords,
             url=url,
+            document_uri=f"finlex/{court}/{year}/{number}",
+            metadata={
+                "ecli": ecli_match.group(0) if ecli_match else None,
+                "date": date_match.group(1) if date_match else None,
+                "diary_number": diary_match.group(1) if diary_match else None,
+                "keywords": keywords
+            },
             full_text=text
         )
         

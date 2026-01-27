@@ -6,8 +6,12 @@ Scrapes cases for a specific year AND stores them directly in Supabase
 import asyncio
 import sys
 import argparse
+import time
+import os
 from pathlib import Path
 from typing import List
+from dotenv import load_dotenv
+from supabase import create_client
 
 sys.path.insert(0, ".")
 
@@ -26,16 +30,14 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
         year: Year to ingest
         force_scrape: If True, ignores existing JSON files and scrapes fresh
     """
-    logger.info(f"🚀 Starting Ingestion: {court.upper()} {year}")    
+    start_time = time.time()
+    logger.info(f"Starting Ingestion: {court.upper()} {year}")    
     # Setup paths
     json_dir = Path(f"data/case_law/{court}")
     json_dir.mkdir(parents=True, exist_ok=True)
     json_file = json_dir / f"{year}_all.json"
     
     # Setup Supabase tracking
-    import os
-    from supabase import create_client
-    from dotenv import load_dotenv
     load_dotenv()
     
     sb_url = os.getenv("SUPABASE_URL")
@@ -126,7 +128,7 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
         return
 
     # 2. STORAGE
-    logger.info("\n🗄️  Storing in Supabase (with embeddings)...")
+    logger.info("Storing in Supabase (with embeddings)...")
     storage = CaseLawStorage()
     
     # Store in batches
@@ -145,7 +147,10 @@ async def run_year_ingestion(court: str, year: int, force_scrape: bool = False):
     except Exception as e:
         logger.warning(f"Failed to update tracking completion: {e}")
     
+    elapsed_time = time.time() - start_time
     logger.info(f"✅ COMPLETED: {stored_count}/{len(documents)} cases stored")
+    logger.info(f"⏱️  Year Processing Time: {elapsed_time:.2f} seconds")
+
 if __name__ == "__main__":
     # Parse arguments
     parser = argparse.ArgumentParser(description="Ingest case law for a specific year")

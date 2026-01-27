@@ -21,7 +21,7 @@ async def ingest_history(start_year: int, end_year: int, court: str):
     """
     Ingest case law for a range of years
     """
-    logger.info(f"📚 STARTING HISTORICAL INGESTION: {court.upper()} {start_year}-{end_year}")
+    logger.info(f"STARTING HISTORICAL INGESTION: {court.upper()} {start_year}-{end_year}")
     
     start_time = datetime.now()
     
