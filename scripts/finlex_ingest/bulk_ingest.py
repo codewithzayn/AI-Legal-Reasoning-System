@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from dotenv import load_dotenv
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.services.finlex_api import FinlexAPI
 from src.services.xml_parser import XMLParser
