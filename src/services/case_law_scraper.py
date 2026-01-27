@@ -56,8 +56,8 @@ class CaseLawScraper:
     
     # URL patterns for different courts (Finnish version - has static-ish content)
     URL_PATTERNS = {
-        "kko": "https://www.finlex.fi/fi/oikeuskaytanto/korkein-oikeus/ennakkopaatokset/{year}/{number}",
-        "kho": "https://www.finlex.fi/fi/oikeuskaytanto/korkein-hallinto-oikeus/ennakkopaatokset/{year}/{number}"
+        "supreme_court": "https://www.finlex.fi/fi/oikeuskaytanto/korkein-oikeus/ennakkopaatokset/{year}/{number}",
+        "supreme_administrative_court": "https://www.finlex.fi/fi/oikeuskaytanto/korkein-hallinto-oikeus/ennakkopaatokset/{year}/{number}"
     }
     
     # Finnish section markers for parsing (ordered)
@@ -100,7 +100,7 @@ class CaseLawScraper:
         Fetch a single case by court, year, and number
         
         Args:
-            court: "kko" or "kho"
+            court: "supreme_court" or "supreme_administrative_court"
             year: Year (e.g., 2026)
             number: Case number (e.g., 1)
             
@@ -108,7 +108,7 @@ class CaseLawScraper:
             CaseLawDocument if found, None if 404
         """
         if court not in self.URL_PATTERNS:
-            raise ValueError(f"Invalid court: {court}. Must be 'kko' or 'kho'")
+            raise ValueError(f"Invalid court: {court}. Must be 'supreme_court' or 'supreme_administrative_court'")
         
         initial_url = self.URL_PATTERNS[court].format(year=year, number=number)
         
@@ -340,13 +340,13 @@ class CaseLawScraper:
 
 
 # Standalone function for simple usage
-async def scrape_kko_year(year: int) -> List[CaseLawDocument]:
-    """Convenience function to scrape a full year of KKO cases"""
+async def scrape_supreme_court_year(year: int) -> List[CaseLawDocument]:
+    """Convenience function to scrape a full year of Supreme Court cases"""
     async with CaseLawScraper() as scraper:
-        return await scraper.fetch_year("kko", year)
+        return await scraper.fetch_year("supreme_court", year)
 
 
-async def scrape_kho_year(year: int) -> List[CaseLawDocument]:
-    """Convenience function to scrape a full year of KHO cases"""
+async def scrape_supreme_administrative_court_year(year: int) -> List[CaseLawDocument]:
+    """Convenience function to scrape a full year of Supreme Administrative Court cases"""
     async with CaseLawScraper() as scraper:
-        return await scraper.fetch_year("kho", year)
+        return await scraper.fetch_year("supreme_administrative_court", year)

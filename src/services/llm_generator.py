@@ -178,10 +178,18 @@ class LLMGenerator:
             
             # Fallback URL construction for known types if URI is missing
             if not uri and case_id and metadata.get('year'):
-                 court = metadata.get('court', '').upper()
-                 court_path = "korkein-oikeus" if court == "KKO" else "korkein-hallinto-oikeus"
+                 court = metadata.get('court', '').lower()
+                 # Map to English path segment if needed, though Finlex often accepts both if we use /en/
+                 # But let's use the explicit mapping
+                 if court == "supreme_court" or court == "kko": # Handle both old and new data
+                     court_path = "korkein-oikeus" 
+                 elif court == "supreme_administrative_court" or court == "kho":
+                     court_path = "korkein-hallinto-oikeus"
+                 else:
+                     court_path = "korkein-oikeus" # Default safe
+
                  case_num = case_id.split(':')[-1]
-                 uri = f"https://www.finlex.fi/fi/oikeuskaytanto/{court_path}/ennakkopaatokset/{metadata.get('year')}/{case_num}"
+                 uri = f"https://www.finlex.fi/en/oikeuskaytanto/{court_path}/ennakkopaatokset/{metadata.get('year')}/{case_num}"
             
             if not uri:
                  uri = "" # Ensure string

@@ -12,7 +12,8 @@ from datetime import datetime
 sys.path.insert(0, ".")
 
 # Import single year runner
-from scripts.case_law.run_ingest_year import run_year_ingestion
+# Import shared ingestion manager
+from scripts.case_law.core.ingestion_manager import IngestionManager
 from src.config.logging_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -31,13 +32,16 @@ async def ingest_history(start_year: int, end_year: int, court: str):
     
     total_years = len(years)
     
+    # Initialize manager once
+    manager = IngestionManager(court)
+    
     for i, year in enumerate(years):
         logger.info(f"📅 PROCESSING YEAR {year} ({i+1}/{total_years})")
         
         try:
             # Run ingestion for this year
             # We don't force scrape by default to use cache if available
-            await run_year_ingestion(court, year, force_scrape=False)
+            await manager.ingest_year(year, force_scrape=False)
             
             # Brief pause to be nice to Finlex server
             await asyncio.sleep(2)
@@ -54,7 +58,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest historical case law")
     parser.add_argument("--start", type=int, default=1926, help="Start year (default: 1926)")
     parser.add_argument("--end", type=int, default=2026, help="End year (default: 2026)")
-    parser.add_argument("--court", type=str, default="kko", choices=["kko", "kho"], help="Court (kko/kho)")
+    parser.add_argument("--court", type=str, default="supreme_court", choices=["supreme_court", "supreme_administrative_court"], help="Court (supreme_court/supreme_administrative_court)")
     
     args = parser.parse_args()
     
