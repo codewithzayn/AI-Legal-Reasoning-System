@@ -21,15 +21,20 @@ Finnish Response with Citations
 ✅ **Full RAG Pipeline**
 - Hybrid search (semantic + keyword)
 - Cohere Rerank v4.0-fast for re-ranking
-- GPT-4o-mini for response generation
+- GPT-4o-mini for cost-effective response generation
 - Mandatory source citations
 - Finnish language support
 
+✅ **Refined Service Architecture**
+- Modular services: `finlex/`, `case_law/`, `common/`, `retrieval/`
+- AI-Enhanced Extraction: `src/services/case_law/extractor.py` (Structured Metadata & Citations)
+- Incremental Ingestion Tracking
+
 ✅ **Document Processing**
-- Finlex API integration
+- Finlex API integration (Statutes)
+- Supreme Court Scraping + AI Extraction (Precedents)
 - XML parsing (Akoma Ntoso format)
-- Section-based chunking
-- Idempotent ingestion
+- Section-based chunking & embedding
 
 ✅ **Search & Retrieval**
 - Vector search (pgvector)
@@ -63,12 +68,18 @@ COHERE_API_KEY=your_cohere_key  # For re-ranking
 
 ### 3. Setup Database
 
-Run `scripts/legal_chunks.sql` in Supabase SQL Editor.
+Run `scripts/migrations/case_law_tables.sql` in Supabase SQL Editor.
 
 ### 4. Ingest Documents
 
+**Finlex Statutes (Bulk):**
 ```bash
-python3 scripts/ingest_documents.py
+python3 scripts/finlex_ingest/bulk_ingest.py
+```
+
+**Supreme Court Precedents (KKO):**
+```bash
+python3 scripts/case_law/supreme_court/ingest_precedents.py --year 2026
 ```
 
 ### 5. Run Application
@@ -84,6 +95,8 @@ Open http://localhost:8501
 | Component | Technology | Status |
 |-----------|-----------|--------|
 | **API** | Finlex Open Data API | ✅ Active |
+| **Scraping** | Playwright (Case Law) | ✅ Active |
+| **Extraction** | LangChain + GPT-4o-mini | ✅ Active |
 | **Parsing** | XML (Akoma Ntoso) | ✅ Active |
 | **Chunking** | Section-based | ✅ Active |
 | **Embeddings** | OpenAI text-embedding-3-small | ✅ Active |
@@ -97,10 +110,9 @@ Open http://localhost:8501
 
 ## Workflow
 
-### Ingestion
-```
-Finlex API → XML Parser → Chunker → Embedder → Supabase
-```
+### Ingestion (Dual Pipeline)
+1. **Statutes**: Finlex API → XML Parser → Chunker → Embedder → Supabase
+2. **Case Law**: Scraper (Playwright) → AI Extractor (GPT-4o-mini) → Storage → Supabase
 
 ### Retrieval
 ```
@@ -153,6 +165,7 @@ print(response)
 - **Finnish:** Full Finnish language support
 - **Citations:** Mandatory source citations prevent hallucinations
 - **Idempotent:** Re-ingestion updates existing chunks
+- **Tracking:** Real-time ingestion progress in `case_law_ingestion_tracking` table
 
 ## License
 

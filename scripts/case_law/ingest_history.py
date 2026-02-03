@@ -41,7 +41,16 @@ async def ingest_history(start_year: int, end_year: int, court: str):
         try:
             # Run ingestion for this year
             # We don't force scrape by default to use cache if available
-            await manager.ingest_year(year, force_scrape=False)
+            
+            if court == "supreme_court":
+                subtypes = ["precedent", "ruling", "leave_to_appeal"]
+            elif court == "supreme_administrative_court":
+                subtypes = ["precedent", "other", "brief"]
+            else:
+                 subtypes = [None] # Default to all or none
+                 
+            for subtype in subtypes:
+                await manager.ingest_year(year, force_scrape=False, subtype=subtype)
             
             # Brief pause to be nice to Finlex server
             await asyncio.sleep(2)

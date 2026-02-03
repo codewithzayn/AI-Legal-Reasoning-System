@@ -67,7 +67,7 @@ def get_agent_info() -> Dict[str, Any]:
             "fts": "PostgreSQL ts_rank (active)",
             "rrf": "Reciprocal Rank Fusion (active)",
             "reranker": "Cohere Rerank v4.0-fast (active)",
-            "llm": "GPT-4o-mini (active)"
+            "llm": "GPT-4o (active)"
         },
         "status": "Full RAG pipeline active"
     }

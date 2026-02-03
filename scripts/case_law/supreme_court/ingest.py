@@ -14,7 +14,12 @@ from scripts.case_law.core.ingestion_manager import IngestionManager
 
 async def main(year: int, force: bool):
     manager = IngestionManager("supreme_court")
-    await manager.ingest_year(year, force_scrape=force)
+    
+    # Run for all subtypes
+    subtypes = ["precedent", "ruling", "leave_to_appeal"]
+    
+    for subtype in subtypes:
+        await manager.ingest_year(year, force_scrape=force, subtype=subtype)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest Supreme Court (KKO) case law")

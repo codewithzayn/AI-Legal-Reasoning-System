@@ -10,7 +10,7 @@ import asyncio
 from typing import List, Dict, Optional
 from supabase import create_async_client, AsyncClient, Client
 from dotenv import load_dotenv
-from .embedder import DocumentEmbedder
+from src.services.common.embedder import DocumentEmbedder
 from .reranker import CohereReranker
 from src.config.logging_config import setup_logger
 from src.config.settings import config
@@ -200,17 +200,18 @@ class HybridRetrieval:
             results = []
             for item in (response.data or []):
                 results.append({
-                    'id': item['section_id'],
-                    'text': item['content'],
+                    'id': item.get('section_id'),
+                    'text': item.get('content', ''),
                     'source': 'case_law',
                     'metadata': {
-                        'case_id': item['case_id'],
-                        'court': item['court'],
-                        'year': item['year'],
-                        'type': item['section_type'],
-                        'keywords': item.get('keywords', [])
+                        'case_id': item.get('case_id'),
+                        'court': item.get('court_type') or item.get('court'),
+                        'year': item.get('case_year') or item.get('year'),
+                        'type': item.get('section_type'),
+                        'keywords': item.get('legal_domains', []),
+                        'url': item.get('url')
                     },
-                    'score': item['combined_score']
+                    'score': item.get('combined_score', 0)
                 })
             return results
         except Exception as e:

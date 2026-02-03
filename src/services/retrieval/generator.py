@@ -7,7 +7,7 @@ Uses LangChain ChatOpenAI for automatic LangSmith tracing
 
 import os
 import time
-from typing import List, Dict, Generator
+from typing import List, Dict, AsyncIterator
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
@@ -32,7 +32,9 @@ CRITICAL RULES:
 - **Strict Context Adherence**: Do not use external legal knowledge. If the answer is not in the context, state: "Annettujen asiakirjojen perusteella en löydä tietoa tästä."
 - **Citation Mandatory**: Every factual statement must be immediately followed by its source citation.
 - **Language**: Answer ALWAYS in Finnish, regardless of the document's original language.
-- **Multilingual Sensitivity**: Pay attention to legal terms in Northern Sami (e.g., "rievdadeamis" for amendment) or Swedish ensuring accurate interpretation.
+- **URL SECURITY**: You must ONLY provide URLs that are explicitly provided in the "URI:" field for each chunk in the context. 
+- **NO HALLUCINATION**: DO NOT attempt to create or guess URLs. If a URI is provided, copy it EXACTLY as it is written. If no URI is provided, omit the URI field from your sources list.
+- **NEVER use "/en/"** in a Finlex URL unless the provided URI explicitly contains it.
 
 RESPONSE FORMAT:
 1. **Direct Answer**: Start with a clear, direct answer to the question.
@@ -42,8 +44,8 @@ RESPONSE FORMAT:
    
    LÄHTEET:
    - [Document Title] (Dnro: [Number])
-     URI: [Link]
-     PDF: [Link if available]
+     URI: [EXACT URI FROM CONTEXT]
+     PDF: [EXACT PDF LINK FROM CONTEXT if available]
 """
 
 
@@ -66,27 +68,18 @@ class LLMGenerator:
         context_chunks: List[Dict]
     ) -> str:
         """
-        Generate response with citations
-        
-        Args:
-            query: User question
-            context_chunks: Retrieved chunks with metadata
-            
-        Returns:
-            Response with citations
+        Generate response with citations (Synchronous)
         """
-        
         # Build context
         context = self._build_context(context_chunks)
         
-        # Create messages using LangChain message types
+        # Create messages
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}")
         ]
         
-        # Generate response with automatic LangSmith tracing
-        logger.info("[LLM API] Calling ChatOpenAI (LangSmith traced)...")
+        logger.info("[LLM API] Calling ChatOpenAI (Sync, LangSmith traced)...")
         api_start = time.time()
         
         response = self.llm.invoke(messages)
@@ -95,33 +88,50 @@ class LLMGenerator:
         logger.info(f"[LLM API] Completed in {api_elapsed:.2f}s")
         
         return response.content
-    
-    def stream_response(
+
+    async def agenerate_response(
         self, 
         query: str, 
         context_chunks: List[Dict]
-    ):
+    ) -> str:
         """
-        Stream response with citations (for Streamlit)
-        
-        Args:
-            query: User question
-            context_chunks: Retrieved chunks with metadata
-            
-        Yields:
-            Response chunks as they're generated
+        Generate response with citations (Asynchronous)
         """
         # Build context
         context = self._build_context(context_chunks)
         
-        # Create messages using LangChain message types
+        # Create messages
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}")
         ]
         
-        # Stream response with automatic LangSmith tracing
-        for chunk in self.llm.stream(messages):
+        logger.info("[LLM API] Calling ChatOpenAI (Async, LangSmith traced)...")
+        api_start = time.time()
+        
+        response = await self.llm.ainvoke(messages)
+        
+        api_elapsed = time.time() - api_start
+        logger.info(f"[LLM API] Completed in {api_elapsed:.2f}s")
+        
+        return response.content
+    
+    async def astream_response(
+        self, 
+        query: str, 
+        context_chunks: List[Dict]
+    ) -> AsyncIterator[str]:
+        """
+        Stream response with citations (Asynchronous)
+        """
+        context = self._build_context(context_chunks)
+        
+        messages = [
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}")
+        ]
+        
+        async for chunk in self.llm.astream(messages):
             if chunk.content:
                 yield chunk.content
     
@@ -131,81 +141,50 @@ class LLMGenerator:
         Supports both Statutes (legacy format) and Case Law (new unified format).
         """
         context_parts = []
-        source_counter = 1  # Counter for documents without section numbers
+        source_counter = 1
         
         for i, chunk in enumerate(chunks, 1):
-            # 1. Normalize Content
             text = chunk.get('text') or chunk.get('chunk_text') or chunk.get('content') or ''
-            
-            # 2. Extract Metadata based on Source Type
-            source = chunk.get('source', 'unknown')
             metadata = chunk.get('metadata', {})
             
-            # --- DYNAMIC CITATION LOGIC ---
-            
-            # Extract common fields
             case_id = metadata.get('case_id')
             section_number = chunk.get('section_number') or metadata.get('section')
             doc_title = chunk.get('document_title') or metadata.get('title') or metadata.get('document_title') or 'Unknown Document'
             doc_num = chunk.get('document_number') or metadata.get('case_number')
             
-            # Determine Label Strategy
             if case_id:
-                # 1. CASE LAW STRATEGY
                 ref_label = f"[{case_id}]"
-                title = f"{metadata.get('court', '').upper()} {case_id} ({metadata.get('year')})"
-                
+                court_name = metadata.get('court', '').upper()
+                title = f"{court_name} {case_id} ({metadata.get('year')})"
             elif section_number and str(section_number).strip().startswith('§'):
-                # 2. STATUTE STRATEGY
                 ref_label = f"[{section_number}]"
-                title = doc_title # Keep original title
-                
+                title = doc_title
             else:
-                # 3. GENERIC DOCUMENT / PDF STRATEGY
-                # Try to use a short title if available, otherwise generic
                 if doc_title and len(doc_title) < 50:
                     ref_label = f"[{doc_title}]"
                 else:
                      ref_label = f"[Lähde {source_counter}]"
-                
                 source_counter += 1
                 title = doc_title
 
-            # Determine URI Strategy
-            uri = metadata.get('document_uri') or chunk.get('document_uri')
-            if not uri:
-                uri = metadata.get('url') # Try direct URL
-            
-            # Fallback URL construction for known types if URI is missing
+            uri = metadata.get('url') or metadata.get('document_uri') or chunk.get('document_uri')
             if not uri and case_id and metadata.get('year'):
                  court = metadata.get('court', '').lower()
-                 # Map to English path segment if needed, though Finlex often accepts both if we use /en/
-                 # But let's use the explicit mapping
-                 if court == "supreme_court" or court == "kko": # Handle both old and new data
-                     court_path = "korkein-oikeus" 
-                 elif court == "supreme_administrative_court" or court == "kho":
+                 if court in ("supreme_administrative_court", "kho"):
                      court_path = "korkein-hallinto-oikeus"
                  else:
-                     court_path = "korkein-oikeus" # Default safe
-
+                     court_path = "korkein-oikeus"
+                 
+                 # The Finlex URL for Finnish precedents uses /fi/
                  case_num = case_id.split(':')[-1]
-                 uri = f"https://www.finlex.fi/en/oikeuskaytanto/{court_path}/ennakkopaatokset/{metadata.get('year')}/{case_num}"
+                 uri = f"https://www.finlex.fi/fi/oikeuskaytanto/{court_path}/ennakkopaatokset/{metadata.get('year')}/{metadata.get('year')}{case_num.zfill(4)}"
             
-            if not uri:
-                 uri = "" # Ensure string
-            
-            
-            # 4. formatting
-            # Get PDF URL from various possible locations
             pdf_url = self._extract_pdf_url(chunk)
-            
-            # Build source info
             source_info = f"Lähde: {title}"
             if doc_num:
                 source_info += f" (Dnro: {doc_num})"
             
-            # Build the context entry
-            context_str = f"{ref_label} {text}\n{source_info}\nURI: {uri}"
+            context_str = f"{ref_label} {text}\n{source_info}\nURI: {uri or ''}"
             if pdf_url:
                 context_str += f"\nPDF: {pdf_url}"
             
@@ -213,70 +192,19 @@ class LLMGenerator:
         
         return "\n".join(context_parts)
     
-    def _get_reference_label(self, section_number: str, source_counter: int) -> str:
-        """
-        Generate appropriate reference label based on document type.
-        
-        Args:
-            section_number: Real section number from chunk (e.g., "§ 4", "Liite: X", or None)
-            source_counter: Counter for non-section sources
-            
-        Returns:
-            Reference label like [§ 4], [Liite: X], or [Lähde 1]
-        """
-        if not section_number:
-            # No section number - use generic source reference
-            return f"[Lähde {source_counter}]"
-        
-        # Check if it's a real § section (from statutes)
-        if section_number.startswith('§'):
-            return f"[{section_number}]"
-        
-        # Check if it's an attachment
-        if section_number.startswith('Liite:'):
-            return f"[{section_number}]"
-        
-        # Check if it's a preamble or other named section
-        if section_number in ('Preamble', 'Johdanto'):
-            return f"[{section_number}]"
-        
-        # For any other case (like section parts), use the section number
-        if '(part' in section_number:
-            # e.g., "§ 4 (part 1)" -> "[§ 4 (part 1)]"
-            return f"[{section_number}]"
-        
-        # Default: use generic source reference
-        return f"[Lähde {source_counter}]"
-    
     def _extract_pdf_url(self, chunk: Dict) -> str:
-        """
-        Extract PDF URL from chunk metadata.
-        
-        Checks multiple possible locations for PDF URLs.
-        
-        Args:
-            chunk: Chunk dictionary with metadata
-            
-        Returns:
-            PDF URL string or empty string if not found
-        """
-        # Direct pdf_url field
         pdf_url = chunk.get('pdf_url')
         if pdf_url:
             return pdf_url
         
-        # Check in metadata dict
         metadata = chunk.get('metadata', {})
         if isinstance(metadata, dict):
             pdf_url = metadata.get('pdf_url')
             if pdf_url:
                 return pdf_url
-            
-            # Check pdf_files list
             pdf_files = metadata.get('pdf_files')
             if pdf_files and isinstance(pdf_files, list) and len(pdf_files) > 0:
                 first_pdf = pdf_files[0]
                 if isinstance(first_pdf, dict):
                     return first_pdf.get('pdf_url', '')
-        
         return ""

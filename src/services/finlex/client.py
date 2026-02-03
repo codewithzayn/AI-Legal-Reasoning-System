@@ -19,11 +19,8 @@ class FinlexAPI:
     
 
     async def get_document(self, uri: str) -> str:
-        """Fetch XML document from URI"""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(uri, headers=self.headers, timeout=30)
-            response.raise_for_status()
-            return response.text
+        """Deprecated: Use fetch_document_xml instead"""
+        return await self.fetch_document_xml(uri)
     
     def _extract_document_type(self, uri: str) -> str:
         """Extract document type from Finlex URI"""

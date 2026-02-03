@@ -8,29 +8,30 @@ from typing import Dict, Any, Literal
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from .state import AgentState
-from ..services.retrieval import HybridRetrieval
-from ..services.llm_generator import LLMGenerator
+from src.services.retrieval import HybridRetrieval
+from src.services.retrieval.generator import LLMGenerator
 from src.config.logging_config import setup_logger
+
 logger = setup_logger(__name__)
 
+# Reusable LLM instances to prevent excessive background task creation
+# and resolve "Task destroyed but pending" warnings.
+_llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+_generator = LLMGenerator()
 
-def analyze_intent(state: AgentState) -> AgentState:
+
+async def analyze_intent(state: AgentState) -> AgentState:
     """
-    Node 1: Analyze User Intent
-    
-    Classifies query into: 'legal_search', 'general_chat', 'clarification'
+    Node 1: Analyze User Intent (Async)
     """
     state["stage"] = "analyze"
     query = state["query"]
     
-    # Store original query if not set
     if not state.get("original_query"):
         state["original_query"] = query
         state["search_attempts"] = 0
     
     logger.info(f"[ANALYZE] Classifying intent for: {query}")
-    
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     
     system_prompt = """Classify the user's input into exactly one category:
     1. 'legal_search': Questions about Finnish law, court cases, penalties, rights, or legal definitions.
@@ -41,16 +42,15 @@ def analyze_intent(state: AgentState) -> AgentState:
     """
     
     try:
-        response = llm.invoke([
+        response = await _llm_mini.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=query)
         ])
         intent = response.content.strip().lower()
         if intent not in ['legal_search', 'general_chat', 'clarification']:
-            intent = 'legal_search' # Default safe fallback
+            intent = 'legal_search'
             
         logger.info(f"[ANALYZE] Intent matched: {intent}")
-        # Return partial update
         return {"intent": intent, "stage": "analyze", "original_query": state.get("original_query", query), "search_attempts": 0}
         
     except Exception as e:
@@ -58,11 +58,9 @@ def analyze_intent(state: AgentState) -> AgentState:
         return {"intent": "legal_search", "stage": "analyze"}
 
 
-def reformulate_query(state: AgentState) -> AgentState:
+async def reformulate_query(state: AgentState) -> AgentState:
     """
-    Node: Reformulate Query (Self-Correction)
-    
-    Rewrites the search query to improve retrieval results.
+    Node: Reformulate Query (Async)
     """
     state["stage"] = "reformulate"
     original = state.get("original_query", state["query"])
@@ -70,8 +68,6 @@ def reformulate_query(state: AgentState) -> AgentState:
     state["search_attempts"] = attempts
     
     logger.info(f"[REFORMULATE] Attempt {attempts}: Rewriting query...")
-    
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
     
     system_prompt = """You are a legal search expert. The previous search found 0 results.
     Rewrite the user's query to be a better keyword search for a Finnish legal database (Finlex/Case Law).
@@ -84,7 +80,7 @@ def reformulate_query(state: AgentState) -> AgentState:
     """
     
     try:
-        response = llm.invoke([
+        response = await _llm_mini.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=original)
         ])
@@ -98,19 +94,15 @@ def reformulate_query(state: AgentState) -> AgentState:
     return state
 
 
-def ask_clarification(state: AgentState) -> AgentState:
+async def ask_clarification(state: AgentState) -> AgentState:
     """
-    Node: Ask Clarification
-    
-    Asks the user to be more specific.
+    Node: Ask Clarification (Async)
     """
     state["stage"] = "clarify"
     query = state["query"]
     
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
-    
     try:
-        response = llm.invoke([
+        response = await _llm_mini.ainvoke([
             SystemMessage(content="The user's legal question is too vague. Ask a polite follow-up question in Finnish to clarify what they are looking for."),
             HumanMessage(content=query)
         ])
@@ -121,16 +113,12 @@ def ask_clarification(state: AgentState) -> AgentState:
     return state
 
 
-def general_chat(state: AgentState) -> AgentState:
+async def general_chat(state: AgentState) -> AgentState:
     """
-    Node: General Chat
-    
-    Handles non-legal conversation.
+    Node: General Chat (Async)
     """
     state["stage"] = "chat"
     query = state["query"]
-    
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
     
     system_prompt = """You are a helpful Finnish Legal Assistant.
     The user is engaging in general chat (greetings/thanks).
@@ -139,7 +127,7 @@ def general_chat(state: AgentState) -> AgentState:
     """
     
     try:
-        response = llm.invoke([
+        response = await _llm_mini.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=query)
         ])
@@ -150,44 +138,34 @@ def general_chat(state: AgentState) -> AgentState:
     return state
 
 
-
 async def search_knowledge(state: AgentState) -> AgentState:
     """
-    Node 2: Search knowledge base using hybrid retrieval
-    
-    Performs: Vector Search + FTS + RRF + Cohere Rerank
+    Node 2: Search knowledge base using hybrid retrieval (Async)
     """
     state["stage"] = "search"
     start_time = time.time()
     logger.info("[SEARCH] Starting hybrid search + reranking...")
     
     try:
-        # Initialize retrieval service
         retrieval = HybridRetrieval()
-        
-        # Perform hybrid search + reranking
         query = state["query"]
         results = await retrieval.hybrid_search_with_rerank(
             query, 
-            initial_limit=20, 
-            final_limit=10
+            initial_limit=30, 
+            final_limit=20
         )
         
         elapsed = time.time() - start_time
         logger.info(f"[SEARCH] Completed in {elapsed:.2f}s - Retrieved {len(results)} results")
         
-        # Store results in state
         state["search_results"] = results
         state["rrf_results"] = results
-        
-        # Store metadata for debugging
         state["retrieval_metadata"] = {
             "total_results": len(results),
             "query": query,
             "method": "hybrid_rrf_rerank",
             "search_time": elapsed
         }
-        
     except Exception as e:
         logger.error(f"[SEARCH] Error: {e}")
         state["error"] = f"Search failed: {str(e)}"
@@ -196,15 +174,11 @@ async def search_knowledge(state: AgentState) -> AgentState:
     return state
 
 
-def reason_legal(state: AgentState) -> AgentState:
+async def reason_legal(state: AgentState) -> AgentState:
     """
-    Node 3: Legal reasoning with LLM
-    
-    Analyzes search results and generates response with citations
+    Node 3: Legal reasoning with LLM (Async)
     """
     state["stage"] = "reason"
-    
-    # Get search results
     results = state.get("search_results", [])
     
     if not results:
@@ -212,21 +186,17 @@ def reason_legal(state: AgentState) -> AgentState:
         state["response"] = "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja."
         return state
     
-    # Generate response with LLM
     start_time = time.time()
     logger.info(f"[LLM] Generating response with {len(results)} chunks...")
     
     try:
-        llm = LLMGenerator()
-        response = llm.generate_response(
+        response = await _generator.agenerate_response(
             query=state["query"],
             context_chunks=results
         )
         state["response"] = response
-        
         elapsed = time.time() - start_time
         logger.info(f"[LLM] Completed in {elapsed:.2f}s")
-        
     except Exception as e:
         logger.error(f"[LLM] Error: {e}")
         state["error"] = f"LLM generation failed: {str(e)}"
@@ -235,24 +205,19 @@ def reason_legal(state: AgentState) -> AgentState:
     return state
 
 
-def generate_response(state: AgentState) -> AgentState:
+async def generate_response(state: AgentState) -> AgentState:
     """
-    Node 4: Return final response
-    
-    Response already generated in reason_legal node
+    Node 4: Return final response (Async)
     """
     state["stage"] = "respond"
-    
-    # Response already set by reason_legal
     if not state.get("response"):
         state["response"] = "Pahoittelut, vastausta ei voitu luoda. Yritä uudelleen."
-    
     return state
 
 
-def handle_error(state: AgentState) -> AgentState:
+async def handle_error(state: AgentState) -> AgentState:
     """
-    Error handler node
+    Error handler node (Async)
     """
     state["stage"] = "error"
     state["response"] = f"❌ Error: {state.get('error', 'Unknown error occurred')}"
