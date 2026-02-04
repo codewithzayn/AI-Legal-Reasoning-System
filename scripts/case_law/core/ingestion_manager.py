@@ -14,7 +14,7 @@ from supabase import create_client
 
 from src.services.case_law.scraper import CaseLawScraper, CaseLawDocument, Reference
 from src.services.case_law.storage import CaseLawStorage
-from src.services.case_law.extractor import CaseLawExtractor
+from src.services.case_law.regex_extractor import PrecedentRegexExtractor
 from src.config.logging_config import setup_logger
 
 from datetime import datetime
@@ -43,12 +43,12 @@ class IngestionManager:
 
     async def ingest_year(self, year: int, force_scrape: bool = False, subtype: str = None, use_ai: bool = True):
         """
-        Run full ingestion for a year: Load/Scrape -> AI Extract -> Store -> Track
+        Run full ingestion for a year: Load/Scrape -> Extract (regex for precedents) -> Store -> Track
         """
         start_time = time.time()
         subtype_str = f" ({subtype})" if subtype else " (ALL)"
-        ai_str = " + AI" if use_ai else ""
-        logger.info(f"🚀 Starting Ingestion: {self.court.upper()} {year}{subtype_str}{ai_str}")
+        extract_str = " + extract" if use_ai else ""
+        logger.info(f"🚀 Starting Ingestion: {self.court.upper()} {year}{subtype_str}{extract_str}")
         
         # 1. Setup Data Paths
         # Map subtype to directory name (pluralize usually)
@@ -95,23 +95,14 @@ class IngestionManager:
             self._track_status(year, 'completed', total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
             return
 
-        # 3.5 AI Extraction (The "Enhanced" Step)
-        if use_ai:
-            extractor = CaseLawExtractor()
-            logger.info("🧠 Running AI Extraction on documents...")
-            
+        # 3.5 Extraction (regex for KKO precedents only)
+        if use_ai and self.court == "supreme_court" and subtype == "precedent":
+            extractor = PrecedentRegexExtractor()
+            logger.info("📐 Running regex extraction on KKO precedents...")
             processed_with_ai = 0
             for doc in documents:
-                # Skip if already has AI sections (e.g. loaded from cached JSON that was already enriched? 
-                # Currently _save_to_json saves everything, but let's assume we re-run AI if requested or if missing)
-                
-                # Check if document has minimal content to process
                 if not doc.full_text:
                     continue
-                    
-                # We can skip if it looks like it was already processed, but for now let's just process.
-                # Optimization: In future check doc.ai_sections or similar.
-                
                 try:
                     logger.info(f"   Extracting {doc.case_id}...")
                     ai_data = extractor.extract_data(doc.full_text, doc.case_id)
@@ -119,17 +110,16 @@ class IngestionManager:
                         self._merge_ai_data(doc, ai_data)
                         processed_with_ai += 1
                 except Exception as e:
-                    logger.error(f"   AI Extraction failed for {doc.case_id}: {e}")
+                    logger.error(f"   Extraction failed for {doc.case_id}: {e}")
                     if tracking_id:
-                         self._track_error(
+                        self._track_error(
                             tracking_id=tracking_id,
                             case_id=doc.case_id,
                             url=doc.url,
                             error_type="extraction_error",
-                            error_msg=str(e)
-                         )
-            
-            logger.info(f"🧠 AI Extraction complete. {processed_with_ai}/{len(documents)} enriched.")
+                            error_msg=str(e),
+                        )
+            logger.info(f"   Extraction complete. {processed_with_ai}/{len(documents)} enriched.")
 
         # 4. Store in Database & Incremental Tracking
         logger.info("🗄️  Storing in Supabase (with embeddings)...")
@@ -192,6 +182,7 @@ class IngestionManager:
             doc.volume = ai_data.metadata.volume
             
         doc.decision_outcome = ai_data.metadata.decision_outcome
+        doc.decision_date = ai_data.metadata.date_of_issue
         doc.judges = ", ".join(ai_data.metadata.judges)
         doc.ecli = ai_data.metadata.ecli
         doc.diary_number = ai_data.metadata.diary_number

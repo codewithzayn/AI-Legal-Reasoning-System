@@ -1,0 +1,374 @@
+# © 2026 Crest Advisory Group LLC. All rights reserved.
+# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
+
+"""
+Regex-based extractor for Finnish Supreme Court (KKO) precedents.
+Populates the same CaseExtractionResult as the LLM extractor for cost-effective ingestion.
+"""
+
+import re
+from typing import List, Optional, Tuple
+
+from src.services.case_law.extractor import (
+    CaseExtractionResult,
+    CaseMetadata,
+    CaseSection,
+    CourtDecision,
+    LowerCourts,
+    CitedRegulation,
+    References,
+)
+from src.config.logging_config import setup_logger
+
+logger = setup_logger(__name__)
+
+# --- KKO Precedent patterns (English/Finnish header block) ---
+PATTERN_CASE_ID = re.compile(r"KKO\s*:\s*(\d{4})\s*:\s*(\d+)", re.IGNORECASE)
+PATTERN_ECLI = re.compile(r"ECLI\s*:\s*FI\s*:\s*KKO\s*:\s*(\d{4})\s*:\s*(\d+)", re.IGNORECASE)
+PATTERN_DIARY_NUMBER = re.compile(
+    r"(?:Diary number|Päiväkirjanumero|Dnro)\s*\n\s*([A-Z]?\s*\d{4}/\d+(?:\s*\d+)?|[A-Z]?\s*\d+/\d{4}/\d+|S\d{4}/\d+|\d+:\d{4})",
+    re.IGNORECASE | re.MULTILINE,
+)
+PATTERN_VOLUME = re.compile(
+    r"(?:Volume|Taltio)\s*\n\s*([^\n]+?)(?=\s*\n|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Date: "January 7, 2026" or "18.12.2024" or "13.12.2019"
+PATTERN_DATE_EN = re.compile(
+    r"(?:Date of issue|Antopäivä)\s*\n\s*((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4})",
+    re.IGNORECASE | re.MULTILINE,
+)
+PATTERN_DATE_DMYY = re.compile(
+    r"(?:Date of issue|Antopäivä)\s*\n\s*(\d{1,2})\.(\d{1,2})\.(\d{4})",
+    re.IGNORECASE | re.MULTILINE,
+)
+PATTERN_CASE_YEAR = re.compile(
+    r"(?:Case year|Kausi)\s*\n\s*(\d{4})",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Keywords: lines after "Keywords" until next known key (Case year, Date of issue, etc.)
+KEYWORDS_START = re.compile(r"^\s*Keywords\s*$", re.IGNORECASE | re.MULTILINE)
+KEYWORDS_END = re.compile(
+    r"^\s*(?:Case year|Date of issue|Language versions|Kausi|Antopäivä|Päiväkirjanumero)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Section headers (order matters for splitting)
+SECTION_HEADERS = [
+    ("lower_court", re.compile(r"^(?:Hearing of the case in lower courts|Asian käsittely alemmissa oikeuksissa|Previous handling of the case)\s*$", re.IGNORECASE | re.MULTILINE)),
+    ("appeal_section", re.compile(r"^(?:Appeal to the Supreme Court|Muutoksenhaku Korkeimmassa oikeudessa|Additional appeal to the Supreme Court)\s*$", re.IGNORECASE | re.MULTILINE)),
+    ("supreme_decision", re.compile(r"^(?:Supreme Court decision|Korkeimman oikeuden ratkaisu)\s*$", re.IGNORECASE | re.MULTILINE)),
+    ("reasoning", re.compile(r"^(?:Reasoning|Perustelut)\s*$", re.IGNORECASE | re.MULTILINE)),
+    ("judgment", re.compile(r"^(?:Judgment|Tuomiolauselma)\s*$", re.IGNORECASE | re.MULTILINE)),
+]
+# Judges line at end
+PATTERN_JUDGES_LINE = re.compile(
+    r"(?:The case has been resolved|The matter has been resolved|Asian on käsitellyt)\s+[Bb]y\s+(.+?)\s*\.\s*Rapporteur\s+([A-Za-zäöåÄÖÅ\- ]+)\s*\.?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+PATTERN_JUDGES_LINE_ALT = re.compile(
+    r"Rapporteur\s+([A-Za-zäöåÄÖÅ\- ]+)\s*\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Lower court: e.g. "Kymenlaakso District Court judgment 20.4.2023 no. 23/116279" or "District Court judgment of 18 October 2021 no. 21/48930"
+PATTERN_DISTRICT_COURT = re.compile(
+    r"(?:([^\n]+?)\s+)?(?:District Court|Käräjäoikeus)\s+(?:judgment|tuomio)\s+(?:of\s+)?(\d{1,2}[./]\d{1,2}[./]\d{2,4})\s+(?:no\.?|n:o)\s*(\d{2}/\d+)",
+    re.IGNORECASE,
+)
+PATTERN_APPEAL_COURT = re.compile(
+    r"(?:([^\n]+?)\s+)?(?:Court of Appeal|Hovioikeus)\s+(?:judgment|tuomio)?\s*,?\s*(\d{1,2}\s+\w+\s+\d{4}|\d{1,2}[./]\d{1,2}[./]\d{2,4})\s*,?\s*(?:no\.?|n:o)?\s*(\d{2}/\d+|\d+)",
+    re.IGNORECASE,
+)
+
+# Citations in body
+PATTERN_KKO_CITE = re.compile(r"KKO\s+(\d{4})\s*:\s*(\d+)", re.IGNORECASE)
+PATTERN_EU_CASE = re.compile(r"(?:CJEU|ECJ|Court of Justice).*?(C-\d+/\d+)", re.IGNORECASE)
+PATTERN_EU_CASE_BARE = re.compile(r"\b(C-\d+/\d+)\b")
+PATTERN_RL = re.compile(r"(?:RL|Rikoslaki)\s+(?:Chapter\s+)?(\d+)\s*(?:Section\s+)?(\d+)(?:\s*Subsection\s*\d+)?(?:\s*Paragraph\s*\d+)?(?:\s*\(\d+/\d+\))?", re.IGNORECASE)
+PATTERN_LAW_CHAPTER = re.compile(r"(?:Chapter|Luku)\s+(\d+)\s*,?\s*(?:Section|§)\s*(\d+[a-z]?)", re.IGNORECASE)
+PATTERN_EU_REGULATION = re.compile(
+    r"(Council\s+Regulation\s+\(EU\)\s+No\s+\d+/\d+(?:\s+[^.]*?)?)(?:\s*[,.]|$)|(Regulation\s+\(EU\)\s+\d+/\d+)",
+    re.IGNORECASE,
+)
+PATTERN_EU_REGULATION_ARTICLE = re.compile(
+    r"Article\s+(\d+[a-z]?)(?:\((\d+)\))?\s*(?:of\s+the\s+)?(?:Regulation|Council Regulation)",
+    re.IGNORECASE,
+)
+
+MONTH_NAMES = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _normalize_date_en(match: re.Match) -> str:
+    raw = match.group(1).strip()
+    parts = re.split(r"[\s,]+", raw, maxsplit=2)
+    if len(parts) >= 3:
+        month_name, day, year = parts[0], parts[1], parts[2]
+        month = MONTH_NAMES.get(month_name.lower(), 1)
+        try:
+            d = int(day.strip(","))
+            y = int(year)
+            return f"{y}-{month:02d}-{d:02d}"
+        except ValueError:
+            pass
+    return ""
+
+
+def _normalize_date_dmyy(match: re.Match) -> str:
+    d, m, y = match.group(1), match.group(2), match.group(3)
+    try:
+        return f"{int(y)}-{int(m):02d}-{int(d):02d}"
+    except ValueError:
+        return ""
+
+
+def _extract_keywords(text: str) -> List[str]:
+    start = KEYWORDS_START.search(text)
+    if not start:
+        return []
+    pos = start.end()
+    end = KEYWORDS_END.search(text[pos:])
+    block = text[pos : pos + end.start()] if end else text[pos : pos + 800]
+    lines = [ln.strip() for ln in block.split("\n") if ln.strip()]
+    return lines[:50]
+
+
+def _extract_metadata_block(text: str, case_id: str) -> CaseMetadata:
+    case_year = ""
+    case_year_m = PATTERN_CASE_YEAR.search(text[:4000])
+    if case_year_m:
+        case_year = case_year_m.group(1)
+
+    ecli = ""
+    ecli_m = PATTERN_ECLI.search(text[:4000])
+    if ecli_m:
+        ecli = f"ECLI:FI:KKO:{ecli_m.group(1)}:{ecli_m.group(2)}"
+
+    diary_number = ""
+    dn_m = PATTERN_DIARY_NUMBER.search(text[:4000])
+    if dn_m:
+        diary_number = dn_m.group(1).strip()
+
+    volume: Optional[str] = None
+    vol_m = PATTERN_VOLUME.search(text[:4000])
+    if vol_m:
+        volume = vol_m.group(1).strip()
+
+    date_of_issue = ""
+    date_m = PATTERN_DATE_EN.search(text[:4000])
+    if date_m:
+        date_of_issue = _normalize_date_en(date_m)
+    if not date_of_issue:
+        date_dm = PATTERN_DATE_DMYY.search(text[:4000])
+        if date_dm:
+            date_of_issue = _normalize_date_dmyy(date_dm)
+    if not date_of_issue and case_year:
+        date_of_issue = f"{case_year}-01-01"
+
+    keywords = _extract_keywords(text)
+
+    judges: List[str] = []
+    rapporteur = ""
+    judges_m = PATTERN_JUDGES_LINE.search(text)
+    if judges_m:
+        judge_block = judges_m.group(1)
+        rapporteur = judges_m.group(2).strip()
+        for part in re.split(r"\s+and\s+|\s*,\s*", judge_block):
+            name = part.replace("legal advisors", "").replace("Legal Counselors", "").replace("President", "").strip()
+            if name and len(name) > 2:
+                judges.append(name)
+    if not rapporteur:
+        rapp_m = PATTERN_JUDGES_LINE_ALT.search(text[-2000:])
+        if rapp_m:
+            rapporteur = rapp_m.group(1).strip()
+
+    decision_outcome = "appeal_dismissed"
+    if re.search(r"appeal\s+(?:is\s+)?(?:accepted|granted)|muutoksenhaku\s+myönnetään", text, re.IGNORECASE):
+        decision_outcome = "appeal_accepted"
+    elif re.search(r"remanded|palautetaan", text, re.IGNORECASE):
+        decision_outcome = "case_remanded"
+
+    return CaseMetadata(
+        case_id=case_id,
+        ecli=ecli or f"ECLI:FI:KKO:{case_id.split(':')[-2]}:{case_id.split(':')[-1]}" if ":" in case_id else "",
+        date_of_issue=date_of_issue or f"{case_year}-01-01",
+        diary_number=diary_number,
+        volume=volume,
+        decision_outcome=decision_outcome,
+        judges=judges if judges else ["Unknown"],
+        rapporteur=rapporteur or "Unknown",
+        keywords=keywords,
+        languages=["Finnish", "Swedish"],
+    )
+
+
+def _extract_lower_courts(text: str) -> LowerCourts:
+    district_court: Optional[CourtDecision] = None
+    appeal_court: Optional[CourtDecision] = None
+
+    dc_m = PATTERN_DISTRICT_COURT.search(text)
+    if dc_m:
+        name = (dc_m.group(1) or "").strip() or "District Court"
+        date_raw = dc_m.group(2)
+        number = dc_m.group(3)
+        district_court = CourtDecision(
+            name=name,
+            date=date_raw.replace(".", "-") if len(date_raw) <= 10 else date_raw,
+            number=number,
+            content_summary="",
+        )
+
+    ac_m = PATTERN_APPEAL_COURT.search(text)
+    if ac_m:
+        name = (ac_m.group(1) or "").strip() or "Court of Appeal"
+        date_raw = ac_m.group(2) or ""
+        number = (ac_m.group(3) or "").strip()
+        appeal_court = CourtDecision(
+            name=name,
+            date=date_raw,
+            number=number,
+            content_summary="",
+        )
+
+    return LowerCourts(district_court=district_court, appeal_court=appeal_court)
+
+
+def _extract_references(text: str) -> References:
+    cited_cases: List[str] = []
+    for m in PATTERN_KKO_CITE.finditer(text):
+        cited_cases.append(f"KKO {m.group(1)}:{m.group(2)}")
+    cited_cases = list(dict.fromkeys(cited_cases))
+
+    cited_eu_cases: List[str] = []
+    for m in PATTERN_EU_CASE_BARE.finditer(text):
+        cited_eu_cases.append(m.group(1))
+    for m in PATTERN_EU_CASE.finditer(text):
+        cited_eu_cases.append(m.group(1))
+    cited_eu_cases = list(dict.fromkeys(cited_eu_cases))
+
+    cited_laws: List[str] = []
+    for m in PATTERN_RL.finditer(text):
+        cited_laws.append(f"RL Chapter {m.group(1)} Section {m.group(2)}")
+    for m in PATTERN_LAW_CHAPTER.finditer(text):
+        cited_laws.append(f"Chapter {m.group(1)} Section {m.group(2)}")
+    cited_laws = list(dict.fromkeys(cited_laws))[:100]
+
+    cited_regulations: List[CitedRegulation] = []
+    for m in PATTERN_EU_REGULATION.finditer(text):
+        name = (m.group(1) or m.group(2) or "").strip()
+        if name and len(name) > 10:
+            art_m = PATTERN_EU_REGULATION_ARTICLE.search(text[max(0, m.start() - 50) : m.end() + 100])
+            article = None
+            if art_m:
+                article = f"Article {art_m.group(1)}"
+            cited_regulations.append(CitedRegulation(name=name, article=article))
+    cited_regulations = cited_regulations[:30]
+
+    return References(
+        cited_cases=cited_cases,
+        cited_eu_cases=cited_eu_cases,
+        cited_laws=cited_laws,
+        cited_regulations=cited_regulations,
+    )
+
+
+def _split_sections(full_text: str) -> List[Tuple[str, str, str]]:
+    """Return list of (section_type, title, content)."""
+    sections: List[Tuple[str, str, str]] = []
+    text = full_text
+    for i, (sec_type, pattern) in enumerate(SECTION_HEADERS):
+        m = pattern.search(text)
+        if not m:
+            continue
+        start = m.start()
+        title = m.group(0).strip()
+        next_start = len(text)
+        for _, next_pat in SECTION_HEADERS[i + 1 :]:
+            next_m = next_pat.search(text[start + 1 :])
+            if next_m:
+                next_start = min(next_start, start + 1 + next_m.start())
+        content = text[start + len(m.group(0)) : next_start].strip()
+        if content:
+            sections.append((sec_type, title, content))
+    return sections
+
+
+def _build_sections(full_text: str) -> List[CaseSection]:
+    raw_sections = _split_sections(full_text)
+    result: List[CaseSection] = []
+    type_map = {
+        "lower_court": "lower_court",
+        "appeal_section": "appeal_court",
+        "supreme_decision": "background",
+        "reasoning": "reasoning",
+        "judgment": "judgment",
+    }
+    for sec_type, title, content in raw_sections:
+        normalized_type = type_map.get(sec_type, "other")
+        result.append(CaseSection(type=normalized_type, title=title, content=content))
+    return result
+
+
+def extract_precedent(full_text: str, case_id: str) -> Optional[CaseExtractionResult]:
+    """
+    Extract structured data from KKO precedent full text using regex only.
+    Returns the same CaseExtractionResult as the LLM extractor for drop-in use.
+    """
+    if not full_text or not full_text.strip():
+        logger.warning("Empty full_text for %s", case_id)
+        return None
+
+    text = full_text.strip()
+    if not case_id and "KKO" in text:
+        case_m = PATTERN_CASE_ID.search(text[:500])
+        if case_m:
+            case_id = f"KKO:{case_m.group(1)}:{case_m.group(2)}"
+    if not case_id:
+        case_id = "KKO:0000:0"
+
+    try:
+        metadata = _extract_metadata_block(text, case_id)
+        lower_courts = _extract_lower_courts(text)
+        references = _extract_references(text)
+        sections = _build_sections(text)
+
+        if not sections:
+            reasoning_start = re.search(r"\n\s*(?:Reasoning|Perustelut)\s*\n", text, re.IGNORECASE)
+            judgment_start = re.search(r"\n\s*(?:Judgment|Tuomiolauselma)\s*\n", text, re.IGNORECASE)
+            if reasoning_start and judgment_start:
+                sections.append(CaseSection(
+                    type="reasoning",
+                    title="Reasoning",
+                    content=text[reasoning_start.end() : judgment_start.start()].strip(),
+                ))
+                sections.append(CaseSection(
+                    type="judgment",
+                    title="Judgment",
+                    content=text[judgment_start.end() :].strip(),
+                ))
+            else:
+                sections.append(CaseSection(type="other", title="Full text", content=text[:50000]))
+
+        return CaseExtractionResult(
+            metadata=metadata,
+            lower_courts=lower_courts,
+            references=references,
+            sections=sections,
+        )
+    except Exception as e:
+        logger.exception("Regex extraction failed for %s: %s", case_id, e)
+        return None
+
+
+class PrecedentRegexExtractor:
+    """
+    Regex-based extractor for Supreme Court precedents.
+    Use extract_data(full_text, case_id) to get a CaseExtractionResult.
+    """
+
+    def extract_data(self, full_text: str, case_id: str) -> Optional[CaseExtractionResult]:
+        return extract_precedent(full_text, case_id)

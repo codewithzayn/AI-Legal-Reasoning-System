@@ -304,7 +304,7 @@ class CaseLawScraper:
     def _parse_case_text(self, text: str, court: str, year: int, number: int, url: str) -> CaseLawDocument:
         """
         Create a raw CaseLawDocument from the text.
-        Detailed parsing is now handled by CaseLawExtractor (AI).
+        Detailed parsing is handled by the regex extractor at ingestion.
         This method only populates identifiers and full_text.
         """
         
