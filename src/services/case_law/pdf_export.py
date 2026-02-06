@@ -107,12 +107,14 @@ def doc_to_pdf(doc: Optional[CaseLawDocument]) -> bytes:
 
 
 def _escape(s: str) -> str:
-    """Escape for ReportLab Paragraph (XML-style)."""
+    """Escape for ReportLab Paragraph (XML-style; prevents injection in PDF content)."""
     return (
-        s.replace("&", "&amp;")
+        (s or "")
+        .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace('"', "&quot;")
+        .replace("'", "&#39;")
     )
 
 

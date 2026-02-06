@@ -21,38 +21,57 @@ logger = setup_logger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 
+def _path_under_root(resolved: Path, root: Path) -> bool:
+    """True if resolved is under root (or equal). Prevents path traversal outside project."""
+    try:
+        resolved = resolved.resolve()
+        root = root.resolve()
+        return resolved == root or root in resolved.parents
+    except Exception:
+        return False
+
+
 def credentials_file_exists(project_root: Optional[Path] = None) -> bool:
     """
     Return True if GOOGLE_APPLICATION_CREDENTIALS is set and points to an existing file.
     Resolves relative paths against project_root (default cwd). Does not mutate env.
+    When project_root is set, only returns True if the resolved path is under project_root (no traversal).
     """
     cred_path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
     if not cred_path:
         return False
-    if os.path.isabs(cred_path):
-        return Path(cred_path).exists()
     root = project_root or Path.cwd()
-    return (root / cred_path).resolve().exists()
+    root = root.resolve()
+    if os.path.isabs(cred_path):
+        resolved = Path(cred_path).resolve()
+        return resolved.exists() and (project_root is None or _path_under_root(resolved, root))
+    resolved = (root / cred_path).resolve()
+    return resolved.exists() and _path_under_root(resolved, root)
 
 
 def _resolve_credentials_path(project_root: Optional[Path] = None) -> Optional[Path]:
     """
     If GOOGLE_APPLICATION_CREDENTIALS is set and is a relative path,
     resolve it against project_root (default cwd) and set the env to the absolute path.
-    Returns the resolved Path if file exists, else None (env may still be set for downstream to fail clearly).
+    When project_root is set, only resolves if the path stays under project_root (no traversal).
+    Returns the resolved Path if file exists and (when project_root set) under root, else None.
     """
     cred_path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
     if not cred_path:
         return None
-    if os.path.isabs(cred_path):
-        return Path(cred_path) if Path(cred_path).exists() else None
     root = project_root or Path.cwd()
-    resolved = (root / cred_path).resolve()
-    if resolved.exists():
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved)
-        logger.debug("Resolved credentials path to %s", resolved)
-        return resolved
-    return None
+    root = root.resolve()
+    if os.path.isabs(cred_path):
+        resolved = Path(cred_path).resolve()
+        if not resolved.exists() or (project_root is not None and not _path_under_root(resolved, root)):
+            return None
+    else:
+        resolved = (root / cred_path).resolve()
+        if not resolved.exists() or not _path_under_root(resolved, root):
+            return None
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved)
+    logger.debug("Resolved credentials path (under project root)")
+    return resolved
 
 
 class GoogleDriveUploader:
@@ -92,6 +111,18 @@ class GoogleDriveUploader:
         """Escape single quotes for Drive API q parameter."""
         return s.replace("\\", "\\\\").replace("'", "\\'")
 
+
+def _sanitize_drive_filename(name: str) -> str:
+    """Remove path components and control chars from Drive file name (no traversal)."""
+    if not (name or "").strip():
+        return "unknown.pdf"
+    name = (name or "").strip()
+    name = name.replace("\\", "/").lstrip("/")
+    if "/" in name:
+        name = name.split("/")[-1]
+    name = "".join(c for c in name if c.isprintable() or c in ".-_")
+    return name.strip() or "unknown.pdf"
+
     def _get_or_create_folder(self, parent_id: str, name: str) -> str:
         """Get existing folder ID by name under parent, or create it."""
         cache_key = (parent_id, name)
@@ -130,7 +161,8 @@ class GoogleDriveUploader:
         year_str = (str(year) if year is not None else "").strip() or "unknown"
         type_id = self._get_or_create_folder(self._root_id, type_name)
         year_id = self._get_or_create_folder(type_id, year_str)
-        name = drive_filename or local_path.name
+        raw_name = drive_filename or local_path.name
+        name = _sanitize_drive_filename(raw_name)
         mime = "application/pdf" if local_path.suffix.lower() == ".pdf" else "application/octet-stream"
         try:
             safe_name = self._escape_query_string(name)

@@ -193,7 +193,16 @@ def main() -> int:
 
     subtypes = [args.type] if args.type else list(SUBTYPE_DIR_MAP)
     export_root_raw = (config.CASE_LAW_EXPORT_ROOT or "").strip()
-    export_root = PROJECT_ROOT / (export_root_raw or "data/case_law_export")
+    export_root = (PROJECT_ROOT / (export_root_raw or "data/case_law_export")).resolve()
+    project_root_resolved = PROJECT_ROOT.resolve()
+    if not str(export_root).startswith(str(project_root_resolved)):
+        logger.error(
+            "CASE_LAW_EXPORT_ROOT must resolve to a path under the project root (path traversal not allowed). "
+            "Resolved to %s; project root is %s.",
+            export_root,
+            project_root_resolved,
+        )
+        return 1
     if _write_local_enabled():
         export_root.mkdir(parents=True, exist_ok=True)
     else:
