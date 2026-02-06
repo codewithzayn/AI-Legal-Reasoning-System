@@ -44,6 +44,7 @@ Where to put what, and how the project is organized.
 
 - **Finlex ingestion:** `finlex_ingest/` – uses the Finlex API (documented).
 - **Case law ingestion:** `case_law/` – per court/subtype; uses scraping (no API). See [DATA_SOURCES.md](DATA_SOURCES.md).
+- **Case law core:** `case_law/core/` – shared modules: `ingestion_manager.py` (scrape + extract + store), `export_pdf_to_drive.py` (PDF + Drive backup), `ingest_history.py` (multi-year batch runner).
 - **Migrations:** `migrations/*.sql` – all schema/DB changes.
 - Scripts import from `src/` only. Run from **project root** (optionally with `PYTHONPATH` set to project root).
 
@@ -113,6 +114,8 @@ All commands from **project root**. Prefer **Make:** `make <target>` (e.g. `make
 | `make test` | Run pytest |
 
 **Case law (KKO):** `make ingest-precedents` (default YEAR=2026), `make ingest-precedents-force`, `make ingest-rulings`, `make ingest-leaves`, `make ingest-kko`, `make ingest-history` (START/END/COURT).  
-**KHO:** `make ingest-kho`. **Finlex:** `make ingest-finlex`.
+**PDF/Drive backup:** `make export-pdf-drive`, `make export-pdf-drive-range`, `make export-pdf-drive-type`.  
+**KHO:** `make ingest-kho`. **Finlex:** `make ingest-finlex`.  
+**Linting:** `make lint`, `make lint-fix`, `make format`.
 
 If imports fail, set `PYTHONPATH` to project root (e.g. `export PYTHONPATH=$(pwd)` or use `setup.sh`). Shell equivalents for each target are in the [Makefile](../Makefile).

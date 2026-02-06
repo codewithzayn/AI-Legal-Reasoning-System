@@ -112,7 +112,7 @@ START ?= 1926
 END ?= 2026
 COURT ?= supreme_court
 ingest-history:
-	python3 scripts/case_law/ingest_history.py --start $(START) --end $(END) --court $(COURT)
+	python3 scripts/case_law/core/ingest_history.py --start $(START) --end $(END) --court $(COURT)
 
 # ------------------------------------------------------------------------------
 # Case law: Supreme Administrative Court (KHO)
@@ -126,14 +126,14 @@ ingest-kho:
 # Export existing JSON cache to PDF and upload to Drive. Run after ingestion.
 # Requires: GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_DRIVE_ROOT_FOLDER_ID in .env
 export-pdf-drive:
-	python3 scripts/case_law/export_pdf_to_drive.py --year $(YEAR)
+	python3 scripts/case_law/core/export_pdf_to_drive.py --year $(YEAR)
 
 export-pdf-drive-range:
-	python3 scripts/case_law/export_pdf_to_drive.py --start $(START) --end $(END)
+	python3 scripts/case_law/core/export_pdf_to_drive.py --start $(START) --end $(END)
 
 TYPE ?= precedent
 export-pdf-drive-type:
-	python3 scripts/case_law/export_pdf_to_drive.py --type $(TYPE) --year $(YEAR)
+	python3 scripts/case_law/core/export_pdf_to_drive.py --type $(TYPE) --year $(YEAR)
 
 # ------------------------------------------------------------------------------
 # Finlex (statutes)

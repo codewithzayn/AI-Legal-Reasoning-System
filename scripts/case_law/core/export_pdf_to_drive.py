@@ -6,9 +6,9 @@ Standalone backup pipeline: load case law from JSON cache, convert each document
 write to local export root, and upload to Google Drive. No scraping. Run per year or range.
 
 Usage:
-  python scripts/case_law/export_pdf_to_drive.py --year 2025
-  python scripts/case_law/export_pdf_to_drive.py --start 2020 --end 2026
-  python scripts/case_law/export_pdf_to_drive.py --type precedent --year 2025
+  python scripts/case_law/core/export_pdf_to_drive.py --year 2025
+  python scripts/case_law/core/export_pdf_to_drive.py --start 2020 --end 2026
+  python scripts/case_law/core/export_pdf_to_drive.py --type precedent --year 2025
 """
 
 import argparse
@@ -23,8 +23,8 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*Python vers
 
 from dotenv import load_dotenv
 
-# Project root: when run as 'python scripts/case_law/export_pdf_to_drive.py' from repo root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# Project root: scripts/case_law/core/export_pdf_to_drive.py -> 3 levels up to repo root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env")
 os.environ.setdefault("LOG_FORMAT", "simple")  # human-readable logs like ingest pipeline
