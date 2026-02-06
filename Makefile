@@ -3,6 +3,7 @@
 
 .PHONY: help install run run-cli run-api test \
 	ingest-precedents ingest-precedents-force ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
+	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
 	ingest-finlex
 
 # Default: list all commands with short descriptions
@@ -29,6 +30,11 @@ help:
 	@echo "  make ingest-leaves        Ingest KKO leaves to appeal (Valitusluvat). Optional: YEAR=2026"
 	@echo "  make ingest-kko           Ingest KKO all subtypes (precedent + ruling + leave) for one year. Optional: YEAR=2026"
 	@echo "  make ingest-history       Ingest case law for a year range. Optional: START=1926 END=2026 COURT=supreme_court"
+	@echo ""
+	@echo "--- Case law: PDF backup to Google Drive (separate pipeline) ---"
+	@echo "  make export-pdf-drive     Export one year to PDF + Drive. Optional: YEAR=2025"
+	@echo "  make export-pdf-drive-range  Export year range. Optional: START=2020 END=2026"
+	@echo "  make export-pdf-drive-type   Export one type for one year. Optional: TYPE=precedent YEAR=2025"
 	@echo ""
 	@echo "--- Case law: Supreme Administrative Court (KHO) ---"
 	@echo "  make ingest-kho           Ingest KHO case law for one year. Optional: YEAR=2026"
@@ -95,6 +101,21 @@ ingest-history:
 # ------------------------------------------------------------------------------
 ingest-kho:
 	python3 scripts/case_law/supreme_administrative_court/ingest.py --year $(YEAR)
+
+# ------------------------------------------------------------------------------
+# Case law: PDF export and Google Drive backup (separate pipeline, no scrape)
+# ------------------------------------------------------------------------------
+# Export existing JSON cache to PDF and upload to Drive. Run after ingestion.
+# Requires: GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_DRIVE_ROOT_FOLDER_ID in .env
+export-pdf-drive:
+	python3 scripts/case_law/export_pdf_to_drive.py --year $(YEAR)
+
+export-pdf-drive-range:
+	python3 scripts/case_law/export_pdf_to_drive.py --start $(START) --end $(END)
+
+TYPE ?= precedent
+export-pdf-drive-type:
+	python3 scripts/case_law/export_pdf_to_drive.py --type $(TYPE) --year $(YEAR)
 
 # ------------------------------------------------------------------------------
 # Finlex (statutes)

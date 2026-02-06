@@ -39,6 +39,12 @@ class Config:
     # PDF Processing
     PDF_MAX_WORKERS: int = int(os.getenv("PDF_MAX_WORKERS", "4"))
 
+    # Case law PDF export and Google Drive backup (separate pipeline)
+    # 1 = write local + Drive (dev), 0 = Drive only (prod). Missing/empty => 1.
+    CASE_LAW_EXPORT_LOCAL: str = (os.getenv("CASE_LAW_EXPORT_LOCAL") or "1").strip().lower()
+    CASE_LAW_EXPORT_ROOT: str = (os.getenv("CASE_LAW_EXPORT_ROOT") or "data/case_law_export").strip()
+    GOOGLE_DRIVE_ROOT_FOLDER_ID: str = (os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID") or "").strip()
+
 
 # Singleton instance
 config = Config()

@@ -12,6 +12,8 @@ ENV/
 
 # ----- Secrets and env with keys -----
 .env
+# Google service account key (case law Drive backup)
+auspicious-crow-432016-p8-6eb8c2e545cb.json
 
 # ----- Python bytecode and build -----
 __pycache__/
