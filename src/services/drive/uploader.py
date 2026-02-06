@@ -11,6 +11,7 @@ Auth priority:
   2. GOOGLE_APPLICATION_CREDENTIALS (service account → only works with Shared Drives)
 """
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -219,17 +220,25 @@ class GoogleDriveUploader:
         self._folder_cache[cache_key] = folder_id
         return folder_id
 
+    @staticmethod
+    def compute_content_hash(content: str) -> str:
+        """Compute a stable SHA-256 hex digest from source content (not from PDF bytes).
+        PDF bytes change every run due to embedded timestamps; hashing the source is stable."""
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
     def upload_file(
         self,
         local_path: Path,
         type_folder_name: str,
         year: str,
         drive_filename: str | None = None,
+        content_hash: str | None = None,
     ) -> str | None:
         """
         Upload a file to Drive under root / type_folder_name / year / drive_filename.
-        If drive_filename is None, use local_path.name.
-        Returns the file ID if successful, else None.
+        Idempotent: if content_hash is provided, stores it in appProperties and skips
+        upload when the existing Drive file already has the same hash.
+        Returns the file ID if successful (or already up-to-date), else None.
         """
         if not local_path.exists():
             logger.warning("Upload skipped (file not found): %s", local_path)
@@ -247,20 +256,38 @@ class GoogleDriveUploader:
                 self._service.files()
                 .list(
                     q=f"name = '{safe_name}' and '{year_id}' in parents and trashed = false",
-                    fields="files(id)",
+                    fields="files(id,appProperties)",
                     spaces="drive",
                 )
                 .execute()
             )
             files = existing.get("files", [])
+
+            # Idempotency: compare content hash stored in appProperties
+            if files and content_hash:
+                file_id = files[0]["id"]
+                remote_hash = (files[0].get("appProperties") or {}).get("content_hash", "")
+                if remote_hash == content_hash:
+                    logger.debug("Skip (unchanged): %s", name)
+                    return file_id
+
+            # Build appProperties with content_hash for future comparisons
+            app_props = {"content_hash": content_hash} if content_hash else {}
             media = MediaFileUpload(str(local_path), mimetype=mime, resumable=False)
+
             if files:
                 file_id = files[0]["id"]
-                self._service.files().update(fileId=file_id, media_body=media).execute()
+                update_body = {}
+                if app_props:
+                    update_body["appProperties"] = app_props
+                self._service.files().update(fileId=file_id, body=update_body, media_body=media).execute()
                 logger.debug("Updated Drive file: %s", name)
                 return file_id
-            body = {"name": name, "parents": [year_id]}
-            f = self._service.files().create(body=body, media_body=media, fields="id").execute()
+
+            create_body = {"name": name, "parents": [year_id]}
+            if app_props:
+                create_body["appProperties"] = app_props
+            f = self._service.files().create(body=create_body, media_body=media, fields="id").execute()
             logger.debug("Uploaded Drive file: %s", name)
             return f["id"]
         except Exception as e:

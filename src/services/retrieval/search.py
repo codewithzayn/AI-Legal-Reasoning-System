@@ -272,6 +272,15 @@ class HybridRetrieval:
         if not initial_results:
             return []
 
+        # Log retrieved candidates before rerank (for debugging relevancy)
+        logger.info("Retrieved %s candidates (statutes + case_law):", len(initial_results))
+        for i, r in enumerate(initial_results[:15]):
+            src = r.get("source", "?")
+            score = r.get("score", 0)
+            meta = r.get("metadata", {})
+            label = meta.get("case_id") or meta.get("title") or meta.get("uri") or "?"
+            logger.info("  [%s] %s | %s | score=%.4f", i + 1, src, label, score)
+
         # Re-rank with Cohere
         logger.info("Reranking...")
         rerank_start = time.time()
@@ -280,5 +289,14 @@ class HybridRetrieval:
         reranked = reranker.rerank(query_text, initial_results, top_k=top_k)
         rerank_elapsed = time.time() - rerank_start
         logger.info(f"Rerank done → top {len(reranked)} in {rerank_elapsed:.1f}s")
+
+        # Log final reranked results (what the LLM will see)
+        logger.info("Final results sent to LLM:")
+        for i, r in enumerate(reranked):
+            src = r.get("source", "?")
+            score = r.get("score", 0)
+            meta = r.get("metadata", {})
+            label = meta.get("case_id") or meta.get("title") or meta.get("uri") or "?"
+            logger.info("  [%s] %s | %s | score=%.4f", i + 1, src, label, score)
 
         return reranked

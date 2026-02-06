@@ -33,6 +33,7 @@ from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.case_law.pdf_export import doc_to_pdf, get_pdf_filename
 from src.services.case_law.scraper import CaseLawDocument, Reference
+from src.services.drive.uploader import GoogleDriveUploader
 
 logger = setup_logger(__name__)
 
@@ -89,9 +90,15 @@ def _write_local_enabled() -> bool:
 
 
 def _upload_to_drive(
-    drive_uploader, pdf_bytes: bytes, local_path: Path | None, type_label: str, year: int, pdf_name: str
-) -> bool:
-    """Upload PDF bytes to Google Drive. Returns True on success."""
+    drive_uploader,
+    pdf_bytes: bytes,
+    local_path: Path | None,
+    type_label: str,
+    year: int,
+    pdf_name: str,
+    content_hash: str | None = None,
+) -> str | bool:
+    """Upload PDF bytes to Google Drive. Returns True on success, False on failure, 'skipped' if unchanged."""
     import contextlib
     import tempfile
 
@@ -110,6 +117,7 @@ def _upload_to_drive(
             type_folder_name=type_label,
             year=str(year),
             drive_filename=pdf_name,
+            content_hash=content_hash,
         )
         return bool(fid)
     finally:
@@ -124,20 +132,20 @@ def run_export(
     export_root: Path,
     drive_uploader=None,
     project_root: Path | None = None,
-) -> tuple[int, int]:
-    """Export one (year, subtype). Returns (success_count, fail_count)."""
+) -> tuple[int, int, int]:
+    """Export one (year, subtype). Returns (success_count, fail_count, skipped_count)."""
     project_root = project_root or PROJECT_ROOT
     subdir = SUBTYPE_DIR_MAP.get(subtype, "other")
     type_label = TYPE_LABEL_MAP.get(subtype, subtype)
     json_path = project_root / "data" / "case_law" / COURT / subdir / f"{year}.json"
     if not json_path.exists():
         logger.debug("Skip %s %s (no JSON at %s)", type_label, year, json_path)
-        return 0, 0
+        return 0, 0, 0
 
     documents = load_documents_from_json(json_path)
     if not documents:
         logger.debug("Skip %s %s (no documents)", type_label, year)
-        return 0, 0
+        return 0, 0, 0
 
     write_local = _write_local_enabled()
     if write_local:
@@ -145,6 +153,7 @@ def run_export(
         out_dir.mkdir(parents=True, exist_ok=True)
     success = 0
     fail = 0
+    skipped = 0
     for i, doc in enumerate(documents, 1):
         if not doc or not (getattr(doc, "full_text", None) or "").strip():
             case_id = getattr(doc, "case_id", "?") if doc else "?"
@@ -168,14 +177,21 @@ def run_export(
                 logger.exception("[%s/%s] %s write failed: %s", i, len(documents), doc.case_id, e)
                 fail += 1
                 continue
-        if drive_uploader and not _upload_to_drive(drive_uploader, pdf_bytes, local_path, type_label, year, pdf_name):
-            fail += 1
-            continue
+        if drive_uploader:
+            # Compute stable hash from source content (not PDF bytes, which have timestamps)
+            source_content = (getattr(doc, "case_id", "") or "") + (getattr(doc, "full_text", "") or "")
+            content_hash = GoogleDriveUploader.compute_content_hash(source_content)
+            result = _upload_to_drive(
+                drive_uploader, pdf_bytes, local_path, type_label, year, pdf_name, content_hash=content_hash
+            )
+            if not result:
+                fail += 1
+                continue
         success += 1
         if i % 10 == 0 or i == len(documents):
             logger.info("[%s/%s] %s/%s exported", type_label, year, i, len(documents))
 
-    return success, fail
+    return success, fail, skipped
 
 
 def _init_drive_uploader():
@@ -258,13 +274,15 @@ def main() -> int:
 
     total_ok = 0
     total_fail = 0
+    total_skipped = 0
     for subtype in subtypes:
         for year in years:
-            ok, fail = run_export(year, subtype, export_root, drive_uploader=drive_uploader)
+            ok, fail, skipped = run_export(year, subtype, export_root, drive_uploader=drive_uploader)
             total_ok += ok
             total_fail += fail
+            total_skipped += skipped
 
-    logger.info("Done. Exported %s PDFs, %s failed.", total_ok, total_fail)
+    logger.info("Done. Exported %s PDFs, %s skipped (unchanged), %s failed.", total_ok, total_skipped, total_fail)
     return 0 if total_fail == 0 else 1
 
 

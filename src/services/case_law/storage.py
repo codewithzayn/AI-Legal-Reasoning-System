@@ -3,7 +3,9 @@ Case Law Storage Service
 Stores case law documents and sections in Supabase with embeddings
 """
 
+import hashlib
 import os
+import re
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -103,6 +105,32 @@ class CaseLawStorage:
             logger.error(f"Error storing references for {doc.case_id}: {e}")
             return 0
 
+    _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    _FINNISH_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+
+    @classmethod
+    def _validate_date(cls, value: str | None) -> str | None:
+        """Ensure a date value is valid ISO YYYY-MM-DD, or convert Finnish d.m.yyyy.
+        Returns None if the date is invalid or unparseable (prevents Supabase errors)."""
+        if not value:
+            return None
+        value = value.strip()
+        if cls._ISO_DATE_RE.match(value):
+            return value
+        # Try Finnish format (e.g. "31.3.2025" -> "2025-03-31")
+        m = cls._FINNISH_DATE_RE.match(value)
+        if m:
+            return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+        logger.warning("Invalid date dropped: %r", value)
+        return None
+
+    @staticmethod
+    def compute_content_hash(doc: CaseLawDocument) -> str:
+        """Compute a stable SHA-256 hash from case_id + full_text.
+        Used for idempotency: skip re-processing if content hasn't changed."""
+        content = (doc.case_id or "") + (doc.full_text or "")
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
     def _insert_case_metadata(self, doc: CaseLawDocument) -> str | None:
         """Insert case metadata into case_law table (New Schema)"""
 
@@ -112,7 +140,7 @@ class CaseLawStorage:
             "court_code": doc.court_code,
             "decision_type": doc.decision_type,
             "case_year": doc.case_year,
-            "decision_date": doc.decision_date,  # Already ISO or None
+            "decision_date": self._validate_date(doc.decision_date),
             "diary_number": doc.diary_number,
             "ecli": doc.ecli,
             "primary_language": doc.primary_language,
@@ -124,11 +152,11 @@ class CaseLawStorage:
             "defendant": doc.defendant,
             "respondent": doc.respondent,
             "lower_court_name": doc.lower_court_name,
-            "lower_court_date": doc.lower_court_date,
+            "lower_court_date": self._validate_date(doc.lower_court_date),
             "lower_court_number": doc.lower_court_number,
             "lower_court_decision": doc.lower_court_decision,
             "appeal_court_name": doc.appeal_court_name,
-            "appeal_court_date": doc.appeal_court_date,
+            "appeal_court_date": self._validate_date(doc.appeal_court_date),
             "appeal_court_number": doc.appeal_court_number,
             "background_summary": doc.background_summary,
             "complaint": doc.complaint,
@@ -147,6 +175,8 @@ class CaseLawStorage:
             or f"{doc.court_code} {doc.case_year}:{doc.case_id.split(':')[-1] if ':' in doc.case_id else ''}",
             "is_precedent": doc.is_precedent,
             "volume": int(doc.volume) if doc.volume and str(doc.volume).isdigit() else None,
+            # Content hash for idempotency (skip re-processing if content unchanged)
+            "content_hash": self.compute_content_hash(doc),
         }
 
         # Upsert
@@ -160,56 +190,84 @@ class CaseLawStorage:
             logger.error(f"Error inserting metadata for {doc.case_id}: {e}")
             return None
 
+    # Max chars per chunk for embedding. Sections larger than this are sub-chunked
+    # so every part of the document gets a focused, searchable embedding.
+    _MAX_CHUNK_CHARS = 3500
+
+    @classmethod
+    def _sub_chunk(cls, text: str, max_chars: int | None = None) -> list[str]:
+        """Split text into chunks of roughly max_chars, breaking on paragraph boundaries.
+        Preserves context by splitting on double-newlines first, then single newlines."""
+        limit = max_chars or cls._MAX_CHUNK_CHARS
+        if len(text) <= limit:
+            return [text]
+
+        chunks: list[str] = []
+        current: list[str] = []
+        current_len = 0
+
+        # Split on paragraph boundaries (double newline)
+        paragraphs = text.split("\n\n")
+        for para in paragraphs:
+            para_len = len(para) + 2  # +2 for the \n\n separator
+            if current_len + para_len > limit and current:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_len = 0
+            current.append(para)
+            current_len += para_len
+
+        if current:
+            chunks.append("\n\n".join(current))
+
+        return chunks
+
     def _store_sections(self, case_law_id: str, doc: CaseLawDocument) -> int:
-        """Extract sections, generate embeddings, and store in case_law_sections"""
+        """Extract sections, sub-chunk large ones, generate embeddings, and store in case_law_sections"""
 
         sections = []
         section_number = 0
+        metadata_header = f"[{doc.case_id}] {doc.title or ''}\nKeywords: {', '.join(doc.legal_domains or [])}\n\n"
 
         # Use AI-extracted sections when present and non-empty (filter empty content)
         ai_sections = getattr(doc, "ai_sections", None) or []
         valid_ai = [s for s in ai_sections if isinstance(s, dict) and (s.get("content") or "").strip()]
         if valid_ai:
-            for _i, section_data in enumerate(valid_ai):
-                section_number += 1
+            for section_data in valid_ai:
                 content = (section_data.get("content") or "").strip()
-                metadata_header = (
-                    f"[{doc.case_id}] {doc.title or ''}\nKeywords: {', '.join(doc.legal_domains or [])}\n\n"
-                )
-                content_with_context = metadata_header + content
-                sections.append(
-                    {
-                        "case_law_id": case_law_id,
-                        "section_type": (section_data.get("type") or "other").strip() or "other",
-                        "section_number": section_number,
-                        "section_title": (section_data.get("title") or "").strip() or "Section",
-                        "content": content_with_context,
-                        "embedding_priority": "high",
-                    }
-                )
+                sec_type = (section_data.get("type") or "other").strip() or "other"
+                sec_title = (section_data.get("title") or "").strip() or "Section"
+
+                # Sub-chunk large sections so every part gets a focused embedding
+                chunks = self._sub_chunk(content)
+                for chunk_idx, chunk_text in enumerate(chunks):
+                    section_number += 1
+                    content_with_context = metadata_header + chunk_text
+                    title = sec_title if len(chunks) == 1 else f"{sec_title} (Part {chunk_idx + 1}/{len(chunks)})"
+                    sections.append(
+                        {
+                            "case_law_id": case_law_id,
+                            "section_type": sec_type,
+                            "section_number": section_number,
+                            "section_title": title,
+                            "content": content_with_context,
+                            "embedding_priority": "high",
+                        }
+                    )
+
         if not sections:
             logger.warning("%s | fallback to chunked full text", doc.case_id)
             if doc.full_text:
-                # Prepend metadata even for fallback
-                metadata_header = (
-                    f"[{doc.case_id}] {doc.title or ''}\nKeywords: {', '.join(doc.legal_domains or [])}\n\n"
-                )
-
-                # Chunk the full text if it's too long
-                chunk_size = 4000
-                text = doc.full_text
-                chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
-
+                chunks = self._sub_chunk(doc.full_text)
                 for i, chunk_text in enumerate(chunks):
                     section_number += 1
                     content_with_context = metadata_header + chunk_text
-
                     sections.append(
                         {
                             "case_law_id": case_law_id,
                             "section_type": "reasoning",
                             "section_number": section_number,
-                            "section_title": f"Full Text Part {i + 1}",
+                            "section_title": f"Full Text Part {i + 1}/{len(chunks)}",
                             "content": content_with_context,
                             "embedding_priority": "medium",
                         }

@@ -59,6 +59,27 @@ class IngestionManager:
             self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
             return
 
+        # 1b. Skip documents whose content hasn't changed (hash-based idempotency)
+        existing_hashes = self._fetch_existing_content_hashes(year)
+        if existing_hashes:
+            new_docs = []
+            skipped_unchanged = 0
+            for d in documents:
+                doc_hash = self.storage.compute_content_hash(d)
+                stored_hash = existing_hashes.get(d.case_id)
+                if stored_hash and stored_hash == doc_hash:
+                    skipped_unchanged += 1
+                else:
+                    new_docs.append(d)
+            if skipped_unchanged:
+                logger.info("⏩ Skipping %s documents (content unchanged in Supabase)", skipped_unchanged)
+            documents = new_docs
+
+        if not documents:
+            logger.info("✅ All documents already in Supabase with same content — nothing to process.")
+            self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
+            return
+
         # 2. Extraction (hybrid: regex first, LLM fallback for KKO precedents)
         if use_ai and self.court == "supreme_court" and subtype == "precedent":
             self._run_extraction(documents, json_file, no_json_cache, tracking_id)
@@ -196,6 +217,17 @@ class IngestionManager:
                         tracking_id=tracking_id,
                         subtype=subtype,
                     )
+                else:
+                    # store_case returned None (e.g. invalid date, schema error)
+                    logger.warning("[%s/%s] %s | STORE RETURNED NONE", i, total_to_store, doc.case_id)
+                    if tracking_id:
+                        self._track_error(
+                            tracking_id=tracking_id,
+                            case_id=doc.case_id,
+                            url=doc.url,
+                            error_type="storage_error",
+                            error_msg="store_case returned None (check storage logs for details)",
+                        )
             except Exception as e:
                 logger.error("[%s/%s] %s | STORAGE FAILED: %s", i, total_to_store, doc.case_id, e)
                 if tracking_id:
@@ -265,6 +297,27 @@ class IngestionManager:
             new_refs.append(Reference(ref_id=ref_id, ref_type="regulation"))
 
         doc.references = new_refs
+
+    def _fetch_existing_content_hashes(self, year: int) -> dict[str, str]:
+        """Query Supabase for case_id -> content_hash mapping for this court + year.
+        Returns dict {case_id: content_hash}. Returns empty dict on error or if DB is unavailable.
+        """
+        if not self.sb_client:
+            return {}
+        try:
+            response = (
+                self.sb_client.table("case_law")
+                .select("case_id,content_hash")
+                .eq("court_type", self.court)
+                .eq("case_year", year)
+                .execute()
+            )
+            hashes = {row["case_id"]: (row.get("content_hash") or "") for row in (response.data or [])}
+            logger.info("Found %s existing documents in Supabase for %s/%s", len(hashes), self.court, year)
+            return hashes
+        except Exception as e:
+            logger.warning("Could not check existing documents in Supabase: %s", e)
+            return {}
 
     def _load_from_json(self, path: Path) -> list[CaseLawDocument]:
         """Load documents from cached JSON"""
