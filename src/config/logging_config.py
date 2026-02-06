@@ -37,12 +37,15 @@ def setup_logger(
     # Only add handler if not already configured
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
-        
-        # JSON formatter for production
-        formatter = jsonlogger.JsonFormatter(
-            '%(asctime)s %(levelname)s %(name)s %(message)s',
-            datefmt="%Y-%m-%dT%H:%M:%S"
-        )
+        if os.getenv("LOG_FORMAT") == "simple":
+            # Message only (no time, level, module name) – for ingestion progress
+            formatter = logging.Formatter("%(message)s")
+        else:
+            # JSON formatter for production
+            formatter = jsonlogger.JsonFormatter(
+                '%(asctime)s %(levelname)s %(name)s %(message)s',
+                datefmt="%Y-%m-%dT%H:%M:%S"
+            )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
     

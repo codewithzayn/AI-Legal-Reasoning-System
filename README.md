@@ -31,16 +31,13 @@ Finnish Response with Citations
 - Incremental Ingestion Tracking
 
 ✅ **Document Processing**
-- Finlex API integration (Statutes)
-- Supreme Court Scraping + AI Extraction (Precedents)
-- XML parsing (Akoma Ntoso format)
-- Section-based chunking & embedding
+- **Finlex (API):** Documented Open Data API – statutes, XML (Akoma Ntoso), section-based chunking.
+- **Case law (no API):** Court websites – scraping (Playwright) + regex/LLM extraction for precedents. See [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ✅ **Search & Retrieval**
-- Vector search (pgvector)
-- Full-text search (ts_rank)
-- RRF ranking algorithm
-- Anti-hallucination system
+- Vector search (pgvector) + full-text search (ts_rank) + RRF merge
+- **Cohere reranking** – scores candidates by relevance; we send the top `CHUNKS_TO_LLM` (default 10) to the LLM. See [docs/RETRIEVAL_AND_RERANK.md](docs/RETRIEVAL_AND_RERANK.md).
+- Anti-hallucination (citations required)
 
 ✅ **User Interface**
 - Streamlit chat interface
@@ -49,15 +46,23 @@ Finnish Response with Citations
 
 ## Quick Start
 
-### 1. Install Dependencies
+### 1. Virtual environment (recommended)
+
+Use a venv per project so dependencies stay isolated. From project root:
 
 ```bash
+./setup.sh
+# or manually:
+python3 -m venv .venv
+source .venv/bin/activate   # Linux/macOS; on Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+`.venv/` is in `.gitignore` – do not commit it. See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for what to commit vs ignore.
+
 ### 2. Configure Environment
 
-Create `.env`:
+Create `.env` (never commit it; copy from `.env.example`):
 
 ```env
 SUPABASE_URL=your_supabase_url
@@ -89,6 +94,16 @@ streamlit run src/ui/app.py
 ```
 
 Open http://localhost:8501
+
+### 6. Run tests
+
+From project root:
+
+```bash
+python -m pytest tests/ -v
+```
+
+See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for structure, what to commit vs ignore, and all commands. Or run `make help` for the command list.
 
 ## Tech Stack
 
@@ -142,6 +157,10 @@ python3 test_rag_pipeline.py
 # Test specific document
 python3 test_finlex.py
 ```
+
+## Project structure & conventions
+
+Where to put app code, scripts, tests, and migrations: **[docs/CONVENTIONS.md](docs/CONVENTIONS.md)**.
 
 ## API Usage
 

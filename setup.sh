@@ -1,26 +1,38 @@
 #!/bin/bash
+# AI Legal Reasoning System – setup (venv + dependencies)
+# Run from project root.
 
-# AI Legal Reasoning System - Setup Script
-
+set -e
 echo "=== AI Legal Reasoning System Setup ==="
 
-# Check Python version
-echo "\n1. Checking Python..."
+echo ""
+echo "1. Checking Python..."
 python3 --version
 
-# Install pip if not available
-echo "\n2. Installing pip (requires sudo)..."
-if ! command -v pip3 &> /dev/null; then
-    echo "pip3 not found. Installing..."
-    sudo apt update && sudo apt install -y python3-pip
+echo ""
+echo "2. Creating virtual environment (.venv) if missing..."
+if [ ! -d ".venv" ]; then
+    python3 -m venv .venv
+    echo "   Created .venv"
 else
-    echo "pip3 already installed"
+    echo "   .venv already exists"
 fi
 
-# Install dependencies
-echo "\n3. Installing Python dependencies..."
-pip3 install -r requirements.txt
+echo ""
+echo "3. Activating .venv and installing dependencies..."
+# shellcheck source=/dev/null
+source .venv/bin/activate
+pip install --upgrade pip -q
+pip install -r requirements.txt
 
-echo "\n=== Setup Complete ==="
-echo "\nTo run the application:"
-echo "  streamlit run src/ui/app.py"
+echo ""
+echo "=== Setup complete ==="
+echo ""
+echo "Activate the virtual environment (if not already):"
+echo "  source .venv/bin/activate   # Linux/macOS"
+echo ""
+echo "Then run the app:"
+echo "  make run"
+echo "  # or: streamlit run src/ui/app.py"
+echo ""
+echo "See docs/CONVENTIONS.md for what to commit vs ignore and for commands."

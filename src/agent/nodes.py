@@ -11,6 +11,7 @@ from .state import AgentState
 from src.services.retrieval import HybridRetrieval
 from src.services.retrieval.generator import LLMGenerator
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 
 logger = setup_logger(__name__)
 
@@ -31,7 +32,7 @@ async def analyze_intent(state: AgentState) -> AgentState:
         state["original_query"] = query
         state["search_attempts"] = 0
     
-    logger.info(f"[ANALYZE] Classifying intent for: {query}")
+    logger.info("Analyzing intent...")
     
     system_prompt = """Classify the user's input into exactly one category:
     1. 'legal_search': Questions about Finnish law, court cases, penalties, rights, or legal definitions.
@@ -50,11 +51,11 @@ async def analyze_intent(state: AgentState) -> AgentState:
         if intent not in ['legal_search', 'general_chat', 'clarification']:
             intent = 'legal_search'
             
-        logger.info(f"[ANALYZE] Intent matched: {intent}")
+        logger.info(f"Intent: {intent}")
         return {"intent": intent, "stage": "analyze", "original_query": state.get("original_query", query), "search_attempts": 0}
         
     except Exception as e:
-        logger.error(f"[ANALYZE] Error: {e}")
+        logger.error(f"Intent error: {e}")
         return {"intent": "legal_search", "stage": "analyze"}
 
 
@@ -144,19 +145,17 @@ async def search_knowledge(state: AgentState) -> AgentState:
     """
     state["stage"] = "search"
     start_time = time.time()
-    logger.info("[SEARCH] Starting hybrid search + reranking...")
-    
+    logger.info("Hybrid search → fetching candidates...")
     try:
         retrieval = HybridRetrieval()
         query = state["query"]
         results = await retrieval.hybrid_search_with_rerank(
-            query, 
-            initial_limit=30, 
-            final_limit=20
+            query,
+            initial_limit=config.SEARCH_CANDIDATES_FOR_RERANK,
+            final_limit=config.CHUNKS_TO_LLM,
         )
-        
         elapsed = time.time() - start_time
-        logger.info(f"[SEARCH] Completed in {elapsed:.2f}s - Retrieved {len(results)} results")
+        logger.info(f"Reranking done → {len(results)} chunks in {elapsed:.1f}s")
         
         state["search_results"] = results
         state["rrf_results"] = results
@@ -167,7 +166,7 @@ async def search_knowledge(state: AgentState) -> AgentState:
             "search_time": elapsed
         }
     except Exception as e:
-        logger.error(f"[SEARCH] Error: {e}")
+        logger.error(f"Search error: {e}")
         state["error"] = f"Search failed: {str(e)}"
         state["search_results"] = []
     
@@ -182,13 +181,12 @@ async def reason_legal(state: AgentState) -> AgentState:
     results = state.get("search_results", [])
     
     if not results:
-        logger.warning("[LLM] No search results found")
+        logger.warning("No search results found")
         state["response"] = "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja."
         return state
     
     start_time = time.time()
-    logger.info(f"[LLM] Generating response with {len(results)} chunks...")
-    
+    logger.info(f"Generating response from {len(results)} chunks...")
     try:
         response = await _generator.agenerate_response(
             query=state["query"],
@@ -196,9 +194,9 @@ async def reason_legal(state: AgentState) -> AgentState:
         )
         state["response"] = response
         elapsed = time.time() - start_time
-        logger.info(f"[LLM] Completed in {elapsed:.2f}s")
+        logger.info(f"Response ready in {elapsed:.1f}s")
     except Exception as e:
-        logger.error(f"[LLM] Error: {e}")
+        logger.error(f"LLM error: {e}")
         state["error"] = f"LLM generation failed: {str(e)}"
         state["response"] = "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen."
     

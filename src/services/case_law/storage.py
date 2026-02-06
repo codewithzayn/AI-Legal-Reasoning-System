@@ -57,11 +57,16 @@ class CaseLawStorage:
             # 3. Store references (now populated by AI)
             references_stored = self._store_references(case_id, doc)
             
-            logger.info(f"Stored {doc.case_id}: {sections_stored} sections, {references_stored} references")
+            logger.info(
+                "%s | stored (%s sections, %s refs)",
+                doc.case_id,
+                sections_stored,
+                references_stored,
+            )
             return case_id
             
         except Exception as e:
-            logger.error(f"Error storing case {doc.case_id}: {e}")
+            logger.error("%s | store error: %s", doc.case_id, e)
             return None
     
     def store_cases(self, docs: List[CaseLawDocument]) -> int:
@@ -169,24 +174,28 @@ class CaseLawStorage:
         sections = []
         section_number = 0
         
-        # Only use AI-extracted sections
-        if hasattr(doc, 'ai_sections') and doc.ai_sections:
-            for i, section_data in enumerate(doc.ai_sections):
+        # Use AI-extracted sections when present and non-empty (filter empty content)
+        ai_sections = getattr(doc, 'ai_sections', None) or []
+        valid_ai = [
+            s for s in ai_sections
+            if isinstance(s, dict) and (s.get('content') or '').strip()
+        ]
+        if valid_ai:
+            for i, section_data in enumerate(valid_ai):
                 section_number += 1
-                # Prepend metadata to content for better retrieval and LLM context
+                content = (section_data.get('content') or '').strip()
                 metadata_header = f"[{doc.case_id}] {doc.title or ''}\nKeywords: {', '.join(doc.legal_domains or [])}\n\n"
-                content_with_context = metadata_header + section_data['content']
-                
+                content_with_context = metadata_header + content
                 sections.append({
                     'case_law_id': case_law_id,
-                    'section_type': section_data['type'],
+                    'section_type': (section_data.get('type') or 'other').strip() or 'other',
                     'section_number': section_number,
-                    'section_title': section_data['title'],
+                    'section_title': (section_data.get('title') or '').strip() or 'Section',
                     'content': content_with_context,
                     'embedding_priority': 'high'
                 })
-        else:
-            logger.warning(f"No AI sections found for {doc.case_id}. Fallback to chunked full text.")
+        if not sections:
+            logger.warning("%s | fallback to chunked full text", doc.case_id)
             if doc.full_text:
                 # Prepend metadata even for fallback
                 metadata_header = f"[{doc.case_id}] {doc.title or ''}\nKeywords: {', '.join(doc.legal_domains or [])}\n\n"
@@ -235,7 +244,7 @@ class CaseLawStorage:
             
             return len(response.data) if response.data else 0
         except Exception as e:
-            logger.error(f"Error storing sections for {doc.case_id}: {e}")
+            logger.error("%s | store sections error: %s", doc.case_id, e)
             return 0
     
     def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:

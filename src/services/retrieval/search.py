@@ -283,17 +283,12 @@ class HybridRetrieval:
             return []
 
         # Re-rank with Cohere
-        logger.info(f"[RERANK] Starting Cohere rerank on {len(initial_results)} results...")
+        logger.info("Reranking...")
         rerank_start = time.time()
-        
         reranker = self._get_reranker()
-        
-        # Reranker expects a list of strings or dicts with 'text'
-        # Our normalized results have 'text' key.
-        # reranker.rerank needs to be robust to our new dict format
-        reranked = reranker.rerank(query_text, initial_results, top_k=final_limit or config.RERANK_TOP_K)
-        
+        top_k = final_limit if final_limit is not None else config.CHUNKS_TO_LLM
+        reranked = reranker.rerank(query_text, initial_results, top_k=top_k)
         rerank_elapsed = time.time() - rerank_start
-        logger.info(f"[RERANK] Completed in {rerank_elapsed:.2f}s - Top {len(reranked)} results")
+        logger.info(f"Rerank done → top {len(reranked)} in {rerank_elapsed:.1f}s")
         
         return reranked

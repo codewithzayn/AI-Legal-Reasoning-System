@@ -3,7 +3,7 @@
 
 """
 Case law extraction models.
-Shared Pydantic schemas used by the regex extractor and ingestion merge logic.
+Shared Pydantic schemas used by the regex extractor and GPT-4o mini LLM fallback (hybrid_extractor).
 """
 
 from typing import List, Optional

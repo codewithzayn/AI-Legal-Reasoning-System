@@ -50,7 +50,7 @@ RESPONSE FORMAT:
 
 
 class LLMGenerator:
-    """Generate responses using GPT-4o with citations and LangSmith tracing"""
+    """Generate responses using GPT-4o mini with citations and LangSmith tracing"""
     
     def __init__(self, model: str = "gpt-4o-mini"):
         """Initialize LangChain ChatOpenAI client with LangSmith tracing"""
@@ -79,13 +79,11 @@ class LLMGenerator:
             HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}")
         ]
         
-        logger.info("[LLM API] Calling ChatOpenAI (Sync, LangSmith traced)...")
+        logger.info("Calling LLM...")
         api_start = time.time()
-        
         response = self.llm.invoke(messages)
-        
         api_elapsed = time.time() - api_start
-        logger.info(f"[LLM API] Completed in {api_elapsed:.2f}s")
+        logger.info(f"LLM done in {api_elapsed:.1f}s")
         
         return response.content
 
@@ -106,13 +104,11 @@ class LLMGenerator:
             HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}")
         ]
         
-        logger.info("[LLM API] Calling ChatOpenAI (Async, LangSmith traced)...")
+        logger.info("Calling LLM...")
         api_start = time.time()
-        
         response = await self.llm.ainvoke(messages)
-        
         api_elapsed = time.time() - api_start
-        logger.info(f"[LLM API] Completed in {api_elapsed:.2f}s")
+        logger.info(f"LLM done in {api_elapsed:.1f}s")
         
         return response.content
     

@@ -1,0 +1,19 @@
+# Disable file watcher to avoid "inotify watch limit reached" on Linux
+# and keep terminal output clean. Restart the app manually after code changes.
+[server]
+fileWatcherType = "none"
+
+# Theme: legal-AI look (aligned with app.py THEME_* tokens)
+[theme]
+base = "light"
+primaryColor = "#0f172a"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8fafc"
+textColor = "#0f172a"
+font = "sans serif"
+
+[theme.light]
+primaryColor = "#0f172a"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8fafc"
+textColor = "#0f172a"

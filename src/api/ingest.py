@@ -15,10 +15,37 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 # Import the new service
 from src.services.finlex.ingestion import FinlexIngestionService
 
+# ---------------------------------------------------------------------------
+# FastAPI app and request/response models
+# ---------------------------------------------------------------------------
+app = FastAPI(title="AI Legal Reasoning - Ingest API", version="1.0.0")
 
-# We can remove the local _process_single_document function entirely as it's now in the service.
-# And we update the endpoint to use the service.
 
+class DocumentItem(BaseModel):
+    document_uri: str
+    status: Optional[str] = "PENDING"  # PENDING | MODIFIED
+
+
+class IngestRequest(BaseModel):
+    documents: List[DocumentItem]
+
+
+class RetryRequest(BaseModel):
+    max_retries: int = 3
+
+
+class IngestResponse(BaseModel):
+    success: bool
+    message: str
+    total_documents: int
+    successful: int
+    failed: int
+    results: List[Dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_documents(request: IngestRequest):
     """

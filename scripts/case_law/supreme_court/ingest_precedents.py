@@ -7,6 +7,9 @@ import argparse
 import sys
 import os
 
+# Simple log format (case_id + message only, no time/level/name) when running ingestion
+os.environ.setdefault("LOG_FORMAT", "simple")
+
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 

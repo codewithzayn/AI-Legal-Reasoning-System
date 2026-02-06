@@ -1,12 +1,24 @@
-# Python
+# =============================================================================
+# DO NOT COMMIT (ignore these – local / generated / secrets)
+# =============================================================================
+
+# ----- Virtual environment (one per project – best practice) -----
+.venv/
+venv/
+env/
+ENV/
+.env.local
+.env.*.local
+
+# ----- Secrets and env with keys -----
+.env
+
+# ----- Python bytecode and build -----
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -23,22 +35,31 @@ wheels/
 .installed.cfg
 *.egg
 
-# Environment
-.env
-.env.local
+# ----- Test and tool caches -----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.cover
 
-# IDE
+# ----- IDE and OS -----
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Streamlit
-.streamlit/
-
-# Data
+# ----- App-specific (runtime / cache) -----
+.streamlit/secrets.toml
 data/
+
+# =============================================================================
+# COMMIT (do not add these to .gitignore – they belong in the repo)
+# =============================================================================
+# .env.example   – template only, no secrets
+# All .py under src/, scripts/, tests/
+# requirements.txt, Makefile, README.md, docs/, setup.sh
+# scripts/migrations/*.sql
+# .gitignore, pyproject.toml (if added)

@@ -14,7 +14,7 @@ from supabase import create_client
 
 from src.services.case_law.scraper import CaseLawScraper, CaseLawDocument, Reference
 from src.services.case_law.storage import CaseLawStorage
-from src.services.case_law.regex_extractor import PrecedentRegexExtractor
+from src.services.case_law.hybrid_extractor import HybridPrecedentExtractor
 from src.config.logging_config import setup_logger
 
 from datetime import datetime
@@ -62,32 +62,33 @@ class IngestionManager:
         
         subdir = subtype_dir_map.get(subtype, "other")
         json_dir = Path(f"data/case_law/{self.court}/{subdir}")
-        json_dir.mkdir(parents=True, exist_ok=True)
-        
         filename = f"{year}.json"
         json_file = json_dir / filename
-        
+
+        # Production: set CASE_LAW_NO_JSON_CACHE=1 to skip .json files (no cache, no backup)
+        no_json_cache = os.getenv("CASE_LAW_NO_JSON_CACHE", "").lower() in ("1", "true", "yes")
+
         # 2. Track Start
         tracking_id = self._init_tracking(year, subtype)
-        
+
         documents = []
-        
+
         # 3. Load or Scrape
-        if json_file.exists() and not force_scrape:
+        if not no_json_cache and json_file.exists() and not force_scrape:
             documents = self._load_from_json(json_file)
             if tracking_id and documents:
                 self._update_tracking_total(tracking_id, len(documents))
         else:
             logger.info(f"📡 Scraping fresh data from Finlex (Court: {self.court}, Subtype: {subtype})...")
-            
+
             async with CaseLawScraper() as scraper:
                 documents = await scraper.fetch_year(self.court, year, subtype=subtype)
-            
+
             if tracking_id:
                 self._update_tracking_total(tracking_id, len(documents))
-            
-            # Save raw backup
-            if documents:
+
+            if documents and not no_json_cache:
+                json_dir.mkdir(parents=True, exist_ok=True)
                 self._save_to_json(documents, json_file)
         
         if not documents:
@@ -95,22 +96,39 @@ class IngestionManager:
             self._track_status(year, 'completed', total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
             return
 
-        # 3.5 Extraction (regex for KKO precedents only)
+        # 3.5 Extraction (hybrid: regex first, LLM fallback for KKO precedents)
         if use_ai and self.court == "supreme_court" and subtype == "precedent":
-            extractor = PrecedentRegexExtractor()
-            logger.info("📐 Running regex extraction on KKO precedents...")
+            extractor = HybridPrecedentExtractor()
+            total_docs = len(documents)
+            logger.info(
+                "Hybrid extraction | source=%s | total=%s",
+                "scrape" if no_json_cache else str(json_file),
+                total_docs,
+            )
             processed_with_ai = 0
-            for doc in documents:
+            for idx, doc in enumerate(documents, 1):
                 if not doc.full_text:
+                    logger.warning(
+                        "[%s/%s] %s | SKIP (no full_text)",
+                        idx,
+                        total_docs,
+                        doc.case_id,
+                    )
                     continue
+                logger.info("[%s/%s] %s | Extracting", idx, total_docs, doc.case_id)
                 try:
-                    logger.info(f"   Extracting {doc.case_id}...")
                     ai_data = extractor.extract_data(doc.full_text, doc.case_id)
                     if ai_data:
                         self._merge_ai_data(doc, ai_data)
                         processed_with_ai += 1
                 except Exception as e:
-                    logger.error(f"   Extraction failed for {doc.case_id}: {e}")
+                    logger.error(
+                        "[%s/%s] %s | EXTRACTION FAILED: %s",
+                        idx,
+                        total_docs,
+                        doc.case_id,
+                        e,
+                    )
                     if tracking_id:
                         self._track_error(
                             tracking_id=tracking_id,
@@ -119,40 +137,45 @@ class IngestionManager:
                             error_type="extraction_error",
                             error_msg=str(e),
                         )
-            logger.info(f"   Extraction complete. {processed_with_ai}/{len(documents)} enriched.")
+            logger.info("Extraction complete %s/%s", processed_with_ai, total_docs)
 
         # 4. Store in Database & Incremental Tracking
-        logger.info("🗄️  Storing in Supabase (with embeddings)...")
-        
+        total_to_store = len(documents)
+        logger.info("Storing in Supabase | total=%s", total_to_store)
+
         stored_count = 0
         for i, doc in enumerate(documents, 1):
+            logger.info("[%s/%s] %s | Storing", i, total_to_store, doc.case_id)
             try:
-                # Store single case
-                case_id = self.storage.store_case(doc)
-                
-                if case_id:
+                case_uuid = self.storage.store_case(doc)
+
+                if case_uuid:
                     stored_count += 1
-                    
-                    # Update tracking incrementally (every 1 docs or configured batch)
                     self._track_status(
                         year=year,
-                        status='in_progress',
-                        total=len(documents),
+                        status="in_progress",
+                        total=total_to_store,
                         processed=stored_count,
                         last_case=doc.case_id,
                         tracking_id=tracking_id,
-                        subtype=subtype
+                        subtype=subtype,
                     )
             except Exception as e:
-                logger.error(f"Failed to store case {doc.case_id}: {e}")
+                logger.error(
+                    "[%s/%s] %s | STORAGE FAILED: %s",
+                    i,
+                    total_to_store,
+                    doc.case_id,
+                    e,
+                )
                 if tracking_id:
-                     self._track_error(
+                    self._track_error(
                         tracking_id=tracking_id,
                         case_id=doc.case_id,
                         url=doc.url,
                         error_type="storage_error",
-                        error_msg=str(e)
-                     )
+                        error_msg=str(e),
+                    )
         
         # 5. Track Completion
         final_status = 'completed' if stored_count > 0 else 'failed' # Or pending if 0?
@@ -283,10 +306,6 @@ class IngestionManager:
         except Exception as e:
             logger.error(f"Failed to save JSON: {e}")
 
-    def _track_status(self, year: int, status: str, total: int=0, processed: int=0, last_case: str=None, subtype: str=None):
-        """Update ingestion status in DB"""
-        if not self.sb_client: return
-        
     def _init_tracking(self, year: int, subtype: str) -> Optional[str]:
         """Initialize tracking entry and return ID"""
         if not self.sb_client:

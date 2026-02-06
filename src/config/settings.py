@@ -27,7 +27,10 @@ class Config:
     MATCH_THRESHOLD: float = float(os.getenv("MATCH_THRESHOLD", "0.3"))
     VECTOR_SEARCH_TOP_K: int = int(os.getenv("VECTOR_SEARCH_TOP_K", "50"))
     FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "50"))
-    RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "5"))
+    RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "10"))
+    # How many candidates to fetch before rerank; then how many to send to the LLM
+    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "30"))
+    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "10"))
     
     # Embedding Settings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -61,4 +64,3 @@ PAGE_CONFIG = {
 MAX_CHAT_HISTORY = 50
 USER_AVATAR = "👤"
 ASSISTANT_AVATAR = "⚖️"
-SYSTEM_STATUS = "🤖 LangGraph Agent Active"
