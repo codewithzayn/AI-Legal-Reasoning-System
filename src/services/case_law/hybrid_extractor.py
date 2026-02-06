@@ -8,20 +8,18 @@ Ensures no empty sections and no missing chunks; returns CaseExtractionResult.
 
 import json
 import os
-from typing import List, Optional
 
 from openai import OpenAI
 
+from src.config.logging_config import setup_logger
 from src.services.case_law.extractor import (
     CaseExtractionResult,
     CaseMetadata,
     CaseSection,
     LowerCourts,
     References,
-    CitedRegulation,
 )
 from src.services.case_law.regex_extractor import extract_precedent
-from src.config.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -61,15 +59,12 @@ def _is_sufficient(result: CaseExtractionResult, full_text: str) -> bool:
     text_len = len(full_text.strip()) or 1
     if total_content_len < COVERAGE_THRESHOLD * text_len:
         return False
-    for s in result.sections:
-        if not (s.content and s.content.strip()):
-            return False
-    return True
+    return all(s.content and s.content.strip() for s in result.sections)
 
 
-def _normalize_sections(sections: List[CaseSection], full_text: str) -> List[CaseSection]:
+def _normalize_sections(sections: list[CaseSection], full_text: str) -> list[CaseSection]:
     """Drop empty content; if no sections left, add one from full_text."""
-    out: List[CaseSection] = []
+    out: list[CaseSection] = []
     for s in sections:
         if not s.content or not s.content.strip():
             continue
@@ -125,7 +120,7 @@ def _minimal_references() -> References:
     )
 
 
-def _call_llm_for_sections(full_text: str, case_id: str) -> List[CaseSection]:
+def _call_llm_for_sections(full_text: str, case_id: str) -> list[CaseSection]:
     """Call GPT-4o mini to extract sections; return list of CaseSection."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -154,7 +149,7 @@ def _call_llm_for_sections(full_text: str, case_id: str) -> List[CaseSection]:
             raw = raw.split("\n", 1)[-1] if "\n" in raw else raw
             raw = raw.replace("```json", "").replace("```", "").strip()
         arr = json.loads(raw)
-        sections: List[CaseSection] = []
+        sections: list[CaseSection] = []
         for item in arr if isinstance(arr, list) else []:
             if not isinstance(item, dict):
                 continue
@@ -164,9 +159,7 @@ def _call_llm_for_sections(full_text: str, case_id: str) -> List[CaseSection]:
             title = (item.get("title") or "").strip() or "Section"
             content = (item.get("content") or "").strip()
             if content:
-                sections.append(
-                    CaseSection(type=sec_type, title=title, content=content)
-                )
+                sections.append(CaseSection(type=sec_type, title=title, content=content))
         return sections
     except json.JSONDecodeError as e:
         logger.warning("%s | LLM invalid JSON: %s", case_id, e)
@@ -176,9 +169,7 @@ def _call_llm_for_sections(full_text: str, case_id: str) -> List[CaseSection]:
         return []
 
 
-def extract_precedent_hybrid(
-    full_text: str, case_id: str
-) -> Optional[CaseExtractionResult]:
+def extract_precedent_hybrid(full_text: str, case_id: str) -> CaseExtractionResult | None:
     """
     Extract structured data: regex first, LLM fallback if coverage insufficient.
     Never returns empty sections; normalizes to avoid nulls.
@@ -231,7 +222,5 @@ class HybridPrecedentExtractor:
     Use extract_data(full_text, case_id) to get a CaseExtractionResult.
     """
 
-    def extract_data(
-        self, full_text: str, case_id: str
-    ) -> Optional[CaseExtractionResult]:
+    def extract_data(self, full_text: str, case_id: str) -> CaseExtractionResult | None:
         return extract_precedent_hybrid(full_text, case_id)

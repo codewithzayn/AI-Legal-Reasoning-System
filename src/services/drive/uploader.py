@@ -2,23 +2,36 @@
 # PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
 
 """
-Google Drive uploader: service account auth, create folders by name, upload file.
+Google Drive uploader: OAuth2 user auth (recommended) or service account auth.
+Creates folder hierarchy by name, uploads files.
 Used by case law PDF backup pipeline only.
+
+Auth priority:
+  1. GOOGLE_OAUTH_CLIENT_SECRET (OAuth2 installed-app flow → files owned by *you*)
+  2. GOOGLE_APPLICATION_CREDENTIALS (service account → only works with Shared Drives)
 """
 
+import json
 import os
 from pathlib import Path
-from typing import Optional
 
+from google.auth.transport.requests import Request
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from src.config.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+# ---------------------------------------------------------------------------
+#  Path helpers
+# ---------------------------------------------------------------------------
 
 
 def _path_under_root(resolved: Path, root: Path) -> bool:
@@ -31,97 +44,158 @@ def _path_under_root(resolved: Path, root: Path) -> bool:
         return False
 
 
-def credentials_file_exists(project_root: Optional[Path] = None) -> bool:
-    """
-    Return True if GOOGLE_APPLICATION_CREDENTIALS is set and points to an existing file.
-    Resolves relative paths against project_root (default cwd). Does not mutate env.
-    When project_root is set, only returns True if the resolved path is under project_root (no traversal).
-    """
-    cred_path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
-    if not cred_path:
-        return False
-    root = project_root or Path.cwd()
-    root = root.resolve()
-    if os.path.isabs(cred_path):
-        resolved = Path(cred_path).resolve()
-        return resolved.exists() and (project_root is None or _path_under_root(resolved, root))
-    resolved = (root / cred_path).resolve()
-    return resolved.exists() and _path_under_root(resolved, root)
-
-
-def _resolve_credentials_path(project_root: Optional[Path] = None) -> Optional[Path]:
-    """
-    If GOOGLE_APPLICATION_CREDENTIALS is set and is a relative path,
-    resolve it against project_root (default cwd) and set the env to the absolute path.
-    When project_root is set, only resolves if the path stays under project_root (no traversal).
-    Returns the resolved Path if file exists and (when project_root set) under root, else None.
-    """
-    cred_path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
-    if not cred_path:
+def _resolve_file_path(env_var: str, project_root: Path | None = None) -> Path | None:
+    """Resolve an env-var file path relative to project_root. Returns Path if exists, else None."""
+    raw = (os.getenv(env_var) or "").strip()
+    if not raw:
         return None
-    root = project_root or Path.cwd()
-    root = root.resolve()
-    if os.path.isabs(cred_path):
-        resolved = Path(cred_path).resolve()
-        if not resolved.exists() or (project_root is not None and not _path_under_root(resolved, root)):
-            return None
-    else:
-        resolved = (root / cred_path).resolve()
-        if not resolved.exists() or not _path_under_root(resolved, root):
-            return None
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved)
-    logger.debug("Resolved credentials path (under project root)")
+    root = (project_root or Path.cwd()).resolve()
+    resolved = Path(raw).resolve() if Path(raw).is_absolute() else (root / raw).resolve()
+    if not resolved.exists():
+        return None
+    if project_root is not None and not _path_under_root(resolved, root):
+        return None
     return resolved
+
+
+def credentials_file_exists(project_root: Path | None = None) -> bool:
+    """Return True if any supported credentials file is set and exists."""
+    return (
+        _resolve_file_path("GOOGLE_OAUTH_CLIENT_SECRET", project_root) is not None
+        or _resolve_file_path("GOOGLE_APPLICATION_CREDENTIALS", project_root) is not None
+    )
+
+
+# ---------------------------------------------------------------------------
+#  OAuth2 user credentials (installed-app / desktop flow)
+# ---------------------------------------------------------------------------
+
+
+def _get_oauth2_user_credentials(client_secret_path: Path, project_root: Path | None = None) -> Credentials:
+    """
+    Get OAuth2 user credentials via installed-app flow.
+    First run opens browser for authorization; token is saved for reuse.
+    """
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    root = (project_root or Path.cwd()).resolve()
+    token_path = root / "token.json"
+
+    creds = None
+    if token_path.exists():
+        try:
+            creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        except Exception:
+            logger.debug("Could not load saved token; will re-authorize")
+            creds = None
+
+    if creds and creds.valid:
+        return creds
+
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            token_path.write_text(creds.to_json())
+            logger.debug("Refreshed OAuth2 token")
+            return creds
+        except Exception:
+            logger.debug("Token refresh failed; will re-authorize")
+
+    # Fresh authorization (opens browser)
+    logger.info("Opening browser for Google Drive authorization (first-time setup)...")
+    flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), SCOPES)
+    creds = flow.run_local_server(port=0)
+    token_path.write_text(creds.to_json())
+    logger.info("OAuth2 token saved to %s", token_path)
+    return creds
+
+
+# ---------------------------------------------------------------------------
+#  GoogleDriveUploader
+# ---------------------------------------------------------------------------
 
 
 class GoogleDriveUploader:
     """
     Upload files to Google Drive under a root folder. Creates folder hierarchy by name.
-    Uses service account; root folder must be shared with the service account email (Editor).
+
+    Auth methods (checked in order):
+      1. OAuth2 user flow (GOOGLE_OAUTH_CLIENT_SECRET) – files owned by you, works with personal Drive.
+      2. Service account (GOOGLE_APPLICATION_CREDENTIALS) – files owned by SA, needs Shared Drive.
     """
 
-    def __init__(self, root_folder_id: str, project_root: Optional[Path] = None):
+    def __init__(self, root_folder_id: str, project_root: Path | None = None):
         if not (root_folder_id or "").strip():
-            raise ValueError(
-                "GOOGLE_DRIVE_ROOT_FOLDER_ID must be set and non-empty to upload to Drive."
-            )
+            raise ValueError("GOOGLE_DRIVE_ROOT_FOLDER_ID must be set and non-empty to upload to Drive.")
         self._root_id = (root_folder_id or "").strip()
-        resolved = _resolve_credentials_path(project_root)
-        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-        if not cred_path or not (Path(cred_path).exists()):
-            looked = f" (looked at: {Path(cred_path).resolve()})" if cred_path else ""
-            raise FileNotFoundError(
-                "GOOGLE_APPLICATION_CREDENTIALS must point to an existing service account JSON file."
-                " Set it in .env (e.g. filename in project root). File not found" + looked
-            )
-        try:
-            credentials = service_account.Credentials.from_service_account_file(
-                cred_path, scopes=SCOPES
-            )
-        except Exception as e:
-            raise ValueError(
-                "Invalid Google service account JSON at GOOGLE_APPLICATION_CREDENTIALS. "
-                "Check that the file is valid JSON and contains type, project_id, private_key_id, private_key, client_email."
-            ) from e
-        self._service = build("drive", "v3", credentials=credentials, cache_discovery=False)
         self._folder_cache: dict = {}  # (parent_id, name) -> folder_id
+        self._auth_method = "unknown"
+
+        # --- Try OAuth2 user credentials first ---
+        oauth_path = _resolve_file_path("GOOGLE_OAUTH_CLIENT_SECRET", project_root)
+        if oauth_path:
+            credentials = _get_oauth2_user_credentials(oauth_path, project_root)
+            self._auth_method = "oauth2_user"
+            logger.info("Using OAuth2 user credentials (files owned by you)")
+
+        else:
+            # --- Fall back to service account ---
+            sa_path = _resolve_file_path("GOOGLE_APPLICATION_CREDENTIALS", project_root)
+            if not sa_path:
+                raise FileNotFoundError(
+                    "No credentials found. Set GOOGLE_OAUTH_CLIENT_SECRET (recommended for personal Drive) "
+                    "or GOOGLE_APPLICATION_CREDENTIALS (for Shared Drives) in .env."
+                )
+            # Also set absolute path in env (for google libs that read it)
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(sa_path)
+            logger.debug("Resolved credentials path (under project root)")
+            try:
+                credentials = service_account.Credentials.from_service_account_file(str(sa_path), scopes=SCOPES)
+            except Exception as e:
+                raise ValueError(
+                    "Invalid Google service account JSON. Check the file is valid and contains "
+                    "type, project_id, private_key_id, private_key, client_email."
+                ) from e
+            self._auth_method = "service_account"
+            sa_email = getattr(credentials, "service_account_email", "") or ""
+            logger.info("Using service account: %s (files will be owned by SA – use Shared Drive)", sa_email)
+
+        self._service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+        self._check_root_folder()
+
+    def _check_root_folder(self) -> None:
+        """Verify the root folder exists and is accessible."""
+        try:
+            self._service.files().get(fileId=self._root_id, fields="id").execute()
+        except HttpError as e:
+            status = getattr(e.resp, "status", None)
+            try:
+                body = (getattr(e, "content", None) or b"").decode("utf-8", errors="replace")
+                err_info = json.loads(body) if body.strip() else {}
+                err_detail = err_info.get("error", {})
+                details = err_detail.get("errors", [{}])
+                reason = details[0].get("reason", "") if details else ""
+                message = err_detail.get("message", body[:200]) if err_detail else body[:200]
+                logger.error(
+                    "Drive API error: status=%s reason=%s message=%s folder_id=%s",
+                    status,
+                    reason,
+                    message,
+                    self._root_id,
+                )
+            except Exception:
+                logger.exception("Drive API error (could not parse body): status=%s", status)
+            if status in (403, 404):
+                raise ValueError(
+                    f"Cannot access Drive folder {self._root_id!r} (HTTP {status}). "
+                    "Check GOOGLE_DRIVE_ROOT_FOLDER_ID and make sure the folder is accessible."
+                ) from e
+            raise
 
     @staticmethod
     def _escape_query_string(s: str) -> str:
         """Escape single quotes for Drive API q parameter."""
         return s.replace("\\", "\\\\").replace("'", "\\'")
-
-
-def _sanitize_drive_filename(name: str) -> str:
-    """Remove path components and control chars from Drive file name (no traversal)."""
-    if not (name or "").strip():
-        return "unknown.pdf"
-    name = (name or "").strip()
-    name = name.replace("\\", "/").lstrip("/")
-    if "/" in name:
-        name = name.split("/")[-1]
-    name = "".join(c for c in name if c.isprintable() or c in ".-_")
-    return name.strip() or "unknown.pdf"
 
     def _get_or_create_folder(self, parent_id: str, name: str) -> str:
         """Get existing folder ID by name under parent, or create it."""
@@ -129,7 +203,10 @@ def _sanitize_drive_filename(name: str) -> str:
         if cache_key in self._folder_cache:
             return self._folder_cache[cache_key]
         safe_name = self._escape_query_string(name)
-        q = f"name = '{safe_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        q = (
+            f"name = '{safe_name}' and '{parent_id}' in parents "
+            f"and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        )
         resp = self._service.files().list(q=q, fields="files(id,name)", spaces="drive").execute()
         files = resp.get("files", [])
         if files:
@@ -147,8 +224,8 @@ def _sanitize_drive_filename(name: str) -> str:
         local_path: Path,
         type_folder_name: str,
         year: str,
-        drive_filename: Optional[str] = None,
-    ) -> Optional[str]:
+        drive_filename: str | None = None,
+    ) -> str | None:
         """
         Upload a file to Drive under root / type_folder_name / year / drive_filename.
         If drive_filename is None, use local_path.name.
@@ -189,3 +266,15 @@ def _sanitize_drive_filename(name: str) -> str:
         except Exception as e:
             logger.exception("Drive upload failed for %s: %s", local_path, e)
             return None
+
+
+def _sanitize_drive_filename(name: str) -> str:
+    """Remove path components and control chars from Drive file name (no traversal)."""
+    if not (name or "").strip():
+        return "unknown.pdf"
+    name = (name or "").strip()
+    name = name.replace("\\", "/").lstrip("/")
+    if "/" in name:
+        name = name.split("/")[-1]
+    name = "".join(c for c in name if c.isprintable() or c in ".-_")
+    return name.strip() or "unknown.pdf"

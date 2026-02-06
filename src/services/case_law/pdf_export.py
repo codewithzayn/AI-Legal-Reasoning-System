@@ -8,27 +8,26 @@ Used by the separate backup pipeline only.
 
 import re
 from pathlib import Path
-from typing import Optional, Union
 
+from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_LEFT
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
-from src.services.case_law.scraper import CaseLawDocument
 from src.config.logging_config import setup_logger
+from src.services.case_law.scraper import CaseLawDocument
 
 logger = setup_logger(__name__)
+
 
 # Try to register a font that supports Finnish (ä, ö, Å). Use DejaVu if available, else fallback.
 def _register_fonts():
     try:
-        import reportlab.pdfbase.cidfonts
         # Helvetica supports Latin-1; for full Finnish use a TTF. DejaVu is often installed.
-        for name, path in [
+        for _name, path in [
             ("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
             ("DejaVuSans", "/usr/share/fonts/dejavu/DejaVuSans.ttf"),
         ]:
@@ -43,19 +42,20 @@ def _register_fonts():
 _FINNISH_FONT = _register_fonts()
 
 
-def _sanitize_filename(case_id: Optional[str]) -> str:
+def _sanitize_filename(case_id: str | None) -> str:
     """Sanitize case_id for use as filename (e.g. KKO:2025:1 -> KKO-2025-1.pdf)."""
     if not (case_id or "").strip():
         return "unknown"
-    return re.sub(r'[^\w\-.]', '-', (case_id or "").strip()).strip("-") or "case"
+    return re.sub(r"[^\w\-.]", "-", (case_id or "").strip()).strip("-") or "case"
 
 
-def doc_to_pdf(doc: Optional[CaseLawDocument]) -> bytes:
+def doc_to_pdf(doc: CaseLawDocument | None) -> bytes:
     """
     Convert a CaseLawDocument to PDF bytes. Uses full_text; supports Finnish (ä, ö, Å).
     Raises ValueError if doc is None.
     """
     from io import BytesIO
+
     if doc is None:
         raise ValueError("doc must not be None")
     buffer = BytesIO()
@@ -94,8 +94,8 @@ def doc_to_pdf(doc: Optional[CaseLawDocument]) -> bytes:
     story.append(Spacer(1, 6))
 
     # Split into paragraphs; preserve line breaks and avoid overly long lines for PDF
-    for block in text.split("\n\n"):
-        block = block.strip()
+    for raw_block in text.split("\n\n"):
+        block = raw_block.strip()
         if not block:
             continue
         para_text = _escape(block.replace("\n", "<br/>"))
@@ -118,7 +118,7 @@ def _escape(s: str) -> str:
     )
 
 
-def write_pdf_for_document(doc: Optional[CaseLawDocument], output_path: Union[str, Path]) -> Path:
+def write_pdf_for_document(doc: CaseLawDocument | None, output_path: str | Path) -> Path:
     """
     Generate PDF for doc and write to output_path. Returns the path written.
     Raises ValueError if doc is None.
@@ -133,6 +133,6 @@ def write_pdf_for_document(doc: Optional[CaseLawDocument], output_path: Union[st
     return path
 
 
-def get_pdf_filename(case_id: Optional[str]) -> str:
+def get_pdf_filename(case_id: str | None) -> str:
     """Return the PDF filename for a case_id (e.g. KKO-2025-1.pdf). Handles None/empty."""
     return _sanitize_filename(case_id) + ".pdf"

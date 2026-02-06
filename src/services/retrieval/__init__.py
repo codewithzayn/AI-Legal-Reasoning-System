@@ -1,3 +1,3 @@
-from .search import HybridRetrieval
-from .reranker import CohereReranker
-from .generator import LLMGenerator
+from .generator import LLMGenerator as LLMGenerator
+from .reranker import CohereReranker as CohereReranker
+from .search import HybridRetrieval as HybridRetrieval

@@ -6,7 +6,6 @@ Case law extraction models.
 Shared Pydantic schemas used by the regex extractor and GPT-4o mini LLM fallback (hybrid_extractor).
 """
 
-from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -18,20 +17,20 @@ class CourtDecision(BaseModel):
 
 
 class LowerCourts(BaseModel):
-    district_court: Optional[CourtDecision] = Field(description="First instance court info")
-    appeal_court: Optional[CourtDecision] = Field(description="Appeal court info")
+    district_court: CourtDecision | None = Field(description="First instance court info")
+    appeal_court: CourtDecision | None = Field(description="Appeal court info")
 
 
 class CitedRegulation(BaseModel):
     name: str = Field(description="Name of regulation (e.g., Council Regulation (EU) No 833/2014)")
-    article: Optional[str] = Field(description="Specific article cited (e.g., Article 5i)")
+    article: str | None = Field(description="Specific article cited (e.g., Article 5i)")
 
 
 class References(BaseModel):
-    cited_cases: List[str] = Field(description="List of cited Finnish cases (e.g., KKO 2018:49)")
-    cited_eu_cases: List[str] = Field(description="List of cited EU cases (e.g., C-246/24)")
-    cited_laws: List[str] = Field(description="List of cited national laws (e.g., RL 46:1)")
-    cited_regulations: List[CitedRegulation] = Field(description="EU Regulations or Treaties cited")
+    cited_cases: list[str] = Field(description="List of cited Finnish cases (e.g., KKO 2018:49)")
+    cited_eu_cases: list[str] = Field(description="List of cited EU cases (e.g., C-246/24)")
+    cited_laws: list[str] = Field(description="List of cited national laws (e.g., RL 46:1)")
+    cited_regulations: list[CitedRegulation] = Field(description="EU Regulations or Treaties cited")
 
 
 class CaseMetadata(BaseModel):
@@ -39,14 +38,14 @@ class CaseMetadata(BaseModel):
     ecli: str = Field(description="ECLI code (e.g., ECLI:FI:KKO:2026:1)")
     date_of_issue: str = Field(description="Date of issue in YYYY-MM-DD")
     diary_number: str = Field(description="Diary number (e.g., R2024/357)")
-    volume: Optional[str] = Field(description="Volume number if applicable")
+    volume: str | None = Field(description="Volume number if applicable")
 
     decision_outcome: str = Field(description="Outcome: appeal_dismissed, appeal_accepted, case_remanded, etc.")
-    judges: List[str] = Field(description="List of names of the judges who decided the case")
+    judges: list[str] = Field(description="List of names of the judges who decided the case")
     rapporteur: str = Field(description="Name of the legal rapporteur")
 
-    keywords: List[str] = Field(description="List of legal keywords describing the case")
-    languages: List[str] = Field(description="Languages available (e.g. ['Finnish', 'Swedish'])")
+    keywords: list[str] = Field(description="List of legal keywords describing the case")
+    languages: list[str] = Field(description="Languages available (e.g. ['Finnish', 'Swedish'])")
 
 
 class CaseSection(BaseModel):
@@ -59,4 +58,4 @@ class CaseExtractionResult(BaseModel):
     metadata: CaseMetadata
     lower_courts: LowerCourts
     references: References
-    sections: List[CaseSection]
+    sections: list[CaseSection]

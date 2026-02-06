@@ -7,9 +7,12 @@ Usage:
     python main.py --cli    # Run CLI mode (interactive)
 """
 
-import sys
+import asyncio
+import contextlib
 import subprocess
+import sys
 from pathlib import Path
+
 from src.config.logging_config import logger
 
 # Ensure project root is in path
@@ -25,8 +28,6 @@ def run_streamlit():
     subprocess.run(["streamlit", "run", str(app_path)], check=True)
 
 
-import asyncio
-
 async def run_cli_async():
     """Run interactive CLI mode (Async)"""
     logger.info("=" * 60)
@@ -41,7 +42,7 @@ async def run_cli_async():
             print("You: ", end="", flush=True)
             query = await asyncio.to_thread(sys.stdin.readline)
             query = query.strip()
-            
+
             if query.lower() in ("exit", "quit", "q"):
                 logger.info("Goodbye!")
                 break
@@ -55,12 +56,11 @@ async def run_cli_async():
             logger.info("\nGoodbye!")
             break
 
+
 def run_cli():
     """Wrapper for async CLI"""
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_cli_async())
-    except KeyboardInterrupt:
-        pass
 
 
 def main():

@@ -2,6 +2,7 @@
 # Usage: make <target>   or   make help
 
 .PHONY: help install run run-cli run-api test \
+	lint format lint-fix \
 	ingest-precedents ingest-precedents-force ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
 	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
 	ingest-finlex
@@ -22,6 +23,11 @@ help:
 	@echo ""
 	@echo "--- Tests ---"
 	@echo "  make test                 Run all tests (pytest)"
+	@echo ""
+	@echo "--- Linting & Formatting (Ruff) ---"
+	@echo "  make lint                 Check code for lint errors"
+	@echo "  make lint-fix             Auto-fix lint errors"
+	@echo "  make format               Format all Python files"
 	@echo ""
 	@echo "--- Case law: Supreme Court (KKO) ---"
 	@echo "  make ingest-precedents    Ingest KKO precedents (Ennakkopäätökset). Optional: YEAR=2026"
@@ -70,6 +76,18 @@ run-api:
 # ------------------------------------------------------------------------------
 test:
 	python -m pytest tests/ -v
+
+# ------------------------------------------------------------------------------
+# Linting & Formatting (Ruff – runs automatically on commit via pre-commit)
+# ------------------------------------------------------------------------------
+lint:
+	ruff check src/ scripts/ tests/ main.py
+
+lint-fix:
+	ruff check --fix src/ scripts/ tests/ main.py
+
+format:
+	ruff format src/ scripts/ tests/ main.py
 
 # ------------------------------------------------------------------------------
 # Case law: Supreme Court (KKO)

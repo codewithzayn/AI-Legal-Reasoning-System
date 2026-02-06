@@ -3,7 +3,7 @@
 
 """
 Google Drive service: upload files to Drive (case law PDF backup).
-Uses service account auth; resolves GOOGLE_APPLICATION_CREDENTIALS from project root when relative.
+Uses OAuth2 user auth (recommended) or service account fallback.
 """
 
 from .uploader import GoogleDriveUploader, credentials_file_exists

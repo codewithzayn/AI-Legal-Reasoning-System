@@ -3,7 +3,6 @@ Helper functions for chat interface
 """
 
 import streamlit as st
-from typing import List, Dict
 
 
 def initialize_chat_history() -> None:
@@ -15,7 +14,7 @@ def initialize_chat_history() -> None:
 def add_message(role: str, content: str) -> None:
     """
     Add a message to chat history
-    
+
     Args:
         role: 'user' or 'assistant'
         content: Message text
@@ -23,10 +22,10 @@ def add_message(role: str, content: str) -> None:
     st.session_state.messages.append({"role": role, "content": content})
 
 
-def get_chat_history() -> List[Dict[str, str]]:
+def get_chat_history() -> list[dict[str, str]]:
     """
     Get chat history from session state
-    
+
     Returns:
         List of message dictionaries
     """

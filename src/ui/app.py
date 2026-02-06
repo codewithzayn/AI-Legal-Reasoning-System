@@ -17,15 +17,9 @@ import streamlit as st
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.config.settings import PAGE_CONFIG, APP_TITLE, CHAT_WELCOME_MESSAGE, USER_AVATAR, ASSISTANT_AVATAR
-from src.utils.chat_helpers import (
-    initialize_chat_history,
-    add_message,
-    get_chat_history,
-    clear_chat_history
-)
 from src.agent.stream import stream_query_response
-
+from src.config.settings import ASSISTANT_AVATAR, CHAT_WELCOME_MESSAGE, PAGE_CONFIG, USER_AVATAR
+from src.utils.chat_helpers import add_message, clear_chat_history, get_chat_history, initialize_chat_history
 
 # Theme tokens: single source for legal-AI look (aligned with .streamlit/config.toml)
 THEME_PRIMARY = "#0f172a"
@@ -39,7 +33,8 @@ THEME_ACCENT = "#0ea5e9"
 
 def _inject_custom_css() -> None:
     """Inject CSS: aligned structure, single theme, legal-AI look."""
-    st.markdown(f"""
+    st.markdown(
+        f"""
         <style>
             /* Single column, readable width */
             .block-container {{ max-width: 44rem; margin-left: auto; margin-right: auto; padding-top: 1.5rem; padding-bottom: 3rem; }}
@@ -81,7 +76,9 @@ def _inject_custom_css() -> None:
             }}
             .main-header-card .subtitle {{ color: rgba(255,255,255,0.88); margin: 0.25rem 0 0 0; font-size: 0.875rem; }}
         </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def _process_prompt(prompt: str) -> None:
@@ -89,9 +86,8 @@ def _process_prompt(prompt: str) -> None:
     add_message("user", prompt)
     with st.chat_message("user", avatar=USER_AVATAR):
         st.write(prompt)
-    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-        with st.spinner("🔍 Searching knowledge base..."):
-            response = st.write_stream(stream_query_response(prompt))
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR), st.spinner("🔍 Searching knowledge base..."):
+        response = st.write_stream(stream_query_response(prompt))
     add_message("assistant", response)
 
 
@@ -104,25 +100,28 @@ def main():
         initial_sidebar_state=PAGE_CONFIG["initial_sidebar_state"],
     )
     _inject_custom_css()
-    
+
     # Header: product name + single-line purpose
-    st.markdown("""
+    st.markdown(
+        """
         <div class="main-header-card">
             <h2 style='color: white; margin: 0; font-size: 1.25rem; font-weight: 600;'>
                 Finnish Legal Reasoning
             </h2>
             <p class="subtitle">Ask about statutes, case law, and regulations in Finnish or English.</p>
         </div>
-    """, unsafe_allow_html=True)
-    
+    """,
+        unsafe_allow_html=True,
+    )
+
     initialize_chat_history()
-    
+
     # Chat: single responsibility — show conversation
     for message in get_chat_history():
         avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
         with st.chat_message(message["role"], avatar=avatar):
             st.write(message["content"])
-    
+
     # Input: single entry point — ask here
     st.markdown('<div class="input-card">', unsafe_allow_html=True)
     st.markdown("**Ask a question**")
@@ -141,11 +140,11 @@ def main():
         with col2:
             st.caption("Ask about Finnish law in Finnish or English.")
     st.markdown("</div>", unsafe_allow_html=True)
-    
+
     if submitted and query and query.strip():
         _process_prompt(query.strip())
         st.rerun()
-    
+
     # Sidebar: settings and system info only
     with st.sidebar:
         st.header("Settings")

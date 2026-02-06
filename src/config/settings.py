@@ -3,6 +3,7 @@ Configuration settings for AI Legal Reasoning System
 """
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,17 +13,18 @@ load_dotenv()
 # Environment-based Configuration
 # ============================================
 
+
 class Config:
     """
     Centralized configuration loaded from environment variables.
     Edit .env file to change these values.
     """
-    
+
     # Chunker Settings
     CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1000"))
     CHUNK_MIN_SIZE: int = int(os.getenv("CHUNK_MIN_SIZE", "100"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
-    
+
     # Retrieval Settings
     MATCH_THRESHOLD: float = float(os.getenv("MATCH_THRESHOLD", "0.3"))
     VECTOR_SEARCH_TOP_K: int = int(os.getenv("VECTOR_SEARCH_TOP_K", "50"))
@@ -31,11 +33,11 @@ class Config:
     # How many candidates to fetch before rerank; then how many to send to the LLM
     SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "30"))
     CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "10"))
-    
+
     # Embedding Settings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
     EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
-    
+
     # PDF Processing
     PDF_MAX_WORKERS: int = int(os.getenv("PDF_MAX_WORKERS", "4"))
 
@@ -63,7 +65,7 @@ PAGE_CONFIG = {
     "page_title": APP_TITLE,
     "page_icon": APP_ICON,
     "layout": "centered",
-    "initial_sidebar_state": "collapsed"
+    "initial_sidebar_state": "collapsed",
 }
 
 # Chat Configuration

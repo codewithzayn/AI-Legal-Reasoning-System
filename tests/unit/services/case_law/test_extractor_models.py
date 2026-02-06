@@ -2,14 +2,12 @@
 Unit tests for case law extractor models (src.services.case_law.extractor).
 """
 
-import pytest
-
 from src.services.case_law.extractor import (
-    CaseSection,
-    CaseMetadata,
-    References,
     CaseExtractionResult,
+    CaseMetadata,
+    CaseSection,
     LowerCourts,
+    References,
 )
 
 

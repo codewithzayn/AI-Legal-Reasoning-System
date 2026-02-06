@@ -1,0 +1,79 @@
+[tool.ruff]
+# Target Python 3.10 (matches current runtime)
+target-version = "py310"
+line-length = 120
+
+# Lint all Python files
+include = ["*.py"]
+
+[tool.ruff.lint]
+# Production-grade rule set (2026 best practices)
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes (unused imports, undefined names, etc.)
+    "I",      # isort (import sorting)
+    "UP",     # pyupgrade (modern Python syntax)
+    "B",      # flake8-bugbear (common bugs and anti-patterns)
+    "SIM",    # flake8-simplify (simplifiable code)
+    "RUF",    # Ruff-specific rules
+    "C901",   # McCabe complexity (flag overly complex functions)
+    "PLR",    # Pylint refactor rules (too many args/returns/branches/statements)
+    "PLW",    # Pylint warnings (e.g. global statement, unused variables)
+    "PLE",    # Pylint errors (syntax and logic errors)
+    "T20",    # flake8-print (no print() in production code)
+    "PIE",    # flake8-pie (misc. code improvements)
+    "RET",    # flake8-return (return statement best practices)
+    "PTH",    # flake8-use-pathlib (prefer pathlib over os.path)
+    "ERA",    # eradicate (commented-out code)
+    "TCH",    # flake8-type-checking (move type-only imports behind TYPE_CHECKING)
+]
+ignore = [
+    "E501",    # line too long (handled by formatter)
+    "E402",    # module-level import not at top (scripts set sys.path first)
+    "B008",    # do not perform function call in argument defaults
+    "RUF001",  # ambiguous unicode in string (Finnish text is expected)
+    "RUF002",  # ambiguous unicode in docstring (Finnish text is expected)
+    "RUF003",  # ambiguous unicode in comment (Finnish text is expected)
+    "RUF012",  # mutable class attributes (common in dataclasses)
+    "RUF013",  # implicit Optional (common pattern in this codebase)
+    "SIM113",  # enumerate-for-loop (false positive when loop uses range with step)
+    "T201",    # print() allowed in CLI/scripts (use logger for services)
+    "PLR2004", # magic value comparison (too strict for this codebase)
+    "PLR0913", # too many function arguments (relaxed: max set below)
+    "RET504",  # unnecessary assignment before return (readability preference)
+    "PTH123",  # open() vs Path.open() (both are fine)
+    "ERA001",  # commented-out code (too aggressive for WIP code)
+    "TC001",   # move import into TYPE_CHECKING (not worth the complexity)
+    "TC002",   # move third-party import into TYPE_CHECKING
+    "TC003",   # move stdlib import into TYPE_CHECKING
+]
+
+# Allow autofix for all enabled rules
+fixable = ["ALL"]
+unfixable = []
+
+# --- Complexity & size limits ---
+
+[tool.ruff.lint.mccabe]
+# Flag functions with cyclomatic complexity > 15 (default 10, relaxed for legal text processing)
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+# Max function arguments (default 5; relaxed for ingestion/chunking functions with many params)
+max-args = 12
+# Max statements per function (default 50; flag very large functions)
+max-statements = 60
+# Max return statements per function (default 6)
+max-returns = 8
+# Max branches (if/elif/else) per function (default 12)
+max-branches = 15
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.format]
+# Black-compatible formatting
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
