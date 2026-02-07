@@ -12,6 +12,7 @@ from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.retrieval import HybridRetrieval
 from src.services.retrieval.generator import LLMGenerator
+from src.services.retrieval.relevancy import check_relevancy
 
 from .state import AgentState
 
@@ -196,10 +197,26 @@ async def reason_legal(state: AgentState) -> AgentState:
         state["response"] = response
         elapsed = time.time() - start_time
         logger.info(f"Response ready in {elapsed:.1f}s")
+
+        # Relevancy check: pass compact representation (truncated + citations) to stay within context
+        if response and not response.startswith("Pahoittelut"):
+            try:
+                rel = await check_relevancy(state["query"], response)
+                state["relevancy_score"] = float(rel["score"])
+                state["relevancy_reason"] = rel.get("reason") or ""
+            except Exception as rel_err:
+                logger.warning(f"Relevancy check failed: {rel_err}")
+                state["relevancy_score"] = None
+                state["relevancy_reason"] = None
+        else:
+            state["relevancy_score"] = None
+            state["relevancy_reason"] = None
     except Exception as e:
         logger.error(f"LLM error: {e}")
         state["error"] = f"LLM generation failed: {e!s}"
         state["response"] = "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen."
+        state["relevancy_score"] = None
+        state["relevancy_reason"] = None
 
     return state
 

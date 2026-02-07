@@ -190,30 +190,46 @@ class CaseLawStorage:
             logger.error(f"Error inserting metadata for {doc.case_id}: {e}")
             return None
 
-    # Max chars per chunk for embedding. Sections larger than this are sub-chunked
-    # so every part of the document gets a focused, searchable embedding.
-    _MAX_CHUNK_CHARS = 3500
+    # Max chars per chunk for embedding.  Smaller = more focused embedding.
+    # 2 000 chars ≈ 500-700 tokens for Finnish legal text — well within the
+    # sweet-spot for text-embedding-3-small (best recall at < 800 tokens).
+    _MAX_CHUNK_CHARS = 2000
+
+    # Overlap between consecutive chunks (in characters).
+    # Preserves context at chunk boundaries so no information is lost.
+    _CHUNK_OVERLAP_CHARS = 200
 
     @classmethod
-    def _sub_chunk(cls, text: str, max_chars: int | None = None) -> list[str]:
-        """Split text into chunks of roughly max_chars, breaking on paragraph boundaries.
-        Preserves context by splitting on double-newlines first, then single newlines."""
+    def _sub_chunk(cls, text: str, max_chars: int | None = None, overlap: int | None = None) -> list[str]:
+        """Split *text* into chunks of ≤ *max_chars*, breaking on paragraph
+        boundaries (\n\n).  Consecutive chunks share up to *overlap* trailing
+        characters from the previous chunk so that boundary context is preserved."""
         limit = max_chars or cls._MAX_CHUNK_CHARS
+        ovlp = overlap if overlap is not None else cls._CHUNK_OVERLAP_CHARS
+
         if len(text) <= limit:
             return [text]
+
+        paragraphs = text.split("\n\n")
 
         chunks: list[str] = []
         current: list[str] = []
         current_len = 0
 
-        # Split on paragraph boundaries (double newline)
-        paragraphs = text.split("\n\n")
         for para in paragraphs:
             para_len = len(para) + 2  # +2 for the \n\n separator
             if current_len + para_len > limit and current:
                 chunks.append("\n\n".join(current))
-                current = []
-                current_len = 0
+                # --- overlap: keep the last paragraph(s) that fit within ovlp ---
+                overlap_parts: list[str] = []
+                overlap_len = 0
+                for p in reversed(current):
+                    if overlap_len + len(p) + 2 > ovlp:
+                        break
+                    overlap_parts.insert(0, p)
+                    overlap_len += len(p) + 2
+                current = overlap_parts
+                current_len = overlap_len
             current.append(para)
             current_len += para_len
 
@@ -238,11 +254,19 @@ class CaseLawStorage:
                 sec_type = (section_data.get("type") or "other").strip() or "other"
                 sec_title = (section_data.get("title") or "").strip() or "Section"
 
+                # Build per-section header so the embedding captures WHICH section
+                # this chunk belongs to (e.g. "Section: Korkeimman oikeuden perustelut")
+                section_header = (
+                    f"[{doc.case_id}] {doc.title or ''}\n"
+                    f"Section: {sec_title}\n"
+                    f"Keywords: {', '.join(doc.legal_domains or [])}\n\n"
+                )
+
                 # Sub-chunk large sections so every part gets a focused embedding
                 chunks = self._sub_chunk(content)
                 for chunk_idx, chunk_text in enumerate(chunks):
                     section_number += 1
-                    content_with_context = metadata_header + chunk_text
+                    content_with_context = section_header + chunk_text
                     title = sec_title if len(chunks) == 1 else f"{sec_title} (Part {chunk_idx + 1}/{len(chunks)})"
                     sections.append(
                         {

@@ -40,9 +40,12 @@ class IngestionManager:
             self.sb_client = None
             logger.warning("Supabase credentials missing, tracking disabled.")
 
-    async def ingest_year(self, year: int, force_scrape: bool = False, subtype: str = None, use_ai: bool = True):
-        """
-        Run full ingestion for a year: Load/Scrape -> Extract (regex for precedents) -> Store -> Track
+    async def ingest_year(
+        self, year: int, force_scrape: bool = False, subtype: str = None, use_ai: bool = True
+    ) -> list[str]:
+        """Run full ingestion for a year: Load/Scrape -> Extract -> Store -> Track.
+
+        Returns list of failed case_id descriptions (empty if all succeeded).
         """
         start_time = time.time()
         subtype_str = f" ({subtype})" if subtype else " (ALL)"
@@ -57,7 +60,7 @@ class IngestionManager:
         if not documents:
             logger.info("❌ No documents found.")
             self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
-            return
+            return []
 
         # 1b. Skip documents whose content hasn't changed (hash-based idempotency)
         existing_hashes = self._fetch_existing_content_hashes(year)
@@ -78,14 +81,14 @@ class IngestionManager:
         if not documents:
             logger.info("✅ All documents already in Supabase with same content — nothing to process.")
             self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
-            return
+            return []
 
         # 2. Extraction (hybrid: regex first, LLM fallback for KKO precedents)
         if use_ai and self.court == "supreme_court" and subtype == "precedent":
             self._run_extraction(documents, json_file, no_json_cache, tracking_id)
 
         # 3. Store in Database & track progress
-        stored_count = self._store_documents(documents, year, subtype, tracking_id)
+        stored_count, failed_ids = self._store_documents(documents, year, subtype, tracking_id)
 
         # 4. Track Completion
         final_status = "completed" if stored_count > 0 else "failed"
@@ -103,7 +106,14 @@ class IngestionManager:
         )
 
         elapsed = time.time() - start_time
-        logger.info(f"✅ COMPLETED: {stored_count}/{len(documents)} stored in {elapsed:.2f}s")
+        logger.info("✅ COMPLETED: %s/%s stored in %.2fs", stored_count, len(documents), elapsed)
+
+        if failed_ids:
+            logger.error("⚠️  FAILED DOCUMENTS for %s %s (%s):", year, subtype or "ALL", len(failed_ids))
+            for fid in failed_ids:
+                logger.error("  - %s", fid)
+
+        return failed_ids
 
     # ------------------------------------------------------------------
     #  ingest_year helper methods
@@ -196,12 +206,16 @@ class IngestionManager:
         year: int,
         subtype: str | None,
         tracking_id: str | None,
-    ) -> int:
-        """Store documents in Supabase and update tracking. Returns stored count."""
+    ) -> tuple[int, list[str]]:
+        """Store documents in Supabase and update tracking.
+
+        Returns (stored_count, list_of_failed_case_ids).
+        """
         total_to_store = len(documents)
         logger.info("Storing in Supabase | total=%s", total_to_store)
 
         stored_count = 0
+        failed_ids: list[str] = []
         for i, doc in enumerate(documents, 1):
             logger.info("[%s/%s] %s | Storing", i, total_to_store, doc.case_id)
             try:
@@ -220,6 +234,7 @@ class IngestionManager:
                 else:
                     # store_case returned None (e.g. invalid date, schema error)
                     logger.warning("[%s/%s] %s | STORE RETURNED NONE", i, total_to_store, doc.case_id)
+                    failed_ids.append(f"{doc.case_id} (storage returned None)")
                     if tracking_id:
                         self._track_error(
                             tracking_id=tracking_id,
@@ -230,6 +245,7 @@ class IngestionManager:
                         )
             except Exception as e:
                 logger.error("[%s/%s] %s | STORAGE FAILED: %s", i, total_to_store, doc.case_id, e)
+                failed_ids.append(f"{doc.case_id} (storage error: {e})")
                 if tracking_id:
                     self._track_error(
                         tracking_id=tracking_id,
@@ -238,7 +254,7 @@ class IngestionManager:
                         error_type="storage_error",
                         error_msg=str(e),
                     )
-        return stored_count
+        return stored_count, failed_ids
 
     def _merge_ai_data(self, doc: CaseLawDocument, ai_data):
         """

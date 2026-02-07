@@ -31,8 +31,14 @@ class Config:
     FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "50"))
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "10"))
     # How many candidates to fetch before rerank; then how many to send to the LLM
-    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "30"))
-    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "10"))
+    # 50 candidates → gives the reranker enough variety across many documents.
+    # 15 chunks to LLM → ensures multiple sections from the top document are included.
+    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "50"))
+    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "15"))
+
+    # Multi-query expansion: generate alternative queries via LLM to improve recall.
+    # Set to "false" to disable (saves 1 cheap LLM call per question).
+    MULTI_QUERY_ENABLED: bool = (os.getenv("MULTI_QUERY_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
 
     # Embedding Settings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")

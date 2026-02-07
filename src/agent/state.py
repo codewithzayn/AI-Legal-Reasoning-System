@@ -40,5 +40,9 @@ class AgentState(TypedDict):
     # Final response
     response: str
 
+    # Relevancy check (post-answer LLM; compact input to respect context)
+    relevancy_score: float | None
+    relevancy_reason: str | None
+
     # Error handling
     error: str | None

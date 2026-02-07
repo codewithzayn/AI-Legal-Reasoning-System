@@ -31,6 +31,8 @@ async def stream_query_response(user_query: str) -> AsyncIterator[str]:
         "intent": "",
         "search_results": [],
         "response": "",
+        "relevancy_score": None,
+        "relevancy_reason": None,
         "error": None,
     }
 
@@ -66,6 +68,13 @@ async def stream_query_response(user_query: str) -> AsyncIterator[str]:
                     # Yield the final answer
                     response = value.get("response", "")
                     yield response
+                    # Relevancy score (compact check ran on truncated answer + citations)
+                    score = value.get("relevancy_score")
+                    reason = value.get("relevancy_reason")
+                    if score is not None and reason:
+                        yield f"\n\n---\n⚖️ Relevanssi: {int(score)}/5. {reason}"
+                    elif score is not None:
+                        yield f"\n\n---\n⚖️ Relevanssi: {int(score)}/5."
 
                 elif stage == "error":
                     yield f"❌ Virhe: {value.get('error')}"

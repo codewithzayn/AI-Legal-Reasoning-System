@@ -39,6 +39,8 @@ def process_query(user_query: str, chat_history: list = None) -> str:
         "search_results": None,
         "retrieval_metadata": None,
         "response": "",
+        "relevancy_score": None,
+        "relevancy_reason": None,
         "error": None,
     }
 
@@ -49,7 +51,14 @@ def process_query(user_query: str, chat_history: list = None) -> str:
         total_elapsed = time.time() - total_start
         logger.info(f"TOTAL TIME: {total_elapsed:.2f}s")
 
-        return final_state.get("response", "Error: No response generated")
+        resp = final_state.get("response", "Error: No response generated")
+        score = final_state.get("relevancy_score")
+        reason = final_state.get("relevancy_reason")
+        if score is not None and reason:
+            resp += f"\n\n---\n⚖️ Relevanssi: {int(score)}/5. {reason}"
+        elif score is not None:
+            resp += f"\n\n---\n⚖️ Relevanssi: {int(score)}/5."
+        return resp
 
     except Exception:
         # Error handling

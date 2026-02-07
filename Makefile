@@ -2,7 +2,7 @@
 # Usage: make <target>   or   make help
 
 .PHONY: help install run run-cli run-api test \
-	lint format lint-fix \
+	lint format lint-fix fix \
 	ingest-precedents ingest-precedents-force ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
 	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
 	ingest-finlex
@@ -28,6 +28,7 @@ help:
 	@echo "  make lint                 Check code for lint errors"
 	@echo "  make lint-fix             Auto-fix lint errors"
 	@echo "  make format               Format all Python files"
+	@echo "  make fix                  Lint-fix + format (run before commit to avoid pre-commit stash conflicts)"
 	@echo ""
 	@echo "--- Case law: Supreme Court (KKO) ---"
 	@echo "  make ingest-precedents    Ingest KKO precedents (Ennakkopäätökset). Optional: YEAR=2026"
@@ -89,6 +90,9 @@ lint-fix:
 format:
 	ruff format src/ scripts/ tests/ main.py
 
+# Run before 'git add' and 'git commit' so pre-commit hooks pass (no unstaged vs staged conflict).
+fix: lint-fix format
+
 # ------------------------------------------------------------------------------
 # Case law: Supreme Court (KKO)
 # ------------------------------------------------------------------------------
@@ -111,8 +115,9 @@ ingest-kko:
 START ?= 1926
 END ?= 2026
 COURT ?= supreme_court
+SUBTYPE ?=
 ingest-history:
-	python3 scripts/case_law/core/ingest_history.py --start $(START) --end $(END) --court $(COURT)
+	python3 scripts/case_law/core/ingest_history.py --start $(START) --end $(END) --court $(COURT) $(if $(SUBTYPE),--subtype $(SUBTYPE),)
 
 # ------------------------------------------------------------------------------
 # Case law: Supreme Administrative Court (KHO)

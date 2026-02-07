@@ -132,20 +132,23 @@ def run_export(
     export_root: Path,
     drive_uploader=None,
     project_root: Path | None = None,
-) -> tuple[int, int, int]:
-    """Export one (year, subtype). Returns (success_count, fail_count, skipped_count)."""
+) -> tuple[int, int, int, list[str]]:
+    """Export one (year, subtype).
+
+    Returns (success_count, fail_count, skipped_count, failed_case_ids).
+    """
     project_root = project_root or PROJECT_ROOT
     subdir = SUBTYPE_DIR_MAP.get(subtype, "other")
     type_label = TYPE_LABEL_MAP.get(subtype, subtype)
     json_path = project_root / "data" / "case_law" / COURT / subdir / f"{year}.json"
     if not json_path.exists():
         logger.debug("Skip %s %s (no JSON at %s)", type_label, year, json_path)
-        return 0, 0, 0
+        return 0, 0, 0, []
 
     documents = load_documents_from_json(json_path)
     if not documents:
         logger.debug("Skip %s %s (no documents)", type_label, year)
-        return 0, 0, 0
+        return 0, 0, 0, []
 
     write_local = _write_local_enabled()
     if write_local:
@@ -154,11 +157,13 @@ def run_export(
     success = 0
     fail = 0
     skipped = 0
+    failed_ids: list[str] = []
     for i, doc in enumerate(documents, 1):
         if not doc or not (getattr(doc, "full_text", None) or "").strip():
             case_id = getattr(doc, "case_id", "?") if doc else "?"
             logger.warning("[%s/%s] %s has no full_text, skip", i, len(documents), case_id)
             fail += 1
+            failed_ids.append(f"{case_id} (no full_text)")
             continue
         pdf_name = get_pdf_filename(getattr(doc, "case_id", None) or "unknown")
         try:
@@ -166,6 +171,7 @@ def run_export(
         except Exception as e:
             logger.exception("[%s/%s] %s PDF failed: %s", i, len(documents), doc.case_id, e)
             fail += 1
+            failed_ids.append(f"{doc.case_id} (PDF generation error)")
             continue
         local_path = None
         if write_local:
@@ -176,6 +182,7 @@ def run_export(
             except OSError as e:
                 logger.exception("[%s/%s] %s write failed: %s", i, len(documents), doc.case_id, e)
                 fail += 1
+                failed_ids.append(f"{doc.case_id} (write error)")
                 continue
         if drive_uploader:
             # Compute stable hash from source content (not PDF bytes, which have timestamps)
@@ -186,12 +193,13 @@ def run_export(
             )
             if not result:
                 fail += 1
+                failed_ids.append(f"{doc.case_id} (Drive upload error)")
                 continue
         success += 1
         if i % 10 == 0 or i == len(documents):
             logger.info("[%s/%s] %s/%s exported", type_label, year, i, len(documents))
 
-    return success, fail, skipped
+    return success, fail, skipped, failed_ids
 
 
 def _init_drive_uploader():
@@ -275,14 +283,22 @@ def main() -> int:
     total_ok = 0
     total_fail = 0
     total_skipped = 0
+    all_failed_ids: list[str] = []
     for subtype in subtypes:
         for year in years:
-            ok, fail, skipped = run_export(year, subtype, export_root, drive_uploader=drive_uploader)
+            ok, fail, skipped, failed_ids = run_export(year, subtype, export_root, drive_uploader=drive_uploader)
             total_ok += ok
             total_fail += fail
             total_skipped += skipped
+            all_failed_ids.extend(failed_ids)
 
     logger.info("Done. Exported %s PDFs, %s skipped (unchanged), %s failed.", total_ok, total_skipped, total_fail)
+
+    if all_failed_ids:
+        logger.error("⚠️  FAILED DOCUMENTS (%s):", len(all_failed_ids))
+        for fid in all_failed_ids:
+            logger.error("  - %s", fid)
+
     return 0 if total_fail == 0 else 1
 
 

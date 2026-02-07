@@ -13,6 +13,10 @@
 -- Add content_hash column for idempotency (skip re-processing unchanged docs)
 ALTER TABLE case_law ADD COLUMN IF NOT EXISTS content_hash TEXT;
 
+-- Increase statement timeout (default ~8s is too short for vector search with many chunks)
+-- Safe for production: only limits how long a single query can run.
+ALTER ROLE authenticator SET statement_timeout = '60s';
+
 
 -- =============================================
 -- 2. VIEW / INSPECT
@@ -145,8 +149,47 @@ WHERE court_type = 'supreme_court' AND case_year = 2026 AND decision_type = 'pre
 
 
 -- =============================================
--- 6. RESET CONTENT HASHES (force re-process without deleting data)
+-- 6. DELETE ALL DATA FOR A YEAR RANGE (e.g. 2020-2026)
 -- =============================================
+-- Deletes everything: sections, references, errors, documents, tracking
+-- for supreme_court precedents between 2020 and 2026.
+
+-- Step 1: Delete sections
+DELETE FROM case_law_sections
+WHERE case_law_id IN (
+    SELECT id FROM case_law
+    WHERE court_type = 'supreme_court' AND case_year BETWEEN 2020 AND 2026
+);
+
+-- Step 2: Delete references
+DELETE FROM case_law_references
+WHERE source_case_id IN (
+    SELECT id FROM case_law
+    WHERE court_type = 'supreme_court' AND case_year BETWEEN 2020 AND 2026
+);
+
+-- Step 3: Delete ingestion errors
+DELETE FROM case_law_ingestion_errors
+WHERE tracking_id IN (
+    SELECT id FROM case_law_ingestion_tracking
+    WHERE court_type = 'supreme_court' AND year BETWEEN 2020 AND 2026
+);
+
+-- Step 4: Delete the documents
+DELETE FROM case_law
+WHERE court_type = 'supreme_court' AND case_year BETWEEN 2020 AND 2026;
+
+-- Step 5: Reset tracking
+DELETE FROM case_law_ingestion_tracking
+WHERE court_type = 'supreme_court' AND year BETWEEN 2020 AND 2026;
+
+-- After this, re-run:
+--   make ingest-history START=2020 END=2026 COURT=supreme_court SUBTYPE=precedent
+
+
+-- =============================================
+-- 7. RESET CONTENT HASHES (force re-process without deleting data)
+-- ==============================================
 -- Sets content_hash to NULL so the ingestion pipeline will re-process
 -- and upsert (update) all documents for that year.
 
@@ -166,7 +209,7 @@ WHERE case_id = 'KKO:2025:5';
 
 
 -- =============================================
--- 7. USEFUL COUNTS & HEALTH CHECKS
+-- 8. USEFUL COUNTS & HEALTH CHECKS
 -- =============================================
 
 -- Total documents per decision_type

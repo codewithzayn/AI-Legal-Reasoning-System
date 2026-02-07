@@ -1,6 +1,7 @@
 """
 Hybrid Retrieval Service
-Combines vector search, full-text search, and RRF ranking
+Combines vector search, full-text search, RRF ranking,
+multi-query expansion, and direct case-ID lookup.
 """
 
 import asyncio
@@ -9,6 +10,8 @@ import re
 import time
 
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from supabase import AsyncClient, create_async_client
 
 from src.config.logging_config import setup_logger
@@ -20,6 +23,14 @@ from .reranker import CohereReranker
 load_dotenv()
 logger = setup_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Regex to detect case IDs like KKO:2022:18, KHO:2023:5, etc. in user query
+# ---------------------------------------------------------------------------
+_CASE_ID_RE = re.compile(r"\b(KKO|KHO)\s*:\s*(\d{4})\s*:\s*(\d+)\b", re.IGNORECASE)
+
+# Reusable lightweight LLM for multi-query expansion (cheap, fast)
+_expansion_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.4)
+
 
 class HybridRetrieval:
     """
@@ -30,6 +41,8 @@ class HybridRetrieval:
     - fts_search: Keyword search using PostgreSQL ts_rank
     - rrf_merge: Reciprocal Rank Fusion to combine results
     - hybrid_search: Orchestrates all methods
+    - expand_query: Multi-query expansion via LLM
+    - fetch_case_chunks: Direct case-ID lookup (bypasses vector search)
     """
 
     def __init__(self, url: str = None, key: str = None):
@@ -56,6 +69,108 @@ class HybridRetrieval:
             self.reranker = CohereReranker()
         return self.reranker
 
+    # ------------------------------------------------------------------
+    # Multi-query expansion
+    # ------------------------------------------------------------------
+    @staticmethod
+    async def expand_query(query: str) -> list[str]:
+        """Generate 2 alternative query formulations to improve recall.
+
+        Uses gpt-4o-mini to rephrase the user's question into different
+        angles / synonyms.  Returns a list of 2 alternative queries
+        (the original query is always used separately).
+        """
+        system_prompt = (
+            "You are a Finnish legal search expert. Given a user question, "
+            "generate exactly 2 alternative search queries in Finnish that "
+            "capture the same legal meaning using different phrasing, synonyms, "
+            "or legal terminology.\n\n"
+            "Rules:\n"
+            "- Each alternative must be on its own line.\n"
+            "- Output ONLY the 2 alternative queries, nothing else.\n"
+            "- Keep queries concise (max ~20 words each).\n"
+            "- If the question references a specific case (e.g. KKO:2022:18), "
+            "include that reference in at least one alternative."
+        )
+        try:
+            response = await _expansion_llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+            lines = [ln.strip().lstrip("0123456789.-) ") for ln in response.content.strip().splitlines() if ln.strip()]
+            # Return at most 2 alternatives
+            alternatives = [ln for ln in lines if ln][:2]
+            if alternatives:
+                logger.info("Multi-query expansion → %s alternatives", len(alternatives))
+                for i, alt in enumerate(alternatives):
+                    logger.info("  alt-%s: %s", i + 1, alt)
+            return alternatives
+        except Exception as e:
+            logger.warning("Multi-query expansion failed (non-critical): %s", e)
+            return []
+
+    # ------------------------------------------------------------------
+    # Direct case-ID lookup
+    # ------------------------------------------------------------------
+    @staticmethod
+    def extract_case_ids(query: str) -> list[str]:
+        """Extract case IDs (e.g. KKO:2022:18) mentioned in the query."""
+        matches = _CASE_ID_RE.findall(query)
+        # Each match is (court, year, number) — normalize to uppercase
+        return [f"{court.upper()}:{year}:{number}" for court, year, number in matches]
+
+    async def fetch_case_chunks(self, case_id: str) -> list[dict]:
+        """Fetch ALL chunks for a specific case_id directly from Supabase.
+        This bypasses vector search entirely — guarantees we have the
+        document's content when the user references it by ID."""
+        try:
+            client = await self._get_client()
+            response = (
+                await client.table("case_law_sections")
+                .select("id, content, section_type, section_title, case_law_id")
+                .eq(
+                    "case_law_id",
+                    (await client.table("case_law").select("id").eq("case_id", case_id).limit(1).execute()).data[0][
+                        "id"
+                    ],
+                )
+                .execute()
+            )
+
+            # Also get case metadata for the normalized format
+            case_meta = (
+                await client.table("case_law")
+                .select("case_id, court_type, case_year, legal_domains, url")
+                .eq("case_id", case_id)
+                .limit(1)
+                .execute()
+            )
+            meta_row = case_meta.data[0] if case_meta.data else {}
+
+            results = []
+            for item in response.data or []:
+                results.append(
+                    {
+                        "id": item["id"],
+                        "text": item.get("content", ""),
+                        "source": "case_law",
+                        "metadata": {
+                            "case_id": meta_row.get("case_id", case_id),
+                            "court": meta_row.get("court_type"),
+                            "year": meta_row.get("case_year"),
+                            "type": item.get("section_type"),
+                            "keywords": meta_row.get("legal_domains", []),
+                            "url": meta_row.get("url"),
+                        },
+                        "score": 1.0,  # max score for direct lookup
+                    }
+                )
+            logger.info("Direct case lookup → %s chunks for %s", len(results), case_id)
+            return results
+        except Exception as e:
+            logger.warning("Direct case lookup failed for %s: %s", case_id, e)
+            return []
+
+    # ------------------------------------------------------------------
+    # Core search methods
+    # ------------------------------------------------------------------
     async def vector_search(self, query_embedding: list[float], limit: int = None) -> list[dict]:
         """
         Vector similarity search using cosine distance
@@ -259,36 +374,120 @@ class HybridRetrieval:
 
         return combined_results
 
+    # ------------------------------------------------------------------
+    # Multi-query hybrid search
+    # ------------------------------------------------------------------
+    async def _multi_query_hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:
+        """Run hybrid search with the original query AND 2 LLM-generated
+        alternative queries, then merge all results (deduplicated by chunk id).
+
+        This dramatically improves recall: chunks that one query formulation
+        misses may be captured by another formulation.
+        """
+        # 1. Generate alternative queries in parallel with the original search
+        expansion_task = self.expand_query(query_text)
+        original_search_task = self.hybrid_search(query_text, limit=limit)
+
+        alternatives, original_results = await asyncio.gather(expansion_task, original_search_task)
+
+        if not alternatives:
+            return original_results
+
+        # 2. Run hybrid search for each alternative query concurrently
+        alt_tasks = [self.hybrid_search(alt_q, limit=limit) for alt_q in alternatives]
+        alt_results_list = await asyncio.gather(*alt_tasks)
+
+        # 3. Merge all results, keeping the highest score per chunk id
+        seen: dict[str, dict] = {}
+        for result in original_results:
+            rid = result["id"]
+            if rid not in seen or result.get("score", 0) > seen[rid].get("score", 0):
+                seen[rid] = result
+
+        for alt_results in alt_results_list:
+            for result in alt_results:
+                rid = result["id"]
+                if rid not in seen or result.get("score", 0) > seen[rid].get("score", 0):
+                    seen[rid] = result
+
+        merged = sorted(seen.values(), key=lambda x: x.get("score", 0), reverse=True)
+        logger.info(
+            "Multi-query merge → %s unique chunks (original=%s, alternatives=%s)",
+            len(merged),
+            len(original_results),
+            sum(len(r) for r in alt_results_list),
+        )
+        return merged
+
+    # ------------------------------------------------------------------
+    # Main entry point: hybrid search + case-ID boost + multi-query + rerank
+    # ------------------------------------------------------------------
     async def hybrid_search_with_rerank(
         self, query_text: str, initial_limit: int = 20, final_limit: int = 10
     ) -> list[dict]:
         """
-        Hybrid search + Cohere re-ranking
+        Full retrieval pipeline:
+        1. Detect explicit case IDs in the query → fetch their chunks directly
+        2. Run multi-query hybrid search (original + 2 alternatives)
+        3. Merge direct-lookup chunks with search results (deduplicated)
+        4. Rerank with Cohere
+        5. Return top final_limit chunks to LLM
         """
-        # Get initial results from hybrid search (Statutes + Case Law)
-        # We ask for more initially to feed the reranker
-        initial_results = await self.hybrid_search(query_text, limit=initial_limit)
+        # --- Step 1: Direct case-ID lookup ---
+        mentioned_ids = self.extract_case_ids(query_text)
+        direct_chunks: list[dict] = []
+        if mentioned_ids:
+            logger.info("Detected case IDs in query: %s", mentioned_ids)
+            direct_tasks = [self.fetch_case_chunks(cid) for cid in mentioned_ids]
+            direct_results = await asyncio.gather(*direct_tasks)
+            for chunks in direct_results:
+                direct_chunks.extend(chunks)
 
-        if not initial_results:
+        # --- Step 2: Search (multi-query if enabled, otherwise single query) ---
+        if config.MULTI_QUERY_ENABLED:
+            search_results = await self._multi_query_hybrid_search(query_text, limit=initial_limit)
+        else:
+            search_results = await self.hybrid_search(query_text, limit=initial_limit)
+
+        # --- Step 3: Merge direct chunks + search results (dedup by id) ---
+        seen_ids: set[str] = set()
+        combined: list[dict] = []
+
+        # Direct-lookup chunks go first (guaranteed relevant)
+        for chunk in direct_chunks:
+            cid = chunk["id"]
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                combined.append(chunk)
+
+        for chunk in search_results:
+            cid = chunk["id"]
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                combined.append(chunk)
+
+        if not combined:
             return []
 
         # Log retrieved candidates before rerank (for debugging relevancy)
-        logger.info("Retrieved %s candidates (statutes + case_law):", len(initial_results))
-        for i, r in enumerate(initial_results[:15]):
+        logger.info(
+            "Retrieved %s candidates (direct=%s, search=%s):", len(combined), len(direct_chunks), len(search_results)
+        )
+        for i, r in enumerate(combined[:20]):
             src = r.get("source", "?")
             score = r.get("score", 0)
             meta = r.get("metadata", {})
             label = meta.get("case_id") or meta.get("title") or meta.get("uri") or "?"
             logger.info("  [%s] %s | %s | score=%.4f", i + 1, src, label, score)
 
-        # Re-rank with Cohere
+        # --- Step 4: Rerank with Cohere ---
         logger.info("Reranking...")
         rerank_start = time.time()
         reranker = self._get_reranker()
         top_k = final_limit if final_limit is not None else config.CHUNKS_TO_LLM
-        reranked = reranker.rerank(query_text, initial_results, top_k=top_k)
+        reranked = reranker.rerank(query_text, combined, top_k=top_k)
         rerank_elapsed = time.time() - rerank_start
-        logger.info(f"Rerank done → top {len(reranked)} in {rerank_elapsed:.1f}s")
+        logger.info("Rerank done → top %s in %.1fs", len(reranked), rerank_elapsed)
 
         # Log final reranked results (what the LLM will see)
         logger.info("Final results sent to LLM:")

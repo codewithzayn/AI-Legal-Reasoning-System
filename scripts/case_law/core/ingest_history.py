@@ -5,63 +5,64 @@ Loops through years (e.g. 1926-2026) and ingests all cases
 
 import argparse
 import asyncio
+import os
 import sys
 from datetime import datetime
 
 sys.path.insert(0, ".")
+os.environ.setdefault("LOG_FORMAT", "simple")  # human-readable logs
 
-# Import single year runner
-# Import shared ingestion manager
 from scripts.case_law.core.ingestion_manager import IngestionManager
 from src.config.logging_config import setup_logger
 
 logger = setup_logger(__name__)
 
+# Default subtypes per court
+COURT_SUBTYPES = {
+    "supreme_court": ["precedent", "ruling", "leave_to_appeal"],
+    "supreme_administrative_court": ["precedent", "other", "brief"],
+}
 
-async def ingest_history(start_year: int, end_year: int, court: str):
+
+async def ingest_history(start_year: int, end_year: int, court: str, subtype: str | None = None):
     """
-    Ingest case law for a range of years
+    Ingest case law for a range of years.
+    If subtype is specified, only that subtype is processed.
     """
-    logger.info(f"STARTING HISTORICAL INGESTION: {court.upper()} {start_year}-{end_year}")
+    subtypes = [subtype] if subtype else COURT_SUBTYPES.get(court, [None])
+    subtype_label = subtype or "ALL"
+    logger.info("STARTING HISTORICAL INGESTION: %s %s-%s (%s)", court.upper(), start_year, end_year, subtype_label)
 
     start_time = datetime.now()
-
-    # Loop backwards from current year to older years usually better
-    # But user asked for 1926-2026 loop. Let's do descending to get recent first.
     years = range(end_year, start_year - 1, -1)
-
     total_years = len(years)
 
-    # Initialize manager once
     manager = IngestionManager(court)
+    all_failed: list[str] = []
 
     for i, year in enumerate(years):
-        logger.info(f"📅 PROCESSING YEAR {year} ({i + 1}/{total_years})")
-
+        logger.info("📅 PROCESSING YEAR %s (%s/%s)", year, i + 1, total_years)
         try:
-            # Run ingestion for this year
-            # We don't force scrape by default to use cache if available
-
-            if court == "supreme_court":
-                subtypes = ["precedent", "ruling", "leave_to_appeal"]
-            elif court == "supreme_administrative_court":
-                subtypes = ["precedent", "other", "brief"]
-            else:
-                subtypes = [None]  # Default to all or none
-
-            for subtype in subtypes:
-                await manager.ingest_year(year, force_scrape=False, subtype=subtype)
-
-            # Brief pause to be nice to Finlex server
+            for st in subtypes:
+                failed = await manager.ingest_year(year, force_scrape=False, subtype=st)
+                if failed:
+                    all_failed.extend(f"[{year}] {fid}" for fid in failed)
             await asyncio.sleep(2)
-
         except Exception as e:
-            logger.error(f"Failed processing year {year}: {e}")
+            logger.error("Failed processing year %s: %s", year, e)
+            all_failed.append(f"[{year}] YEAR FAILED: {e}")
             continue
 
     duration = datetime.now() - start_time
     logger.info("🏁 HISTORICAL INGESTION COMPLETE")
-    logger.info(f"⏱️  Duration: {duration}")
+    logger.info("⏱️  Duration: %s", duration)
+
+    if all_failed:
+        logger.error("⚠️  ALL FAILED DOCUMENTS (%s):", len(all_failed))
+        for fid in all_failed:
+            logger.error("  - %s", fid)
+    else:
+        logger.info("✅ No failures across all years.")
 
 
 if __name__ == "__main__":
@@ -75,7 +76,13 @@ if __name__ == "__main__":
         choices=["supreme_court", "supreme_administrative_court"],
         help="Court (supreme_court/supreme_administrative_court)",
     )
+    parser.add_argument(
+        "--subtype",
+        type=str,
+        default=None,
+        choices=["precedent", "ruling", "leave_to_appeal", "other", "brief"],
+        help="Process only this subtype (default: all subtypes for the court)",
+    )
 
     args = parser.parse_args()
-
-    asyncio.run(ingest_history(args.start, args.end, args.court))
+    asyncio.run(ingest_history(args.start, args.end, args.court, args.subtype))
