@@ -4,6 +4,10 @@
 Finnish Legal AI system that provides legal reasoning using Streamlit UI, LangGraph agent pipeline, and hybrid retrieval (vector + full-text search) with Supabase, OpenAI, and Cohere.
 
 ## Recent Changes
+- 2026-02-08: Added multilingual support (English + Finnish)
+  - Created src/config/translations.py with all UI strings in both languages
+  - Language selector in sidebar (English / Suomi)
+  - All UI text, status messages, and stream messages are translated
 - 2026-02-08: Imported from GitHub, configured for Replit environment
   - Set Streamlit to run on port 5000 with CORS/XSRF disabled for Replit proxy
   - Made OpenAI/LLM client initialization lazy to allow UI to load without API keys
@@ -22,6 +26,7 @@ Finnish Legal AI system that provides legal reasoning using Streamlit UI, LangGr
 - `src/agent/` - LangGraph agent (graph.py, nodes.py, stream.py, state.py)
 - `src/services/retrieval/` - Hybrid search, reranker, generator
 - `src/config/settings.py` - Configuration from env vars
+- `src/config/translations.py` - Multilingual UI strings (en/fi)
 - `.streamlit/config.toml` - Streamlit server config
 
 ## Required Environment Variables

@@ -7,21 +7,19 @@ import sys
 import warnings
 from pathlib import Path
 
-# Reduce terminal noise from dependencies (set before heavy imports)
 os.environ.setdefault("LOG_FORMAT", "simple")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 warnings.filterwarnings("ignore", message=".*(PyTorch|TensorFlow|Flax).*")
 
 import streamlit as st
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.agent.stream import stream_query_response
-from src.config.settings import ASSISTANT_AVATAR, CHAT_WELCOME_MESSAGE, PAGE_CONFIG, USER_AVATAR
+from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR  # noqa: F401
+from src.config.translations import LANGUAGE_OPTIONS, t
 from src.utils.chat_helpers import add_message, clear_chat_history, get_chat_history, initialize_chat_history
 
-# Theme tokens: single source for legal-AI look (aligned with .streamlit/config.toml)
 THEME_PRIMARY = "#0f172a"
 THEME_PRIMARY_LIGHT = "#1e293b"
 THEME_BG = "#ffffff"
@@ -31,14 +29,15 @@ THEME_TEXT = "#0f172a"
 THEME_ACCENT = "#0ea5e9"
 
 
+def _get_lang() -> str:
+    return st.session_state.get("lang", "en")
+
+
 def _inject_custom_css() -> None:
-    """Inject CSS: aligned structure, single theme, legal-AI look."""
     st.markdown(
         f"""
         <style>
-            /* Single column, readable width */
             .block-container {{ max-width: 44rem; margin-left: auto; margin-right: auto; padding-top: 1.5rem; padding-bottom: 3rem; }}
-            /* Chat messages: one block per message, clear hierarchy */
             [data-testid="stChatMessage"] {{
                 padding: 1rem 1.25rem;
                 border-radius: 12px;
@@ -82,33 +81,36 @@ def _inject_custom_css() -> None:
 
 
 def _process_prompt(prompt: str) -> None:
-    """Add user message, run agent, add assistant response."""
+    lang = _get_lang()
     add_message("user", prompt)
     with st.chat_message("user", avatar=USER_AVATAR):
         st.write(prompt)
-    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR), st.spinner("🔍 Searching knowledge base..."):
-        response = st.write_stream(stream_query_response(prompt))
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR), st.spinner(t("spinner_searching", lang)):
+        response = st.write_stream(stream_query_response(prompt, lang=lang))
     add_message("assistant", response)
 
 
 def main():
-    """Main Streamlit application"""
+    if "lang" not in st.session_state:
+        st.session_state.lang = "en"
+    lang = _get_lang()
+
     st.set_page_config(
-        page_title=PAGE_CONFIG["page_title"],
+        page_title=t("page_title", lang),
         page_icon=PAGE_CONFIG["page_icon"],
         layout=PAGE_CONFIG["layout"],
         initial_sidebar_state=PAGE_CONFIG["initial_sidebar_state"],
     )
+
     _inject_custom_css()
 
-    # Header: product name + single-line purpose
     st.markdown(
-        """
+        f"""
         <div class="main-header-card">
             <h2 style='color: white; margin: 0; font-size: 1.25rem; font-weight: 600;'>
-                Finnish Legal Reasoning
+                {t("header_title", lang)}
             </h2>
-            <p class="subtitle">Ask about statutes, case law, and regulations in Finnish or English.</p>
+            <p class="subtitle">{t("header_subtitle", lang)}</p>
         </div>
     """,
         unsafe_allow_html=True,
@@ -116,44 +118,58 @@ def main():
 
     initialize_chat_history()
 
-    # Chat: single responsibility — show conversation
     for message in get_chat_history():
         avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
         with st.chat_message(message["role"], avatar=avatar):
             st.write(message["content"])
 
-    # Input: single entry point — ask here
     st.markdown('<div class="input-card">', unsafe_allow_html=True)
-    st.markdown("**Ask a question**")
+    st.markdown(f"**{t('ask_question', lang)}**")
     with st.form("chat_form", clear_on_submit=True):
         query = st.text_area(
             "Query",
             value="",
             height=112,
-            placeholder=CHAT_WELCOME_MESSAGE,
+            placeholder=t("placeholder", lang),
             label_visibility="collapsed",
             key="query_input",
         )
         col1, col2 = st.columns([1, 4])
         with col1:
-            submitted = st.form_submit_button("Send")
+            submitted = st.form_submit_button(t("send", lang))
         with col2:
-            st.caption("Ask about Finnish law in Finnish or English.")
+            st.caption(t("input_hint", lang))
     st.markdown("</div>", unsafe_allow_html=True)
 
     if submitted and query and query.strip():
         _process_prompt(query.strip())
         st.rerun()
 
-    # Sidebar: settings and system info only
     with st.sidebar:
-        st.header("Settings")
-        if st.button("Clear Chat History", use_container_width=True):
+        st.header(t("settings", lang))
+
+        lang_labels = list(LANGUAGE_OPTIONS.keys())
+        lang_values = list(LANGUAGE_OPTIONS.values())
+        current_index = lang_values.index(lang) if lang in lang_values else 0
+        selected_label = st.selectbox(
+            t("language", lang),
+            lang_labels,
+            index=current_index,
+            key="lang_selector",
+        )
+        new_lang = LANGUAGE_OPTIONS[selected_label]
+        if new_lang != lang:
+            st.session_state.lang = new_lang
+            st.rerun()
+
+        st.divider()
+
+        if st.button(t("clear_chat", lang), use_container_width=True):
             clear_chat_history()
             st.rerun()
         st.divider()
-        st.subheader("System")
-        st.info(f"Messages: {len(get_chat_history())}")
+        st.subheader(t("system", lang))
+        st.info(t("messages_count", lang, count=len(get_chat_history())))
 
 
 if __name__ == "__main__":
