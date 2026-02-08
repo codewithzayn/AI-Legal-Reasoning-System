@@ -28,8 +28,13 @@ logger = setup_logger(__name__)
 # ---------------------------------------------------------------------------
 _CASE_ID_RE = re.compile(r"\b(KKO|KHO)\s*:\s*(\d{4})\s*:\s*(\d+)\b", re.IGNORECASE)
 
-# Reusable lightweight LLM for multi-query expansion (cheap, fast)
-_expansion_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.4)
+_expansion_llm = None
+
+def _get_expansion_llm():
+    global _expansion_llm
+    if _expansion_llm is None:
+        _expansion_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.4)
+    return _expansion_llm
 
 
 class HybridRetrieval:
@@ -93,7 +98,7 @@ class HybridRetrieval:
             "include that reference in at least one alternative."
         )
         try:
-            response = await _expansion_llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+            response = await _get_expansion_llm().ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
             lines = [ln.strip().lstrip("0123456789.-) ") for ln in response.content.strip().splitlines() if ln.strip()]
             # Return at most 2 alternatives
             alternatives = [ln for ln in lines if ln][:2]

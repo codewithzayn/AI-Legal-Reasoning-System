@@ -2,6 +2,12 @@
 # and keep terminal output clean. Restart the app manually after code changes.
 [server]
 fileWatcherType = "none"
+port = 5000
+address = "0.0.0.0"
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+enableWebsocketCompression = false
 
 # Theme: legal-AI look (aligned with app.py THEME_* tokens)
 [theme]

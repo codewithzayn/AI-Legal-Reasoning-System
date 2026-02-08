@@ -18,10 +18,20 @@ from .state import AgentState
 
 logger = setup_logger(__name__)
 
-# Reusable LLM instances to prevent excessive background task creation
-# and resolve "Task destroyed but pending" warnings.
-_llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-_generator = LLMGenerator()
+_llm_mini = None
+_generator = None
+
+def _get_llm_mini():
+    global _llm_mini
+    if _llm_mini is None:
+        _llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    return _llm_mini
+
+def _get_generator():
+    global _generator
+    if _generator is None:
+        _generator = LLMGenerator()
+    return _generator
 
 
 async def analyze_intent(state: AgentState) -> AgentState:
@@ -46,7 +56,7 @@ async def analyze_intent(state: AgentState) -> AgentState:
     """
 
     try:
-        response = await _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+        response = await _get_llm_mini().ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
         intent = response.content.strip().lower()
         if intent not in ["legal_search", "general_chat", "clarification"]:
             intent = "legal_search"
@@ -86,7 +96,7 @@ async def reformulate_query(state: AgentState) -> AgentState:
     """
 
     try:
-        response = await _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=original)])
+        response = await _get_llm_mini().ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=original)])
         new_query = response.content.strip()
         state["query"] = new_query
         logger.info(f"[REFORMULATE] New query: {new_query}")
@@ -105,7 +115,7 @@ async def ask_clarification(state: AgentState) -> AgentState:
     query = state["query"]
 
     try:
-        response = await _llm_mini.ainvoke(
+        response = await _get_llm_mini().ainvoke(
             [
                 SystemMessage(
                     content="The user's legal question is too vague. Ask a polite follow-up question in Finnish to clarify what they are looking for."
@@ -134,7 +144,7 @@ async def general_chat(state: AgentState) -> AgentState:
     """
 
     try:
-        response = await _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+        response = await _get_llm_mini().ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
         state["response"] = response.content
     except Exception:
         state["response"] = "Hei! Kuinka voin auttaa sinua oikeudellisissa asioissa?"
@@ -193,7 +203,7 @@ async def reason_legal(state: AgentState) -> AgentState:
     start_time = time.time()
     logger.info(f"Generating response from {len(results)} chunks...")
     try:
-        response = await _generator.agenerate_response(query=state["query"], context_chunks=results)
+        response = await _get_generator().agenerate_response(query=state["query"], context_chunks=results)
         state["response"] = response
         elapsed = time.time() - start_time
         logger.info(f"Response ready in {elapsed:.1f}s")
