@@ -28,8 +28,13 @@ logger = setup_logger(__name__)
 # ---------------------------------------------------------------------------
 _CASE_ID_RE = re.compile(r"\b(KKO|KHO)\s*:\s*(\d{4})\s*:\s*(\d+)\b", re.IGNORECASE)
 
-# Reusable lightweight LLM for multi-query expansion (cheap, fast)
-_expansion_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.4)
+_expansion_llm = None
+
+def _get_expansion_llm():
+    global _expansion_llm
+    if _expansion_llm is None:
+        _expansion_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.4)
+    return _expansion_llm
 
 
 class HybridRetrieval:
@@ -94,7 +99,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 1. OYL yhtiökokouksen määrääminen tuomioistuimen päätöksellä edellytykset
 2. Millä perusteella tuomioistuin voi velvoittaa yhtiön kutsumaan koolle yhtiökokouksen"""
         try:
-            response = await _expansion_llm.ainvoke(
+            response = await _get_expansion_llm().ainvoke(
                 [
                     SystemMessage(content=system_prompt),
                     HumanMessage(content=f"Alkuperäinen: {query}"),

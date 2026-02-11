@@ -5,6 +5,7 @@ Streaming version of agent for Streamlit
 from collections.abc import AsyncIterator
 
 from src.config.logging_config import setup_logger
+from src.config.translations import t
 
 from .graph import agent_graph
 from .state import AgentState
@@ -25,9 +26,16 @@ def _strip_relevancy_line(text: str) -> str:
     return "\n".join(out).rstrip()
 
 
-async def stream_query_response(user_query: str) -> AsyncIterator[str]:
+async def stream_query_response(user_query: str, lang: str = "en") -> AsyncIterator[str]:
     """
     Stream response from agent.
+
+    Args:
+        user_query: User's question
+        lang: Language code for UI messages ("en" or "fi")
+
+    Yields:
+        Response chunks as they're generated
     """
     initial_state: AgentState = {
         "query": user_query,
@@ -47,15 +55,15 @@ async def stream_query_response(user_query: str) -> AsyncIterator[str]:
         async for event in agent_graph.astream(initial_state):
             for key, value in event.items():
                 if key == "analyze":
-                    yield "🤔 Analysoidaan kysymystä...\n\n"
+                    yield f"\U0001f914 {t('stream_analyzing', lang)}\n\n"
 
                 elif key == "search":
                     count = len(value.get("search_results", []))
-                    yield f"🔍 Etsitään tietoa... (Löydetty {count} tulosta)\n\n"
+                    yield f"\U0001f50d {t('stream_searching', lang, count=count)}\n\n"
 
                 elif key == "reformulate":
                     new_query = value.get("query", "")
-                    yield f"🔄 Hakutuloksia ei löytynyt. Tarkennetaan hakua: '{new_query}'...\n\n"
+                    yield f"\U0001f504 {t('stream_reformulating', lang, query=new_query)}\n\n"
 
                 elif key in {"clarify", "chat"}:
                     yield value.get("response", "")
@@ -65,10 +73,10 @@ async def stream_query_response(user_query: str) -> AsyncIterator[str]:
                     yield _strip_relevancy_line(resp)
 
                 elif key == "error":
-                    yield f"❌ Virhe: {value.get('error')}"
+                    yield f"\u274c {t('stream_error', lang, error=value.get('error'))}"
     except Exception as e:
         logger.error("Stream error: %s", e)
-        yield f"⚠️ Virhe yhteydessä: {e!s}"
+        yield f"\u26a0\ufe0f {t('stream_connection_error', lang, error=str(e))}"
     finally:
         import asyncio
 
