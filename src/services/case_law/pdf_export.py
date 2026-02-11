@@ -500,11 +500,15 @@ def doc_to_pdf(doc: CaseLawDocument | None) -> bytes:
     if doc is None:
         raise ValueError("doc must not be None")
 
-    buffer = BytesIO()
-    text = (getattr(doc, "full_text", None) or "").strip()
     case_id = getattr(doc, "case_id", None) or "unknown"
+    text = (getattr(doc, "full_text", None) or "").strip()
     if not text:
-        text = f"No content for {case_id}."
+        raise ValueError(
+            f"full_text is empty for {case_id}; cannot generate PDF. "
+            "Documents with empty full_text must not be exported or uploaded to Drive."
+        )
+
+    buffer = BytesIO()
 
     styles = _build_styles()
     meta = _parse_metadata_from_text(text)

@@ -24,12 +24,13 @@ def add_message(role: str, content: str) -> None:
 
 def get_chat_history() -> list[dict[str, str]]:
     """
-    Get chat history from session state
+    Get chat history from session state (returns copy for safety with concurrent access).
 
     Returns:
         List of message dictionaries
     """
-    return st.session_state.messages
+    initialize_chat_history()
+    return list(st.session_state.messages)
 
 
 def clear_chat_history() -> None:

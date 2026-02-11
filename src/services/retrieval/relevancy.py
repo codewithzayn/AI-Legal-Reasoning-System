@@ -54,20 +54,26 @@ def _compact_answer(answer: str, max_chars: int = MAX_ANSWER_CHARS) -> str:
     return truncated
 
 
-RELEVANCY_SYSTEM = """You are a relevancy checker for a Finnish legal Q&A system. You receive:
+RELEVANCY_SYSTEM = """You are a relevancy and correctness checker for a Finnish legal Q&A system. You receive:
 1) The user's question (KYSYMYS)
 2) A compact excerpt of the system's answer (truncated to save space) and the list of sources cited in the full answer.
 
-Your task: Rate how relevant and on-topic the answer is to the question. Consider:
+Your task: Rate 1-5 how well the answer is both relevant AND legally sound. Consider:
+
+RELEVANCE:
 - Does the answer address what was asked (e.g. jurisdiction vs. sentencing vs. liability), or does it mix in unrelated legal issues?
-- Are the cited sources appropriate for the question?
 - Is the answer focused or does it drift to other topics?
 
-Output ONLY valid JSON with two keys:
-- "score": integer 1-5 (1=not relevant/off-topic, 5=fully relevant and focused)
-- "reason": one short sentence in Finnish explaining the score (e.g. "Vastaus keskittyy kysymykseen." or "Vastaus sekoittaa toimivaltaa ja rangaistusta.")
+CORRECT USE OF SOURCES (important):
+- If the question is "when" or "under what conditions" something applies, the answer should be based on the provision that governs that (e.g. the relevant §). If it only cites cases that deal with the opposite situation (e.g. when something is transferred out or excluded) without clearly explaining the governing rule, that is a flaw — lower the score.
+- If the answer uses a cited case to support a rule that the case actually contradicts (e.g. says "case X shows that A applies" when case X held that B applies instead), that is a serious flaw — score no higher than 2.
+- Appropriate sources and correct application of precedent should increase the score.
 
-Example: {"score": 4, "reason": "Vastaus vastaa kysymykseen, mutta mainitsee myös sivuseikkoja."}
+Output ONLY valid JSON with two keys:
+- "score": integer 1-5 (1=off-topic or clearly misuses sources, 5=relevant, focused, and correct use of sources)
+- "reason": one short sentence in Finnish explaining the score (e.g. "Vastaus keskittyy kysymykseen ja käyttää lähteitä oikein." or "Ennakkotapaus käytetty väärin päin; vastaus ei perustu kysymykseen 'milloin' vastaavaan pykälään.")
+
+Example: {"score": 3, "reason": "Vastaus on aiheesta, mutta ennakkotapauksen käyttö on harhaanjohtava tai puuttuu vastaava pykälä."}
 """
 
 

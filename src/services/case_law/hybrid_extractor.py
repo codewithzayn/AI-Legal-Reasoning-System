@@ -2,7 +2,7 @@
 # PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
 
 """
-Hybrid precedent extractor: regex first, LLM fallback (GPT-4o mini).
+Hybrid precedent extractor: regex first, LLM fallback (model from config.EXTRACTION_MODEL, default gpt-4o).
 Ensures no empty sections and no missing chunks; returns CaseExtractionResult.
 """
 
@@ -12,6 +12,7 @@ import os
 from openai import OpenAI
 
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 from src.services.case_law.extractor import (
     CaseExtractionResult,
     CaseMetadata,
@@ -24,7 +25,7 @@ from src.services.case_law.regex_extractor import extract_precedent
 logger = setup_logger(__name__)
 
 COVERAGE_THRESHOLD = 0.90
-EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", "gpt-4o-mini")
+EXTRACTION_MODEL = config.EXTRACTION_MODEL
 MAX_TEXT_FOR_LLM = 120_000
 
 VALID_SECTION_TYPES = (

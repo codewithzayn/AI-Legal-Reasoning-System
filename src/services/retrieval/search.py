@@ -54,13 +54,15 @@ class HybridRetrieval:
             raise ValueError("Supabase URL and KEY required")
 
         self.client: AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
         self.embedder = DocumentEmbedder()
         self.reranker = None
 
     async def _get_client(self) -> AsyncClient:
-        """Lazy load async client"""
-        if self.client is None:
-            self.client = await create_async_client(self.url, self.key)
+        """Lazy load async client (thread-safe for concurrent requests)."""
+        async with self._client_lock:
+            if self.client is None:
+                self.client = await create_async_client(self.url, self.key)
         return self.client
 
     def _get_reranker(self) -> CohereReranker:
@@ -70,41 +72,182 @@ class HybridRetrieval:
         return self.reranker
 
     # ------------------------------------------------------------------
-    # Multi-query expansion
+    # Multi-query expansion (legal-focused)
     # ------------------------------------------------------------------
     @staticmethod
     async def expand_query(query: str) -> list[str]:
-        """Generate 2 alternative query formulations to improve recall.
+        """Generate 2 targeted legal query variants for better recall."""
+        system_prompt = """Olet suomalaisen oikeuden hakuasiantuntija. Luo kaksi vaihtoehtoista hakukyselyä.
 
-        Uses gpt-4o-mini to rephrase the user's question into different
-        angles / synonyms.  Returns a list of 2 alternative queries
-        (the original query is always used separately).
-        """
-        system_prompt = (
-            "You are a Finnish legal search expert. Given a user question, "
-            "generate exactly 2 alternative search queries in Finnish that "
-            "capture the same legal meaning using different phrasing, synonyms, "
-            "or legal terminology.\n\n"
-            "Rules:\n"
-            "- Each alternative must be on its own line.\n"
-            "- Output ONLY the 2 alternative queries, nothing else.\n"
-            "- Keep queries concise (max ~20 words each).\n"
-            "- If the question references a specific case (e.g. KKO:2022:18), "
-            "include that reference in at least one alternative."
-        )
+Luo:
+1. **Lakitekninen versio**: Käytä lakipykäliä, virallisia termejä (edellytykset, soveltamisala, toimivalta, vastuu)
+2. **Tapausperusteinen versio**: Mitä tosiasiallisia tilanteita tai kysymyksiä tämä koskee?
+
+Säännöt:
+- Pidä pykäläviittaukset (esim. OYL 5:21, RL 10:3)
+- Jos kysymys on "milloin/missä tapauksessa", varmista että molemmat versiot etsivät EDELLYTYKSIÄ
+- Vastaa VAIN kahdella kyselyllä, yksi per rivi
+- Älä selitä
+
+Esimerkki:
+Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
+1. OYL yhtiökokouksen määrääminen tuomioistuimen päätöksellä edellytykset
+2. Millä perusteella tuomioistuin voi velvoittaa yhtiön kutsumaan koolle yhtiökokouksen"""
         try:
-            response = await _expansion_llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+            response = await _expansion_llm.ainvoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=f"Alkuperäinen: {query}"),
+                ]
+            )
             lines = [ln.strip().lstrip("0123456789.-) ") for ln in response.content.strip().splitlines() if ln.strip()]
-            # Return at most 2 alternatives
             alternatives = [ln for ln in lines if ln][:2]
             if alternatives:
                 logger.info("Multi-query expansion → %s alternatives", len(alternatives))
-                for i, alt in enumerate(alternatives):
-                    logger.info("  alt-%s: %s", i + 1, alt)
+                for i, alt in enumerate(alternatives, 1):
+                    logger.info("  alt-%s: %s", i, alt)
             return alternatives
         except Exception as e:
             logger.warning("Multi-query expansion failed (non-critical): %s", e)
             return []
+
+    # ------------------------------------------------------------------
+    # Query classification and exact-match boost
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _classify_query(query: str) -> str:
+        """Classify query type to adjust retrieval strategy."""
+        query_lower = query.lower()
+        # Statute: abbreviation (RL 10:3) or Finnish form (10 luvun 3 §)
+        if re.search(r"\b(OYL|RL|OK|VML|SOL|SotOikL)\s*\d+:\d+", query, re.IGNORECASE):
+            return "statute_interpretation"
+        if re.search(r"\d+\s+luvun\s+\d+\s*§", query_lower):
+            return "statute_interpretation"
+        # Conditions: milloin, edellytykset, or any form of "edellyty" (edellytyksillä, edellytyksiä, ...)
+        if any(w in query_lower for w in ["milloin", "missä tapauksessa"]) or "edellyty" in query_lower:
+            return "conditions"
+        if any(w in query_lower for w in ["toimivalta", "tuomioistuin", "käsittelee", "menettely"]):
+            return "jurisdiction"
+        if any(w in query_lower for w in ["vastuu", "vastuussa", "korvaus", "vahingonkorvaus"]):
+            return "liability"
+        return "general"
+
+    def _compute_exact_match_boost(self, chunk: dict, query: str) -> float:
+        """Boost chunks with exact statute/case ID matches to the query."""
+        boost = 1.0
+        text = (chunk.get("text") or chunk.get("chunk_text") or chunk.get("content") or "").lower()
+        query_lower = query.lower()
+        # Abbreviation style: RL 10:3, OYL 5:21
+        statute_pattern = r"\b(OYL|RL|OK|VML|SOL|SotOikL)\s*\d+:\d+\b"
+        query_statutes = set(re.findall(statute_pattern, query, re.IGNORECASE))
+        chunk_statutes = set(re.findall(statute_pattern, text, re.IGNORECASE))
+        if query_statutes & chunk_statutes:
+            boost *= 2.0
+        # Finnish style: "10 luvun 3 §", "rikoslain 10 luvun 3 §" — boost if chunk discusses same chapter/section
+        luku_para = re.findall(r"(\d+)\s+luvun\s+(\d+)\s*§", query_lower)
+        if luku_para:
+            for ch, sec in luku_para:
+                if re.search(
+                    rf"\b{ch}\s+luvun\s+{sec}\b|\b{ch}\s+§\s*:\s*{sec}\b|chapter\s+{ch}.*section\s+{sec}",
+                    text,
+                    re.IGNORECASE,
+                ):
+                    boost *= 2.0
+                    break
+        # Subsection (kohta): e.g. "3 §:n 3 kohdan" — extra boost when chunk contains same provision + subsection
+        kohta_match = re.search(r"(?:\d+\s+luvun\s+\d+\s*§[^\d]*)?(\d+)\s+kohd(?:an|a)\b", query_lower)
+        if kohta_match:
+            kohta_num = kohta_match.group(1)
+            if re.search(r"\d+\s+luvun\s+\d+\s*§", text) and re.search(rf"\b{kohta_num}\s+kohd(?:an|a)\b", text):
+                boost *= 1.8
+        case_ids = self.extract_case_ids(query)
+        chunk_case_id = ((chunk.get("metadata") or {}).get("case_id") or "").upper()
+        if case_ids and chunk_case_id in [c.upper() for c in case_ids]:
+            boost *= 1.5
+
+        # For "conditions" queries (milloin / edellyty* / missä tapauksessa): boost reasoning and conditions language
+        is_conditions_query = (
+            any(w in query_lower for w in ["milloin", "missä tapauksessa"]) or "edellyty" in query_lower
+        )
+        if is_conditions_query:
+            meta = chunk.get("metadata") or {}
+            section_type = (meta.get("type") or meta.get("section_type") or "").lower()
+            section_title = (meta.get("section_title") or chunk.get("section_title") or "").lower()
+            if section_type in ("reasoning", "perustelut") or "perustelut" in section_title:
+                boost *= 1.4
+            conditions_words = [
+                "jos",
+                "kun",
+                "saattaa todennäköiseksi",
+                "on myönnettävä",
+                "voi jäädä",
+                "lopulliseksi",
+                "riittämättömiksi",
+                "näin on asia",
+            ]
+            conditions_matches = sum(1 for w in conditions_words if w in text)
+            if conditions_matches >= 3:
+                boost *= 1.3
+
+        # General keyword matching: boost if chunk contains many query terms
+        stopwords = {
+            "milloin",
+            "mitä",
+            "miten",
+            "miksi",
+            "missä",
+            "voiko",
+            "voidaan",
+            "onko",
+            "oliko",
+            "pitää",
+            "täytyy",
+            "kuuluu",
+            "mukaan",
+            "että",
+        }
+        query_words = set(word for word in query_lower.split() if len(word) >= 4 and word not in stopwords)
+        if query_words:
+            matches = sum(1 for word in query_words if word in text)
+            match_ratio = matches / len(query_words)
+            if match_ratio >= 0.5:
+                boost *= 1 + match_ratio * 0.5  # Up to 1.75x for 100% match
+
+        return boost
+
+    def _rrf_blend_scores(self, reranked: list[dict], k: int = 60) -> list[dict]:
+        """Blend rerank and pre-rerank (RRF) using RRF formula instead of weighted average."""
+        rerank_ranks = {
+            r["id"]: i + 1 for i, r in enumerate(sorted(reranked, key=lambda x: x.get("rerank_score", 0), reverse=True))
+        }
+        rrf_ranks = {
+            r["id"]: i + 1 for i, r in enumerate(sorted(reranked, key=lambda x: x.get("score", 0), reverse=True))
+        }
+        for r in reranked:
+            rid = r["id"]
+            rerank_rrf = 1.0 / (k + rerank_ranks.get(rid, 999))
+            rrf_rrf = 1.0 / (k + rrf_ranks.get(rid, 999))
+            r["blended_score"] = rerank_rrf + rrf_rrf
+        return sorted(reranked, key=lambda x: x.get("blended_score", 0), reverse=True)
+
+    @staticmethod
+    def _smart_diversity_cap(results: list[dict], max_per_case: int = 3, top_k: int = 15) -> list[dict]:
+        """Keep top 2 chunks uncapped, then apply per-case cap for the rest."""
+        if len(results) <= 2:
+            return results[:top_k]
+        output = list(results[:2])
+        case_counts: dict[str, int] = {}
+        for r in output:
+            cid = (r.get("metadata") or {}).get("case_id") or ""
+            case_counts[cid] = case_counts.get(cid, 0) + 1
+        for r in results[2:]:
+            if len(output) >= top_k:
+                break
+            cid = (r.get("metadata") or {}).get("case_id") or ""
+            if case_counts.get(cid, 0) < max_per_case:
+                output.append(r)
+                case_counts[cid] = case_counts.get(cid, 0) + 1
+        return output
 
     # ------------------------------------------------------------------
     # Direct case-ID lookup
@@ -422,7 +565,7 @@ class HybridRetrieval:
     # ------------------------------------------------------------------
     # Main entry point: hybrid search + case-ID boost + multi-query + rerank
     # ------------------------------------------------------------------
-    async def hybrid_search_with_rerank(
+    async def hybrid_search_with_rerank(  # noqa: C901, PLR0912, PLR0915
         self, query_text: str, initial_limit: int = 20, final_limit: int = 10
     ) -> list[dict]:
         """
@@ -433,21 +576,28 @@ class HybridRetrieval:
         4. Rerank with Cohere
         5. Return top final_limit chunks to LLM
         """
-        # --- Step 1: Direct case-ID lookup ---
+        # --- Step 1 & 2: Direct lookup + Search in parallel (when both apply) ---
         mentioned_ids = self.extract_case_ids(query_text)
         direct_chunks: list[dict] = []
-        if mentioned_ids:
+        search_results: list[dict] = []
+
+        async def _do_direct():
+            if not mentioned_ids:
+                return []
             logger.info("Detected case IDs in query: %s", mentioned_ids)
             direct_tasks = [self.fetch_case_chunks(cid) for cid in mentioned_ids]
             direct_results = await asyncio.gather(*direct_tasks)
+            out = []
             for chunks in direct_results:
-                direct_chunks.extend(chunks)
+                out.extend(chunks)
+            return out
 
-        # --- Step 2: Search (multi-query if enabled, otherwise single query) ---
-        if config.MULTI_QUERY_ENABLED:
-            search_results = await self._multi_query_hybrid_search(query_text, limit=initial_limit)
-        else:
-            search_results = await self.hybrid_search(query_text, limit=initial_limit)
+        async def _do_search():
+            if config.MULTI_QUERY_ENABLED:
+                return await self._multi_query_hybrid_search(query_text, limit=initial_limit)
+            return await self.hybrid_search(query_text, limit=initial_limit)
+
+        direct_chunks, search_results = await asyncio.gather(_do_direct(), _do_search())
 
         # --- Step 3: Merge direct chunks + search results (dedup by id) ---
         seen_ids: set[str] = set()
@@ -480,22 +630,60 @@ class HybridRetrieval:
             label = meta.get("case_id") or meta.get("title") or meta.get("uri") or "?"
             logger.info("  [%s] %s | %s | score=%.4f", i + 1, src, label, score)
 
-        # --- Step 4: Rerank with Cohere ---
-        logger.info("Reranking...")
-        rerank_start = time.time()
-        reranker = self._get_reranker()
+        # --- Step 4: Query type (for boosting) ---
+        query_type = self._classify_query(query_text)
+        logger.info("Query type: %s", query_type)
+        boost_multiplier = (
+            2.5 if query_type == "statute_interpretation" else (2.0 if query_type == "conditions" else 1.5)
+        )
+        # --- Step 5: Rerank with Cohere (or skip for fast mode) ---
         top_k = final_limit if final_limit is not None else config.CHUNKS_TO_LLM
-        reranked = reranker.rerank(query_text, combined, top_k=top_k)
-        rerank_elapsed = time.time() - rerank_start
-        logger.info("Rerank done → top %s in %.1fs", len(reranked), rerank_elapsed)
+        if config.RERANK_ENABLED:
+            logger.info("Reranking...")
+            rerank_start = time.time()
+            reranker = self._get_reranker()
+            rerank_n = min(config.RERANK_MAX_DOCS, len(combined))
+            reranked = reranker.rerank(query_text, combined[:rerank_n], top_k=rerank_n)
+            logger.info("Rerank done → top %s in %.1fs", len(reranked), time.time() - rerank_start)
+            reranked = self._rrf_blend_scores(reranked, k=60)
+        else:
+            # Fast mode: use pre-rerank order (RRF from hybrid), apply exact-match boost only
+            reranked = combined[: min(config.RERANK_MAX_DOCS, len(combined))]
+            for r in reranked:
+                base = r.get("score", 0) or 0.3  # 0.3 for direct chunks (no score)
+                r["rerank_score"] = base
+                r["blended_score"] = base
 
-        # Log final reranked results (what the LLM will see)
+        # --- Step 7: Exact-match boost (statute/case ID in chunk) ---
+        for r in reranked:
+            exact_boost = self._compute_exact_match_boost(r, query_text)
+            r["blended_score"] = r.get("blended_score", 0) * (exact_boost ** (boost_multiplier - 1))
+        reranked.sort(key=lambda x: x.get("blended_score", 0), reverse=True)
+
+        # --- Step 8: Smart diversity cap (top 2 uncapped, then max 3 per case) ---
+        reranked = self._smart_diversity_cap(reranked, max_per_case=3, top_k=top_k)
+
+        # --- Step 9: When query mentions specific case(s), put those chunks first ---
+        if mentioned_ids and reranked:
+            mentioned_set = {c.upper() for c in mentioned_ids}
+            from_asked = [r for r in reranked if (r.get("metadata") or {}).get("case_id", "").upper() in mentioned_set]
+            others = [r for r in reranked if (r.get("metadata") or {}).get("case_id", "").upper() not in mentioned_set]
+            reranked = from_asked + others
+            if from_asked:
+                logger.info("Focus case(s) %s → %s chunks prioritized", mentioned_ids, len(from_asked))
+
+        # Optional: log rank of first mentioned case in final list (for debugging)
+        if mentioned_ids and reranked:
+            focus = mentioned_ids[0].upper()
+            for i, r in enumerate(reranked):
+                if ((r.get("metadata") or {}).get("case_id") or "").upper() == focus:
+                    logger.info("Focus case %s final rank: %s", focus, i + 1)
+                    break
+
         logger.info("Final results sent to LLM:")
         for i, r in enumerate(reranked):
-            src = r.get("source", "?")
-            score = r.get("score", 0)
             meta = r.get("metadata", {})
             label = meta.get("case_id") or meta.get("title") or meta.get("uri") or "?"
-            logger.info("  [%s] %s | %s | score=%.4f", i + 1, src, label, score)
+            logger.info("  [%s] %s | blended=%.4f", i + 1, label, r.get("blended_score", 0))
 
         return reranked

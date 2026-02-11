@@ -53,7 +53,7 @@ KEYWORDS_END = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Section headers (order matters for splitting)
+# Section headers (order matters for splitting). Covers 1926–2026 KKO formats (Finnish/English, various phrasings).
 SECTION_HEADERS = [
     (
         "lower_court",
@@ -74,7 +74,35 @@ SECTION_HEADERS = [
         re.compile(r"^(?:Supreme Court decision|Korkeimman oikeuden ratkaisu)\s*$", re.IGNORECASE | re.MULTILINE),
     ),
     ("reasoning", re.compile(r"^(?:Reasoning|Perustelut)\s*$", re.IGNORECASE | re.MULTILINE)),
-    ("judgment", re.compile(r"^(?:Judgment|Tuomiolauselma)\s*$", re.IGNORECASE | re.MULTILINE)),
+    (
+        "background",
+        re.compile(
+            r"^(?:Background of the matter|Asian tausta|Asian tausta ja kysymyksenasettelu)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
+    (
+        "legislation",
+        re.compile(
+            r"^(?:Legislation|Lainsäädäntö|Sovellettava (?:lainsäädäntö|säännös)|Applicable (?:law|provision))\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
+    (
+        "question",
+        re.compile(
+            r"^(?:Question(?:ing)? (?:in the Supreme Court|before the court)?|Kysymyksenasettelu (?:Korkeimmassa oikeudessa)?)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
+    ("judgment", re.compile(r"^(?:Judgment|Tuomiolauselma|Päätöslauselma)\s*$", re.IGNORECASE | re.MULTILINE)),
+    (
+        "dissenting",
+        re.compile(
+            r"^(?:Statement of (?:a )?dissenting member|Eri mieltä olevan jäsenen lausunto|Eri mieltä olevien jäsenten lausunnot)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
 ]
 # Judges line at end
 PATTERN_JUDGES_LINE = re.compile(
@@ -335,9 +363,13 @@ def _build_sections(full_text: str) -> list[CaseSection]:
     type_map = {
         "lower_court": "lower_court",
         "appeal_section": "appeal_court",
-        "supreme_decision": "background",
+        "supreme_decision": "supreme_decision",
         "reasoning": "reasoning",
+        "background": "background",
+        "legislation": "legislation",
+        "question": "question",
         "judgment": "judgment",
+        "dissenting": "dissenting",
     }
     for sec_type, title, content in raw_sections:
         normalized_type = type_map.get(sec_type, "other")

@@ -23,7 +23,6 @@ from .state import AgentState
 def route_intent(state: AgentState) -> Literal["search", "chat", "clarify"]:
     """Route based on analysis intent"""
     intent = state.get("intent", "search")
-    print(f"DEBUG: Routing intent '{intent}'. State keys: {list(state.keys())}")
     intent_map = {
         "legal_search": "search",
         "general_chat": "chat",

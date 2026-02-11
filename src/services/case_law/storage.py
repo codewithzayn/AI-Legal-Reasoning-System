@@ -193,6 +193,8 @@ class CaseLawStorage:
     # Max chars per chunk for embedding.  Smaller = more focused embedding.
     # 2 000 chars ≈ 500-700 tokens for Finnish legal text — well within the
     # sweet-spot for text-embedding-3-small (best recall at < 800 tokens).
+    # If you change these or _sub_chunk logic, re-run ingestion for affected
+    # years/cases to regenerate chunks and embeddings (e.g. make ingest-precedents YEAR=...).
     _MAX_CHUNK_CHARS = 2000
 
     # Overlap between consecutive chunks (in characters).
@@ -238,12 +240,33 @@ class CaseLawStorage:
 
         return chunks
 
-    def _store_sections(self, case_law_id: str, doc: CaseLawDocument) -> int:
-        """Extract sections, sub-chunk large ones, generate embeddings, and store in case_law_sections"""
+    def _store_sections(self, case_law_id: str, doc: CaseLawDocument) -> int:  # noqa: C901, PLR0912
+        """Extract sections, sub-chunk large ones, generate embeddings, and store in case_law_sections.
+        Headers include headings, jurisdiction, and cited legislation so retrieval can answer by them.
+        """
 
         sections = []
         section_number = 0
-        metadata_header = f"[{doc.case_id}] {doc.title or ''}\nKeywords: {', '.join(doc.legal_domains or [])}\n\n"
+        # Rich header: case, keywords (legal domains), jurisdiction, cited laws — any format, 1926–2026
+        jurisdiction_parts = []
+        if (getattr(doc, "lower_court_name", None) or "").strip():
+            jurisdiction_parts.append(f"Lower court: {doc.lower_court_name}")
+        if (getattr(doc, "appeal_court_name", None) or "").strip():
+            jurisdiction_parts.append(f"Appeal court: {doc.appeal_court_name}")
+        jurisdiction_str = "; ".join(jurisdiction_parts) if jurisdiction_parts else ""
+        cited_str = ""
+        if getattr(doc, "cited_laws", None) or getattr(doc, "cited_regulations", None):
+            laws = list(doc.cited_laws or []) + [
+                r if isinstance(r, str) else getattr(r, "name", str(r)) for r in (doc.cited_regulations or [])
+            ]
+            if laws:
+                cited_str = "Cited laws/regulations: " + ", ".join(laws[:15]) + "\n"
+        metadata_header = f"[{doc.case_id}] {doc.title or ''}\nKeywords: {', '.join(doc.legal_domains or [])}\n"
+        if jurisdiction_str:
+            metadata_header += f"Jurisdiction: {jurisdiction_str}\n"
+        if cited_str:
+            metadata_header += cited_str
+        metadata_header += "\n"
 
         # Use AI-extracted sections when present and non-empty (filter empty content)
         ai_sections = getattr(doc, "ai_sections", None) or []
@@ -254,13 +277,17 @@ class CaseLawStorage:
                 sec_type = (section_data.get("type") or "other").strip() or "other"
                 sec_title = (section_data.get("title") or "").strip() or "Section"
 
-                # Build per-section header so the embedding captures WHICH section
-                # this chunk belongs to (e.g. "Section: Korkeimman oikeuden perustelut")
+                # Per-section header: section heading + same context so embedding captures structure
                 section_header = (
                     f"[{doc.case_id}] {doc.title or ''}\n"
                     f"Section: {sec_title}\n"
-                    f"Keywords: {', '.join(doc.legal_domains or [])}\n\n"
+                    f"Keywords: {', '.join(doc.legal_domains or [])}\n"
                 )
+                if jurisdiction_str:
+                    section_header += f"Jurisdiction: {jurisdiction_str}\n"
+                if cited_str:
+                    section_header += cited_str
+                section_header += "\n"
 
                 # Sub-chunk large sections so every part gets a focused embedding
                 chunks = self._sub_chunk(content)

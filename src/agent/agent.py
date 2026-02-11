@@ -9,6 +9,7 @@ from src.config.logging_config import setup_logger
 
 from .graph import agent_graph
 from .state import AgentState
+from .stream import _strip_relevancy_line
 
 logger = setup_logger(__name__)
 
@@ -52,13 +53,7 @@ def process_query(user_query: str, chat_history: list = None) -> str:
         logger.info(f"TOTAL TIME: {total_elapsed:.2f}s")
 
         resp = final_state.get("response", "Error: No response generated")
-        score = final_state.get("relevancy_score")
-        reason = final_state.get("relevancy_reason")
-        if score is not None and reason:
-            resp += f"\n\n---\n⚖️ Relevanssi: {int(score)}/5. {reason}"
-        elif score is not None:
-            resp += f"\n\n---\n⚖️ Relevanssi: {int(score)}/5."
-        return resp
+        return _strip_relevancy_line(resp)
 
     except Exception:
         # Error handling

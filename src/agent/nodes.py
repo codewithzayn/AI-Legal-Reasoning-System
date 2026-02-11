@@ -21,12 +21,42 @@ logger = setup_logger(__name__)
 # Reusable LLM instances to prevent excessive background task creation
 # and resolve "Task destroyed but pending" warnings.
 _llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-_generator = LLMGenerator()
+_generator = LLMGenerator()  # model from config.OPENAI_CHAT_MODEL (e.g. gpt-4o for deeper legal analysis)
+
+
+def _is_obvious_legal_query(query: str) -> bool:
+    """Fast path: skip LLM when query is clearly a legal question."""
+    if not query or len(query.strip()) < 3:
+        return False
+    q = query.strip().lower()
+    legal_markers = (
+        "kko",
+        "kho",
+        "laki",
+        "§",
+        "pykälä",
+        "tuomio",
+        "rangaistus",
+        "edellyty",
+        "milloin",
+        "missä tapauksessa",
+        "rikos",
+        "sopimus",
+        "oikeus",
+        "finlex",
+        "ennakkopäätös",
+        "tuomioistuin",
+        "syyte",
+        "valitus",
+        "hakemus",
+    )
+    return any(m in q for m in legal_markers) or len(q) > 40
 
 
 async def analyze_intent(state: AgentState) -> AgentState:
     """
     Node 1: Analyze User Intent (Async)
+    Fast path: skip LLM for obvious legal queries.
     """
     state["stage"] = "analyze"
     query = state["query"]
@@ -34,6 +64,16 @@ async def analyze_intent(state: AgentState) -> AgentState:
     if not state.get("original_query"):
         state["original_query"] = query
         state["search_attempts"] = 0
+
+    # Fast path: skip LLM for obvious legal questions (saves ~1-2s)
+    if _is_obvious_legal_query(query):
+        logger.info("Fast path: legal_search (no LLM)")
+        return {
+            "intent": "legal_search",
+            "stage": "analyze",
+            "original_query": state.get("original_query", query),
+            "search_attempts": 0,
+        }
 
     logger.info("Analyzing intent...")
 
@@ -192,14 +232,19 @@ async def reason_legal(state: AgentState) -> AgentState:
 
     start_time = time.time()
     logger.info(f"Generating response from {len(results)} chunks...")
+    focus_case_ids = HybridRetrieval.extract_case_ids(state["query"]) if state.get("query") else []
+    if focus_case_ids:
+        logger.info("Focus case(s) for answer: %s", focus_case_ids)
     try:
-        response = await _generator.agenerate_response(query=state["query"], context_chunks=results)
+        response = await _generator.agenerate_response(
+            query=state["query"], context_chunks=results, focus_case_ids=focus_case_ids or None
+        )
         state["response"] = response
         elapsed = time.time() - start_time
         logger.info(f"Response ready in {elapsed:.1f}s")
 
-        # Relevancy check: pass compact representation (truncated + citations) to stay within context
-        if response and not response.startswith("Pahoittelut"):
+        # Relevancy check (optional, adds ~2-5s; set RELEVANCY_CHECK_ENABLED=true to enable)
+        if config.RELEVANCY_CHECK_ENABLED and response and not response.startswith("Pahoittelut"):
             try:
                 rel = await check_relevancy(state["query"], response)
                 state["relevancy_score"] = float(rel["score"])

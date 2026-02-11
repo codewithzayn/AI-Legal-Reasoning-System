@@ -3,6 +3,7 @@ Case Law Scraper for Finnish Supreme Court (KKO) and Supreme Administrative Cour
 Uses Playwright to render JavaScript and extract full case content
 """
 
+import asyncio
 import re
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urljoin
@@ -247,58 +248,138 @@ class CaseLawScraper:
 
         documents = []
         for i, url in enumerate(urls):
-            logger.info(f"Fetching case {i + 1}/{len(urls)}: {url}")
+            logger.info("Fetching case %s/%s: %s", i + 1, len(urls), url)
             doc = await self.fetch_case_by_url(url, court, year)
             if doc:
                 documents.append(doc)
             else:
-                logger.warning(f"Failed to fetch/parse: {url}")
+                logger.warning("Failed to fetch/parse: %s", url)
+            # Short delay between requests to reduce connection resets / rate limits
+            if i < len(urls) - 1:
+                await asyncio.sleep(1)
 
-        logger.info(f"Completed year {year}: {len(documents)} cases extracted")
+        logger.info("Completed year %s: %s cases extracted", year, len(documents))
         return documents
 
-    async def fetch_case_by_url(self, url: str, court: str, year: int) -> CaseLawDocument | None:
-        """Fetch and parse a single case by its direct URL"""
-        try:
-            response = await self.page.goto(url, wait_until="networkidle", timeout=60000)
-
-            if response and response.status == 404:
-                logger.warning(f"Case {url} returned 404 status via Playwright")
-                return None
-
-            await self.page.wait_for_timeout(1000)
-
-            # Validate via title or visible content instead of raw HTML source
-            page_title = await self.page.title()
-            if "404" in page_title or "Sivua ei löytynyt" in page_title:
-                logger.warning(f"Case {url} returned 404 based on title")
-                return None
-
-            full_text = await self.page.evaluate("""() => {
-            const article = document.querySelector('article');
-            if (article) return article.innerText;
-            const main = document.querySelector('main');
-            if (main) return main.innerText;
-            return document.body.innerText;
-        }""")
-
-            if "Sivua ei löytynyt" in full_text:
-                logger.warning(f"Case {url} content indicates 404")
-                return None
-
-            # Extract case number from URL for fallback
-            # e.g. .../2025/23 -> 23
-            try:
-                url_number = int(url.split("/")[-1])
-            except ValueError:
-                url_number = 0
-
-            document = self._parse_case_text(full_text, court, year, url_number, url)
-            return document
-
-        except Exception as e:
-            logger.error(f"Error fetching case {url}: {e}")
+    def _case_id_to_url(self, case_id: str, court: str, subtype: str | None) -> str | None:
+        """Build Finlex case page URL from case_id (e.g. KKO:2018:72).
+        Returns None if court/subtype not supported or case_id format invalid.
+        """
+        parts = (case_id or "").strip().replace(" ", ":").split(":")
+        if len(parts) < 3:
             return None
+        try:
+            year = int(parts[-2])
+            num = parts[-1]
+        except (ValueError, IndexError):
+            return None
+        if court not in self.INDEX_URL_PATTERNS:
+            return None
+        patterns = self.INDEX_URL_PATTERNS[court]
+        if not subtype or subtype not in patterns:
+            return None
+        base = patterns[subtype][0].format(year=year)
+        return f"{base}/{num}"
+
+    async def fetch_cases_by_ids(
+        self, court: str, year: int, subtype: str | None, case_ids: list[str]
+    ) -> list[CaseLawDocument]:
+        """Fetch only the given case IDs (e.g. ['KKO:2018:72', 'KKO:2018:73']).
+        Uses direct case page URLs; does not scrape the full year index.
+        """
+        if not case_ids:
+            return []
+        seen = set()
+        documents = []
+        for case_id in case_ids:
+            cid = (case_id or "").strip()
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            url = self._case_id_to_url(cid, court, subtype)
+            if not url:
+                logger.warning("Cannot build URL for case_id=%s (court=%s, subtype=%s)", cid, court, subtype)
+                continue
+            logger.info("Fetching case %s: %s", cid, url)
+            doc = await self.fetch_case_by_url(url, court, year)
+            if doc:
+                documents.append(doc)
+            else:
+                logger.warning("Failed to fetch: %s", cid)
+        return documents
+
+    @staticmethod
+    def _is_retriable_error(exc: Exception) -> bool:
+        """True if the error is transient (network/timeout) and worth retrying."""
+        msg = (exc.args[0] if exc.args else "") or str(exc)
+        msg_lower = msg.lower()
+        retriable = (
+            "err_internet_disconnected" in msg_lower
+            or "err_connection" in msg_lower
+            or "err_network" in msg_lower
+            or "timeout" in msg_lower
+            or "net::" in msg
+        )
+        return bool(retriable)
+
+    async def fetch_case_by_url(self, url: str, court: str, year: int, max_retries: int = 3) -> CaseLawDocument | None:
+        """Fetch and parse a single case by its direct URL. Retries on transient network errors."""
+        for attempt in range(max_retries):
+            try:
+                # Use 'load' (not networkidle) so slow Finlex/analytics don't cause timeout; 2 min timeout
+                response = await self.page.goto(url, wait_until="load", timeout=120000)
+
+                if response and response.status == 404:
+                    logger.warning("Case %s returned 404 status via Playwright", url)
+                    return None
+
+                await self.page.wait_for_timeout(2000)
+
+                page_title = await self.page.title()
+                if "404" in page_title or "Sivua ei löytynyt" in page_title:
+                    logger.warning("Case %s returned 404 based on title", url)
+                    return None
+
+                full_text = await self.page.evaluate("""() => {
+                const article = document.querySelector('article');
+                if (article) return article.innerText;
+                const main = document.querySelector('main');
+                if (main) return main.innerText;
+                return document.body.innerText;
+            }""")
+
+                if "Sivua ei löytynyt" in full_text:
+                    logger.warning("Case %s content indicates 404", url)
+                    return None
+
+                url_last = url.rstrip("/").split("/")[-1]
+                try:
+                    url_number = int(url_last)
+                    url_suffix = None
+                except ValueError:
+                    url_number = 0
+                    url_suffix = url_last
+
+                document = self._parse_case_text(full_text, court, year, url_number, url, url_suffix=url_suffix)
+                return document
+
+            except Exception as e:
+                if self._is_retriable_error(e) and attempt < max_retries - 1:
+                    delay = (attempt + 1) * 5  # 5s, 10s, 15s
+                    logger.warning(
+                        "Attempt %s/%s failed for %s (%s), retrying in %ss...",
+                        attempt + 1,
+                        max_retries,
+                        url,
+                        e,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error("Error fetching case %s: %s", url, e)
+                    return None
+        logger.error("Failed to fetch/parse: %s", url)
+        return None
 
     # ----------------------------------------------------------------
     #  Metadata header labels (Finnish website text -> field mapping)
@@ -412,23 +493,32 @@ class CaseLawScraper:
             return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
         return date_str  # Return as-is if not parseable
 
-    def _parse_case_text(self, text: str, court: str, year: int, number: int, url: str) -> CaseLawDocument:
+    def _parse_case_text(
+        self, text: str, court: str, year: int, number: int, url: str, *, url_suffix: str | None = None
+    ) -> CaseLawDocument:
         """
         Create a CaseLawDocument from the scraped text.
         Extracts metadata from the structured header block and populates all available fields.
+        url_suffix: when URL path ends with a non-numeric segment (e.g. "II-219" for 1926 precedents), use for case_id.
         """
         court_prefix = "KKO" if court == "supreme_court" else "KHO"
 
-        # Extract case_id
-        case_id_match = re.search(rf"{court_prefix}[:\s]*\d{{4}}[:\s]*\d+", text)
-        if not case_id_match:
-            case_id_match = re.search(rf"{court_prefix}\s+\d{{1,2}}\.\d{{1,2}}\.{year}/\d+", text)
-
-        if case_id_match:
-            raw_id = case_id_match.group(0)
-            final_id = raw_id if "/" in raw_id else raw_id.replace(" ", ":")
+        # Extract case_id: prefer old format (KKO:1926-I-10, KKO:1926-II-219) from first line, then modern format
+        first_line = (text.split("\n")[0] or "").strip()
+        old_format_match = re.match(rf"^({court_prefix}:\d{{4}}-[IVXLCDM]+-\d+)\b", first_line, re.IGNORECASE)
+        if old_format_match:
+            final_id = old_format_match.group(1)
         else:
-            final_id = f"{court_prefix}:{year}:{number}"
+            case_id_match = re.search(rf"{court_prefix}[:\s]*\d{{4}}[:\s]*\d+", text)
+            if not case_id_match:
+                case_id_match = re.search(rf"{court_prefix}\s+\d{{1,2}}\.\d{{1,2}}\.{year}/\d+", text)
+            if case_id_match:
+                raw_id = case_id_match.group(0)
+                final_id = raw_id if "/" in raw_id else raw_id.replace(" ", ":")
+            elif url_suffix:
+                final_id = f"{court_prefix}:{year}:{url_suffix}"
+            else:
+                final_id = f"{court_prefix}:{year}:{number}"
 
         # Decision type from URL
         decision_type = "precedent"

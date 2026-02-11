@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 from src.services.case_law.hybrid_extractor import HybridPrecedentExtractor
 from src.services.case_law.scraper import CaseLawDocument, CaseLawScraper, Reference
 from src.services.case_law.storage import CaseLawStorage
@@ -48,8 +49,9 @@ class IngestionManager:
         Returns list of failed case_id descriptions (empty if all succeeded).
         """
         start_time = time.time()
+        use_ai = use_ai and getattr(config, "USE_AI_EXTRACTION", True)
         subtype_str = f" ({subtype})" if subtype else " (ALL)"
-        extract_str = " + extract" if use_ai else ""
+        extract_str = " + extract" if use_ai else " (regex only)"
         logger.info(f"🚀 Starting Ingestion: {self.court.upper()} {year}{subtype_str}{extract_str}")
 
         # 1. Resolve paths & load/scrape
@@ -114,6 +116,87 @@ class IngestionManager:
                 logger.error("  - %s", fid)
 
         return failed_ids
+
+    async def ingest_case_ids(
+        self,
+        year: int,
+        subtype: str,
+        case_ids: list[str],
+        use_ai: bool = True,
+        update_json_cache: bool = True,
+    ) -> list[str]:
+        """Run ingestion for specific case IDs only: Scrape those cases -> Extract -> Store.
+        Optionally updates the year JSON cache so the local file has correct full_text for future runs.
+
+        Use this to fix a few documents (e.g. empty full_text) without re-running the full year.
+        Returns list of failed case_id descriptions (empty if all succeeded).
+        """
+        if not case_ids:
+            logger.info("No case_ids provided.")
+            return []
+        start_time = time.time()
+        use_ai = use_ai and getattr(config, "USE_AI_EXTRACTION", True)
+        logger.info("🚀 Ingesting %s case(s) only: %s", len(case_ids), case_ids)
+
+        json_file, _ = self._resolve_json_path(year, subtype)
+        tracking_id = self._init_tracking(year, subtype)
+
+        async with CaseLawScraper() as scraper:
+            documents = await scraper.fetch_cases_by_ids(self.court, year, subtype, case_ids)
+
+        if not documents:
+            logger.warning("No documents fetched for case_ids=%s", case_ids)
+            self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
+            return list(case_ids)
+
+        if update_json_cache and json_file.exists():
+            self._merge_docs_into_json(documents, json_file)
+
+        if use_ai and self.court == "supreme_court" and subtype == "precedent":
+            self._run_extraction(documents, json_file, False, tracking_id)
+
+        stored_count, failed_ids = self._store_documents(documents, year, subtype, tracking_id)
+        self._track_status(
+            year,
+            "completed" if stored_count > 0 else "failed",
+            total=len(documents),
+            processed=stored_count,
+            last_case=documents[-1].case_id if documents else None,
+            tracking_id=tracking_id,
+            subtype=subtype,
+        )
+        elapsed = time.time() - start_time
+        logger.info("✅ Case-ID ingestion done: %s/%s stored in %.2fs", stored_count, len(documents), elapsed)
+        if failed_ids:
+            for fid in failed_ids:
+                logger.error("  - %s", fid)
+        return failed_ids
+
+    def _merge_docs_into_json(self, new_documents: list[CaseLawDocument], json_file: Path) -> None:
+        """Load JSON cache, replace entries with same case_id as in new_documents, save."""
+        try:
+            with open(json_file, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning("Could not load JSON for merge: %s", e)
+            return
+        new_by_id = {d.case_id: d for d in new_documents}
+        updated = 0
+        for i, item in enumerate(data):
+            cid = item.get("case_id")
+            if cid in new_by_id:
+                doc = new_by_id[cid]
+                data[i] = doc.to_dict()
+                data[i]["references"] = [vars(r) for r in doc.references]
+                updated += 1
+        if not updated:
+            return
+        try:
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info("Updated %s entries in %s", updated, json_file.name)
+        except Exception as e:
+            logger.warning("Could not save JSON after merge: %s", e)
 
     # ------------------------------------------------------------------
     #  ingest_year helper methods

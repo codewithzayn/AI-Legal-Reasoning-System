@@ -126,7 +126,7 @@ def _upload_to_drive(
                 upload_path.unlink(missing_ok=True)
 
 
-def run_export(
+def run_export(  # noqa: PLR0915
     year: int,
     subtype: str,
     export_root: Path,
@@ -159,15 +159,36 @@ def run_export(
     skipped = 0
     failed_ids: list[str] = []
     for i, doc in enumerate(documents, 1):
-        if not doc or not (getattr(doc, "full_text", None) or "").strip():
+        full_text_val = (getattr(doc, "full_text", None) or "").strip()
+        if not doc or not full_text_val:
             case_id = getattr(doc, "case_id", "?") if doc else "?"
-            logger.warning("[%s/%s] %s has no full_text, skip", i, len(documents), case_id)
-            fail += 1
-            failed_ids.append(f"{case_id} (no full_text)")
+            logger.warning(
+                "[%s/%s] %s SKIP — no full_text; document not exported and not uploaded to Drive (safe skip)",
+                i,
+                len(documents),
+                case_id,
+            )
+            skipped += 1
             continue
         pdf_name = get_pdf_filename(getattr(doc, "case_id", None) or "unknown")
         try:
             pdf_bytes = doc_to_pdf(doc)
+        except ValueError as e:
+            if "full_text is empty" in str(e) or "cannot generate PDF" in str(e):
+                case_id = getattr(doc, "case_id", "?")
+                logger.warning(
+                    "[%s/%s] %s SKIP — %s; not uploaded to Drive",
+                    i,
+                    len(documents),
+                    case_id,
+                    e,
+                )
+                skipped += 1
+            else:
+                logger.exception("[%s/%s] %s PDF failed: %s", i, len(documents), doc.case_id, e)
+                fail += 1
+                failed_ids.append(f"{doc.case_id} (PDF generation error)")
+            continue
         except Exception as e:
             logger.exception("[%s/%s] %s PDF failed: %s", i, len(documents), doc.case_id, e)
             fail += 1
@@ -185,6 +206,16 @@ def run_export(
                 failed_ids.append(f"{doc.case_id} (write error)")
                 continue
         if drive_uploader:
+            # Safety: never upload to Drive when full_text is empty (no risk of uploading placeholder PDFs)
+            if not (getattr(doc, "full_text", None) or "").strip():
+                logger.warning(
+                    "[%s/%s] %s SKIP upload — full_text empty; PDF not uploaded to Drive",
+                    i,
+                    len(documents),
+                    doc.case_id,
+                )
+                skipped += 1
+                continue
             # Compute stable hash from source content (not PDF bytes, which have timestamps)
             source_content = (getattr(doc, "case_id", "") or "") + (getattr(doc, "full_text", "") or "")
             content_hash = GoogleDriveUploader.compute_content_hash(source_content)
@@ -292,13 +323,19 @@ def main() -> int:
             total_skipped += skipped
             all_failed_ids.extend(failed_ids)
 
-    logger.info("Done. Exported %s PDFs, %s skipped (unchanged), %s failed.", total_ok, total_skipped, total_fail)
+    logger.info(
+        "Done. Exported %s PDFs, %s skipped (no full_text), %s failed.",
+        total_ok,
+        total_skipped,
+        total_fail,
+    )
 
     if all_failed_ids:
         logger.error("⚠️  FAILED DOCUMENTS (%s):", len(all_failed_ids))
         for fid in all_failed_ids:
             logger.error("  - %s", fid)
 
+    # Exit 0 when only skips (no full_text); exit 1 only on real failures (PDF/write/upload).
     return 0 if total_fail == 0 else 1
 
 

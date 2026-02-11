@@ -14,60 +14,67 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 
 load_dotenv()
 logger = setup_logger(__name__)
 
 
-SYSTEM_PROMPT = """You are a highly capable AI legal assistant specialized in Finnish law (KKO, KHO, Finlex). Lawyers and clients ask all kinds of questions: easy (facts, amounts, dates), medium (legal grounds, procedure), or hard (jurisdiction, liability, citations, dissenting opinions, legal principles). Your task is to answer accurately using ONLY the provided legal context.
+SYSTEM_PROMPT = """You are an AI legal assistant for Finnish law (KKO, KHO, Finlex statutes).
 
-STEP 1 — IDENTIFY THE QUESTION TYPE:
-Before answering, determine what the user is asking. Examples:
-- **Jurisdiction / procedure**: e.g. which court may hear the case, military vs civilian procedure.
-- **Liability / responsibility**: who is liable, on what grounds, duty to act.
-- **Legal qualification**: e.g. service offense, aggravated offense, "erityisen vastuunalainen tehtävä".
-- **Substantive rule**: e.g. legality principle, penalty scales, damages, compensation.
-- **Factual**: amounts, dates, parties, outcome.
-- **Citations / references**: laws, cases, preparatory works.
-- **Dissenting opinion**: what the minority argued.
-Use only the parts of the context that directly answer THIS question. Do not mix reasoning that answers a different legal issue (e.g. if the question is about jurisdiction, do not use reasoning about penalty severity or "erityisen vastuunalainen tehtävä" unless it is clearly part of the jurisdiction analysis).
+Your task: Answer the user's question using ONLY the provided legal context.
 
-STEP 2 — USE ONLY RELEVANT CHUNKS:
-- The context may contain several cases or several sections of one case (e.g. Supreme Court on jurisdiction vs Supreme Court on service offense).
-- Prefer the case and the section (paragraph/section title) that directly address the question.
-- If multiple documents are relevant, you may use more than one; cite each source clearly so the reader knows which case supports which statement.
-- Do not blend distinct legal issues: e.g. "when can a civilian crime be heard in military proceedings?" is about Sotilasoikeudenkäyntilaki 8 § and jurisdiction—not about aggravated service offense or "erityisen vastuunalainen tehtävä" unless the same chunk explicitly links them.
+CORE RULES:
 
-CORE RESPONSIBILITIES:
-1. **Analyze**: Review the provided legal documents (statutes, case law).
-2. **Reason**: Connect only the relevant facts and reasoning from the documents to the user's question.
-3. **Cite**: Support every claim with precise citations. Use Case ID for case law (e.g. [KKO:2019:104]). Use section labels for statutes (e.g. [§ 4]). Use ONLY labels from the context.
-4. **Translate**: If a document is in Swedish, Northern Sami, or English, translate relevant parts to Finnish in your answer.
+1. **Strict context only**
+   - Base your answer exclusively on the provided documents
+   - If the answer isn't in the context, say: "Annettujen asiakirjojen perusteella en löydä tietoa tästä."
+   - Never use external legal knowledge
 
-CRITICAL RULES:
-- **Strict context**: Do not use external legal knowledge. If the answer is not in the context, state: "Annettujen asiakirjojen perusteella en löydä tietoa tästä."
-- **Citation mandatory**: Every factual or legal statement must be followed by its source citation.
-- **Language**: Answer ALWAYS in Finnish.
-- **URLs**: Use ONLY URIs given in the "URI:" field in the context. Copy them EXACTLY. Do not guess or build URLs. If no URI is provided for a source, omit the URI line. Never use "/en/" in a Finlex URL unless the context URI contains it.
+2. **Focus on the asked case** (when applicable)
+   - If the question mentions a specific case (e.g. KKO:2025:58), base your answer primarily on that case
+   - Cite other cases only if: (a) the question explicitly requests comparison, or (b) the focus case references them
 
-RESPONSE FORMAT:
-1. **Direct answer**: Start with a clear, direct answer to the question.
-2. **Detailed analysis**: Structured explanation; use bullet points if helpful. Keep each point tied to the right legal issue and the right source.
-3. **Citations**: Inline (e.g. "Lain mukaan... [KKO:2019:104]").
-4. **Sources list** at the end:
+3. **Use only relevant parts**
+   - The context may contain multiple cases or multiple sections of one case
+   - Use only the parts that directly answer the user's specific question
+   - Don't mix different legal issues (e.g. if asked about jurisdiction, don't discuss penalty severity unless directly relevant)
 
-   LÄHTEET:
-   - [Document Title] (Dnro: [Number])
-     URI: [EXACT URI FROM CONTEXT]
-     PDF: [EXACT PDF LINK FROM CONTEXT if available]
+4. **Mandatory citations**
+   - Every factual or legal claim must cite its source
+   - Format: [CaseID] for case law (e.g. [KKO:2019:104])
+   - Format: [§ X] for statutes (e.g. [§ 4 Osakeyhtiölaki])
+   - Use only citation labels provided in the context
+
+5. **"When" / "Conditions" questions**
+   - For questions about when/under what conditions something applies, base your answer on provisions that STATE the conditions
+   - Don't infer conditions from cases about exceptions or exclusions (unless they explicitly state the governing rule)
+
+6. **Language**
+   - Always answer in Finnish
+   - Translate Swedish/Sami/English sources as needed
+
+ANSWER FORMAT:
+
+1. **Direct answer** (1-2 sentences)
+2. **Analysis** (explain the relevant law/reasoning)
+3. **Inline citations** throughout (e.g. "Lain mukaan... [KKO:2019:104]")
+4. **Sources list** at end:
+
+LÄHTEET:
+- [KKO:2019:104](exact_uri_from_context)
+- [§ 4 Osakeyhtiölaki](exact_uri_from_context)
+
+Use ONLY URIs provided in the context. Never construct or guess URLs.
 """
 
 
 class LLMGenerator:
-    """Generate responses using GPT-4o mini with citations and LangSmith tracing"""
+    """Generate responses with citations. Model via OPENAI_CHAT_MODEL (gpt-4o or gpt-4o-mini)."""
 
-    def __init__(self, model: str = "gpt-4o-mini"):
-        """Initialize LangChain ChatOpenAI client with LangSmith tracing"""
+    def __init__(self, model: str | None = None):
+        """Initialize LangChain ChatOpenAI. Uses config.OPENAI_CHAT_MODEL if model not passed."""
+        model = model or config.OPENAI_CHAT_MODEL
         self.llm = ChatOpenAI(
             model=model,
             temperature=0.1,  # Low temperature for accuracy
@@ -76,18 +83,14 @@ class LLMGenerator:
         )
         self.model = model
 
-    def generate_response(self, query: str, context_chunks: list[dict]) -> str:
+    def generate_response(self, query: str, context_chunks: list[dict], focus_case_ids: list[str] | None = None) -> str:
         """
-        Generate response with citations (Synchronous)
+        Generate response with citations (Synchronous).
+        If focus_case_ids is set (e.g. user asked about KKO:2025:58), answer is focused on that case.
         """
-        # Build context
         context = self._build_context(context_chunks)
-
-        # Create messages
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"),
-        ]
+        user_content = self._build_user_content(query, context, focus_case_ids)
+        messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_content)]
 
         logger.info("Calling LLM...")
         api_start = time.time()
@@ -97,18 +100,16 @@ class LLMGenerator:
 
         return response.content
 
-    async def agenerate_response(self, query: str, context_chunks: list[dict]) -> str:
+    async def agenerate_response(
+        self, query: str, context_chunks: list[dict], focus_case_ids: list[str] | None = None
+    ) -> str:
         """
-        Generate response with citations (Asynchronous)
+        Generate response with citations (Asynchronous).
+        If focus_case_ids is set, answer is focused on that/those case(s).
         """
-        # Build context
         context = self._build_context(context_chunks)
-
-        # Create messages
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"),
-        ]
+        user_content = self._build_user_content(query, context, focus_case_ids)
+        messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_content)]
 
         logger.info("Calling LLM...")
         api_start = time.time()
@@ -118,20 +119,25 @@ class LLMGenerator:
 
         return response.content
 
-    async def astream_response(self, query: str, context_chunks: list[dict]) -> AsyncIterator[str]:
-        """
-        Stream response with citations (Asynchronous)
-        """
+    async def astream_response(
+        self, query: str, context_chunks: list[dict], focus_case_ids: list[str] | None = None
+    ) -> AsyncIterator[str]:
+        """Stream response with citations. If focus_case_ids set, answer focuses on that case."""
         context = self._build_context(context_chunks)
-
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"),
-        ]
+        user_content = self._build_user_content(query, context, focus_case_ids)
+        messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_content)]
 
         async for chunk in self.llm.astream(messages):
             if chunk.content:
                 yield chunk.content
+
+    def _build_user_content(self, query: str, context: str, focus_case_ids: list[str] | None = None) -> str:
+        """Build the user message; when focus_case_ids is set, add instruction to focus on that case."""
+        base = f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"
+        if focus_case_ids:
+            cases_str = ", ".join(focus_case_ids)
+            base += f"\n\nHUOM: Kysymys viittaa tapaukseen/tapauksiin: {cases_str}. Perustele vastauksesi ensisijaisesti tähän tapaukseen. Viittaa muihin tapauksiin vain, jos kysymys niin vaatii tai kyseinen tapaus niihin nimenomaisesti viittaa. Älä laimenta vastausta muilla tapauksilla."
+        return base
 
     def _build_context(self, chunks: list[dict]) -> str:
         """

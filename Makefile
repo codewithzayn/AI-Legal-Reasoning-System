@@ -3,7 +3,8 @@
 
 .PHONY: help install run run-cli run-api test \
 	lint format lint-fix fix \
-	ingest-precedents ingest-precedents-force ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
+	ingest-precedents ingest-precedents-force ingest-precedents-case-ids ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
+	scrape-json-pdf-drive scrape-json-pdf-drive-range \
 	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
 	ingest-finlex
 
@@ -33,12 +34,16 @@ help:
 	@echo "--- Case law: Supreme Court (KKO) ---"
 	@echo "  make ingest-precedents    Ingest KKO precedents (Ennakkopäätökset). Optional: YEAR=2026"
 	@echo "  make ingest-precedents-force  Same, force re-scrape (ignore JSON cache)"
+	@echo "  make ingest-precedents-case-ids  Ingest only given case IDs. YEAR=... CASE_IDS=\"KKO:2018:72,KKO:2018:73\""
 	@echo "  make ingest-rulings       Ingest KKO other rulings (Muut päätökset). Optional: YEAR=2026"
 	@echo "  make ingest-leaves        Ingest KKO leaves to appeal (Valitusluvat). Optional: YEAR=2026"
 	@echo "  make ingest-kko           Ingest KKO all subtypes (precedent + ruling + leave) for one year. Optional: YEAR=2026"
 	@echo "  make ingest-history       Ingest case law for a year range. Optional: START=1926 END=2026 COURT=supreme_court"
 	@echo ""
-	@echo "--- Case law: PDF backup to Google Drive (separate pipeline) ---"
+	@echo "--- Case law: Scrape → JSON + PDF (ditto) → Drive (one command) ---"
+	@echo "  make scrape-json-pdf-drive  Scrape year → save JSON → PDF (same as website) → Drive. YEAR=2025"
+	@echo "  make scrape-json-pdf-drive-range  Same, range. START=2020 END=2023"
+	@echo "--- Case law: PDF backup from existing JSON (no scrape) ---"
 	@echo "  make export-pdf-drive     Export one year to PDF + Drive. Optional: YEAR=2025"
 	@echo "  make export-pdf-drive-range  Export year range. Optional: START=2020 END=2026"
 	@echo "  make export-pdf-drive-type   Export one type for one year. Optional: TYPE=precedent YEAR=2025"
@@ -103,6 +108,12 @@ ingest-precedents:
 ingest-precedents-force:
 	python3 scripts/case_law/supreme_court/ingest_precedents.py --year $(YEAR) --force
 
+# Ingest only specific precedent case IDs (e.g. to fix empty full_text). Updates JSON cache and DB.
+# Example: make ingest-precedents-case-ids YEAR=2018 CASE_IDS="KKO:2018:72,KKO:2018:73"
+CASE_IDS ?=
+ingest-precedents-case-ids:
+	python3 scripts/case_law/supreme_court/ingest_precedents.py --year $(YEAR) --case-ids "$(CASE_IDS)"
+
 ingest-rulings:
 	python3 scripts/case_law/supreme_court/ingest_rulings.py --year $(YEAR)
 
@@ -126,9 +137,20 @@ ingest-kho:
 	python3 scripts/case_law/supreme_administrative_court/ingest.py --year $(YEAR)
 
 # ------------------------------------------------------------------------------
-# Case law: PDF export and Google Drive backup (separate pipeline, no scrape)
+# Case law: Scrape → JSON + PDF (ditto copy of website) → Google Drive (one command)
 # ------------------------------------------------------------------------------
-# Export existing JSON cache to PDF and upload to Drive. Run after ingestion.
+# No extraction, no Supabase. PDF content = scraped website text (1:1).
+# Requires: GOOGLE_DRIVE_ROOT_FOLDER_ID + credentials in .env
+scrape-json-pdf-drive:
+	python3 scripts/case_law/core/scrape_json_pdf_drive.py --year $(YEAR)
+
+scrape-json-pdf-drive-range:
+	python3 scripts/case_law/core/scrape_json_pdf_drive.py --start $(START) --end $(END)
+
+# ------------------------------------------------------------------------------
+# Case law: PDF export and Google Drive backup (from existing JSON only, no scrape)
+# ------------------------------------------------------------------------------
+# Export existing JSON cache to PDF and upload to Drive. Run after scrape or ingest.
 # Requires: GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_DRIVE_ROOT_FOLDER_ID in .env
 export-pdf-drive:
 	python3 scripts/case_law/core/export_pdf_to_drive.py --year $(YEAR)

@@ -20,17 +20,34 @@ from src.config.logging_config import setup_logger
 logger = setup_logger(__name__)
 
 
-async def main(year: int, force: bool = False):
-    logger.info(f"Starting KKO Precedents Ingestion for {year}")
+def _parse_case_ids(value: str) -> list[str]:
+    """Parse comma-separated case IDs (e.g. KKO:2018:72,KKO:2018:73)."""
+    if not (value or "").strip():
+        return []
+    return [cid.strip() for cid in value.split(",") if cid.strip()]
+
+
+async def main(year: int, force: bool = False, case_ids: list[str] | None = None):
+    logger.info("Starting KKO Precedents Ingestion for %s", year)
 
     manager = IngestionManager("supreme_court")
-    await manager.ingest_year(year, force_scrape=force, subtype="precedent")
+    if case_ids:
+        await manager.ingest_case_ids(year, "precedent", case_ids)
+    else:
+        await manager.ingest_year(year, force_scrape=force, subtype="precedent")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest KKO Precedents")
     parser.add_argument("--year", type=int, default=2026, help="Year to ingest")
-    parser.add_argument("--force", action="store_true", help="Force re-scrape")
+    parser.add_argument("--force", action="store_true", help="Force re-scrape (full year)")
+    parser.add_argument(
+        "--case-ids",
+        type=str,
+        default=None,
+        help="Comma-separated case IDs to ingest only (e.g. KKO:2018:72,KKO:2018:73). Skips full-year run.",
+    )
     args = parser.parse_args()
 
-    asyncio.run(main(args.year, args.force))
+    ids = _parse_case_ids(args.case_ids) if args.case_ids else None
+    asyncio.run(main(args.year, args.force, case_ids=ids))

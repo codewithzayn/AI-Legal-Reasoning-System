@@ -1,6 +1,6 @@
 """
 Cohere Reranker Service
-Re-ranks search results using Cohere Rerank v3
+Re-ranks search results using Cohere Rerank.
 """
 
 import os
@@ -16,23 +16,26 @@ logger = setup_logger(__name__)
 
 class CohereReranker:
     """
-    Re-rank search results using Cohere Rerank v3
+    Re-rank search results using Cohere.
 
-    Model: rerank-multilingual-v3.0 (supports Finnish)
+    Default: rerank-v4.0-fast (low latency, multilingual, Finnish supported).
+    Set COHERE_RERANK_MODEL to rerank-v4.0-pro for higher quality (slower).
     """
 
-    def __init__(self):
+    def __init__(self, model: str | None = None):
         """Initialize Cohere client"""
         api_key = os.getenv("COHERE_API_KEY")
         if not api_key:
             raise ValueError("COHERE_API_KEY not found in environment")
 
         self.client = cohere.Client(api_key)
-        logger.debug("Cohere Rerank initialized")
+        # v4.0-fast: low latency; v4.0-pro: higher quality (slower)
+        self.model = model or os.getenv("COHERE_RERANK_MODEL", "rerank-v4.0-fast").strip() or "rerank-v4.0-fast"
+        logger.debug("Cohere Rerank initialized (model=%s)", self.model)
 
     def rerank(self, query: str, results: list[dict], top_k: int = 10) -> list[dict]:
         """
-        Re-rank search results using Cohere
+        Re-rank search results using Cohere.
 
         Args:
             query: User query
@@ -48,13 +51,12 @@ class CohereReranker:
         # Prepare documents for Cohere
         documents = []
         for result in results:
-            # specialized logic: try 'text', then 'chunk_text', then 'content'
             doc_text = result.get("text") or result.get("chunk_text") or result.get("content") or ""
             documents.append(doc_text)
 
-        # Call Cohere Rerank API
+        # Call Cohere Rerank API (v4.0-fast for production latency)
         response = self.client.rerank(
-            model="rerank-multilingual-v3.0",  # Better for Finnish than v4-fast
+            model=self.model,
             query=query,
             documents=documents,
             top_n=top_k,

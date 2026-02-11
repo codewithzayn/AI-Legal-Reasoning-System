@@ -12,15 +12,22 @@ from .state import AgentState
 logger = setup_logger(__name__)
 
 
+def _strip_relevancy_line(text: str) -> str:
+    """Remove any trailing relevancy score line so it is never shown to the user."""
+    if not text or "Relevanssi:" not in text:
+        return text
+    lines = text.split("\n")
+    out = []
+    for line in lines:
+        if "Relevanssi:" in line and ("/5" in line or "5/5" in line):
+            continue
+        out.append(line)
+    return "\n".join(out).rstrip()
+
+
 async def stream_query_response(user_query: str) -> AsyncIterator[str]:
     """
-    Stream response from agent
-
-    Args:
-        user_query: User's question
-
-    Yields:
-        Response chunks as they're generated
+    Stream response from agent.
     """
     initial_state: AgentState = {
         "query": user_query,
@@ -36,53 +43,33 @@ async def stream_query_response(user_query: str) -> AsyncIterator[str]:
         "error": None,
     }
 
-    # Stream events from the graph
-    # We yield status messages for intermediate steps
     try:
         async for event in agent_graph.astream(initial_state):
             for key, value in event.items():
-                stage = key
-
-                if stage == "analyze":
+                if key == "analyze":
                     yield "🤔 Analysoidaan kysymystä...\n\n"
 
-                elif stage == "search":
+                elif key == "search":
                     count = len(value.get("search_results", []))
                     yield f"🔍 Etsitään tietoa... (Löydetty {count} tulosta)\n\n"
 
-                elif stage == "reformulate":
+                elif key == "reformulate":
                     new_query = value.get("query", "")
                     yield f"🔄 Hakutuloksia ei löytynyt. Tarkennetaan hakua: '{new_query}'...\n\n"
 
-                elif stage == "clarify":
-                    # Yield the clarification question
-                    response = value.get("response", "")
-                    yield response
+                elif key in {"clarify", "chat"}:
+                    yield value.get("response", "")
 
-                elif stage == "chat":
-                    # Yield the chat response
-                    response = value.get("response", "")
-                    yield response
+                elif key == "respond":
+                    resp = value.get("response", "")
+                    yield _strip_relevancy_line(resp)
 
-                elif stage == "respond":
-                    # Yield the final answer
-                    response = value.get("response", "")
-                    yield response
-                    # Relevancy score (compact check ran on truncated answer + citations)
-                    score = value.get("relevancy_score")
-                    reason = value.get("relevancy_reason")
-                    if score is not None and reason:
-                        yield f"\n\n---\n⚖️ Relevanssi: {int(score)}/5. {reason}"
-                    elif score is not None:
-                        yield f"\n\n---\n⚖️ Relevanssi: {int(score)}/5."
-
-                elif stage == "error":
+                elif key == "error":
                     yield f"❌ Virhe: {value.get('error')}"
     except Exception as e:
-        logger.error(f"Stream error: {e}")
+        logger.error("Stream error: %s", e)
         yield f"⚠️ Virhe yhteydessä: {e!s}"
     finally:
-        # Give a small window for background tasks (like LangSmith tracers) to finish
         import asyncio
 
         await asyncio.sleep(0.2)

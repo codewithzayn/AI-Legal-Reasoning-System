@@ -27,18 +27,36 @@ class Config:
 
     # Retrieval Settings
     MATCH_THRESHOLD: float = float(os.getenv("MATCH_THRESHOLD", "0.3"))
-    VECTOR_SEARCH_TOP_K: int = int(os.getenv("VECTOR_SEARCH_TOP_K", "50"))
-    FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "50"))
+    # Lower = faster search. 30 is a good balance for production (was 50).
+    VECTOR_SEARCH_TOP_K: int = int(os.getenv("VECTOR_SEARCH_TOP_K", "30"))
+    FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "30"))
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "10"))
-    # How many candidates to fetch before rerank; then how many to send to the LLM
-    # 50 candidates → gives the reranker enough variety across many documents.
-    # 15 chunks to LLM → ensures multiple sections from the top document are included.
-    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "50"))
-    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "15"))
+    # How many candidates to fetch before rerank; then how many to send to the LLM.
+    # Lower candidates = faster (especially Cohere rerank). 30 is a good balance for production.
+    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "30"))
+    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "10"))
+    # Max documents sent to Cohere (fewer = faster). Default 20 for production latency.
+    RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "20"))
+    # Set to false to skip Cohere rerank (use hybrid + RRF + exact-match only). Saves ~15-25s.
+    RERANK_ENABLED: bool = (os.getenv("RERANK_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
+    # Set to false to skip relevancy check (saves ~2-5s, no score shown).
+    RELEVANCY_CHECK_ENABLED: bool = (os.getenv("RELEVANCY_CHECK_ENABLED", "false")).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
     # Multi-query expansion: generate alternative queries via LLM to improve recall.
     # Set to "false" to disable (saves 1 cheap LLM call per question).
     MULTI_QUERY_ENABLED: bool = (os.getenv("MULTI_QUERY_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
+
+    # Query-time answer generator (user asks a question). Default: cheaper/fast.
+    OPENAI_CHAT_MODEL: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+
+    # Ingestion pipeline (extraction/chunking). Default: GPT-4o for better extraction quality.
+    EXTRACTION_MODEL: str = os.getenv("EXTRACTION_MODEL", "gpt-4o")
+    # Set to false for regex-only extraction (no LLM calls during ingestion; saves cost).
+    USE_AI_EXTRACTION: bool = (os.getenv("USE_AI_EXTRACTION", "true")).strip().lower() in ("true", "1", "yes")
 
     # Embedding Settings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")

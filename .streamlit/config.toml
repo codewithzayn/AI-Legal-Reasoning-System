@@ -2,6 +2,10 @@
 # and keep terminal output clean. Restart the app manually after code changes.
 [server]
 fileWatcherType = "none"
+# Production: allow concurrent connections from multiple users
+enableCORS = true
+enableXsrfProtection = true
+maxUploadSize = 200
 
 # Theme: legal-AI look (aligned with app.py THEME_* tokens)
 [theme]
