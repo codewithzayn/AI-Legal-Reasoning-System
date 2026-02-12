@@ -37,43 +37,118 @@ def _inject_custom_css() -> None:
     st.markdown(
         f"""
         <style>
-            .block-container {{ max-width: 44rem; margin-left: auto; margin-right: auto; padding-top: 1.5rem; padding-bottom: 3rem; }}
+            /* Production: optimized layout */
+            .block-container {{
+                max-width: min(720px, 100vw - 2rem);
+                margin: 0 auto;
+                padding: 1.25rem 1rem;
+            }}
             [data-testid="stChatMessage"] {{
-                padding: 1rem 1.25rem;
-                border-radius: 12px;
-                margin-bottom: 0.75rem;
+                padding: 0.875rem 1rem;
+                border-radius: 10px;
+                margin-bottom: 0.5rem;
                 background: {THEME_BG};
-                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+                box-shadow: 0 1px 2px rgba(15,23,42,0.0);
                 border: 1px solid {THEME_BORDER};
             }}
-            textarea {{ border-radius: 10px !important; min-height: 112px !important; border: 1px solid {THEME_BORDER} !important; }}
-            textarea:focus {{ outline: 2px solid {THEME_ACCENT} !important; outline-offset: 2px !important; }}
+            [data-testid="stChatInput"] {{ margin-top: 0.75rem; }}
+            [data-testid="stChatInput"] textarea {{
+                border-radius: 10px !important;
+                border: 1px solid {THEME_BORDER} !important;
+                font-size: 0.9375rem !important;
+            }}
+            [data-testid="stChatInput"] textarea:focus {{
+                border-color: {THEME_ACCENT} !important;
+                box-shadow: 0 0 0 2px rgba(14,165,233,0.12) !important;
+            }}
             .stButton > button[kind="primary"] {{
                 background: {THEME_PRIMARY} !important;
                 color: white !important;
                 border: none !important;
-                border-radius: 10px !important;
-                padding: 0.5rem 1.25rem !important;
+                border-radius: 8px !important;
+                padding: 0.5rem 1rem !important;
                 font-weight: 600 !important;
             }}
-            .stButton > button[kind="primary"]:hover {{ box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25) !important; }}
-            .stSidebar .stButton > button {{ border-radius: 8px !important; }}
-            .input-card {{
-                border-radius: 12px;
-                padding: 1.25rem;
-                background: {THEME_SURFACE};
-                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
-                border: 1px solid {THEME_BORDER};
-                margin: 1rem 0;
-            }}
-            .main-header-card {{
-                background: {THEME_PRIMARY};
-                padding: 0.875rem 1.25rem;
-                border-radius: 12px;
+            .main-header {{
+                background: linear-gradient(135deg, {THEME_PRIMARY} 0%, {THEME_PRIMARY_LIGHT} 100%);
+                padding: 1rem 1.25rem;
+                border-radius: 10px;
                 margin-bottom: 1.25rem;
-                box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
+                box-shadow: 0 1px 4px rgba(15,23,42,0.06);
             }}
-            .main-header-card .subtitle {{ color: rgba(255,255,255,0.88); margin: 0.25rem 0 0 0; font-size: 0.875rem; }}
+            .main-header h1 {{
+                color: white;
+                margin: 0;
+                font-size: 1.25rem;
+                font-weight: 600;
+                letter-spacing: -0.02em;
+            }}
+            .main-header .subtitle {{
+                color: rgba(255,255,255,0.9);
+                margin: 0.25rem 0 0 0;
+                font-size: 0.8125rem;
+                line-height: 1.4;
+            }}
+            [data-testid="stSidebar"] {{
+                background: {THEME_SURFACE};
+                border-right: 1px solid {THEME_BORDER};
+            }}
+            [data-testid="stSidebar"] > div {{
+                padding-top: 0.75rem;
+            }}
+            .sidebar-header {{
+                padding: 0.5rem 0;
+                margin-bottom: 0.75rem;
+                border-bottom: 1px solid {THEME_BORDER};
+                color: {THEME_TEXT};
+                font-weight: 600;
+                font-size: 0.9rem;
+            }}
+            .welcome-card {{
+                background: {THEME_SURFACE};
+                border: 1px solid {THEME_BORDER};
+                border-radius: 10px;
+                padding: 1.5rem 1.25rem;
+                margin: 0.75rem 0 1rem 0;
+                text-align: center;
+            }}
+            .welcome-card p {{
+                color: #64748b;
+                font-size: 0.9375rem;
+                margin: 0;
+                line-height: 1.5;
+            }}
+            .welcome-card p:first-child {{
+                color: {THEME_TEXT};
+                font-weight: 500;
+                font-size: 1rem;
+                margin-bottom: 0.4rem;
+            }}
+            /* Responsive: mobile */
+            @media (max-width: 640px) {{
+                .block-container {{
+                    padding: 1rem 0.75rem;
+                }}
+                .main-header {{
+                    padding: 0.875rem 1rem;
+                    margin-bottom: 1rem;
+                }}
+                .main-header h1 {{ font-size: 1.125rem; }}
+                .main-header .subtitle {{ font-size: 0.75rem; }}
+                .welcome-card {{
+                    padding: 1.25rem 1rem;
+                    margin: 0.5rem 0 0.75rem 0;
+                }}
+                [data-testid="stChatMessage"] {{
+                    padding: 0.75rem 0.875rem;
+                }}
+            }}
+            /* Responsive: tablet+ */
+            @media (min-width: 768px) {{
+                .block-container {{
+                    padding: 1.5rem 1.25rem;
+                }}
+            }}
         </style>
     """,
         unsafe_allow_html=True,
@@ -108,10 +183,8 @@ def main():
 
     st.markdown(
         f"""
-        <div class="main-header-card">
-            <h2 style='color: white; margin: 0; font-size: 1.25rem; font-weight: 600;'>
-                {t("header_title", lang)}
-            </h2>
+        <div class="main-header">
+            <h1>{t("header_title", lang)}</h1>
             <p class="subtitle">{t("header_subtitle", lang)}</p>
         </div>
     """,
@@ -119,17 +192,25 @@ def main():
     )
 
     initialize_chat_history()
+    chat_history = get_chat_history()
 
-    for message in get_chat_history():
-        avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
-        with st.chat_message(message["role"], avatar=avatar):
-            st.write(message["content"])
+    if chat_history:
+        for message in chat_history:
+            avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
+            with st.chat_message(message["role"], avatar=avatar):
+                st.write(message["content"])
+    else:
+        st.markdown(
+            f"""
+            <div class="welcome-card">
+                <p>{t("welcome_title", lang)}</p>
+                <p>{t("welcome_subtitle", lang)}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    st.markdown('<div class="input-card">', unsafe_allow_html=True)
-    st.markdown(f"**{t('ask_question', lang)}**")
     query = st.chat_input(t("placeholder", lang))
-    st.caption(t("input_hint", lang))
-    st.markdown("</div>", unsafe_allow_html=True)
 
     if query and query.strip():
         q = query.strip()
@@ -140,7 +221,10 @@ def main():
         st.rerun()
 
     with st.sidebar:
-        st.header(t("settings", lang))
+        st.markdown(
+            f'<div class="sidebar-header">{t("settings", lang)}</div>',
+            unsafe_allow_html=True,
+        )
 
         lang_labels = list(LANGUAGE_OPTIONS.keys())
         lang_values = list(LANGUAGE_OPTIONS.values())
@@ -158,12 +242,14 @@ def main():
 
         st.divider()
 
-        if st.button(t("clear_chat", lang), use_container_width=True):
+        if st.button(t("clear_chat", lang), use_container_width=True, type="secondary"):
             clear_chat_history()
             st.rerun()
+
         st.divider()
-        st.subheader(t("system", lang))
-        st.info(t("messages_count", lang, count=len(get_chat_history())))
+
+        st.caption(t("messages_count", lang, count=len(chat_history)))
+        st.caption(t("input_hint", lang))
 
 
 if __name__ == "__main__":
