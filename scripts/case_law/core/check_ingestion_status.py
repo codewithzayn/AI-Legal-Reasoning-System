@@ -1,8 +1,8 @@
 """
 Check what case law is ingested in Supabase (by year, court, type).
 
-Run from project root: python3 scripts/case_law/core/check_ingestion_status.py [--year YYYY]
-Or: make check-ingestion-status
+Run from project root: python3 scripts/case_law/core/check_ingestion_status.py [--year YYYY] [--sync]
+Or: make check-ingestion-status   or   make sync-ingestion-status
 
 Definitions (must match ingestion_manager.py):
   total_cases   = documents for that year (from JSON/scrape when run)
@@ -10,12 +10,14 @@ Definitions (must match ingestion_manager.py):
   failed_cases  = documents that failed this run (e.g. empty full_text)
   remaining     = total_cases - processed_cases (= not yet in Supabase; equals failed when run finished)
 
+--sync: Update case_law_ingestion_tracking.processed_cases from actual COUNT in case_law so tracking matches DB.
 Uses SUPABASE_URL and SUPABASE_KEY from .env.
 """
 
 import argparse
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # scripts/case_law/core/check_ingestion_status.py -> project root = 4 levels up
@@ -67,6 +69,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         action="store_true",
         help="Compare tracking processed_cases to actual case_law count per year.",
     )
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="Update tracking processed_cases from actual case_law count (keeps Supabase in sync).",
+    )
     args = parser.parse_args()
 
     url = os.getenv("SUPABASE_URL", "").strip()
@@ -77,48 +84,39 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
 
     client = create_client(url, key)
 
-    logger.info("Case law ingestion status (Supabase)")
-
-    # 1) Total cases and year range (from case_law)
-    r = client.table("case_law").select("case_year", count="exact").execute()
-    total = r.count if hasattr(r, "count") and r.count is not None else len(r.data or [])
-    if not r.data:
-        logger.info("No case_law rows found.")
+    if args.year is not None:
+        logger.info("Ingestion status for year %s (Supabase)", args.year)
     else:
-        years = [row["case_year"] for row in (r.data or [])]
-        min_y = min(years)
-        max_y = max(years)
-        logger.info("Total cases in case_law: %s | Year range: %s – %s", total, min_y, max_y)
+        logger.info("Ingestion status for all years (Supabase)")
 
-    # 2) Count by year (from case_law)
-    r2 = client.table("case_law").select("case_year").execute()
+    # 1) Documents in case_law per year. If --year given, only that year; else all years (paginated).
     by_year: dict[int, int] = {}
-    for row in r2.data or []:
-        y = row["case_year"]
-        by_year[y] = by_year.get(y, 0) + 1
+    if args.year is not None:
+        r_year = client.table("case_law").select("id", count="exact").eq("case_year", args.year).execute()
+        by_year[args.year] = (
+            r_year.count if hasattr(r_year, "count") and r_year.count is not None else len(r_year.data or [])
+        )
+    else:
+        offset = 0
+        page_size = 1000
+        while True:
+            r2 = client.table("case_law").select("case_year").range(offset, offset + page_size - 1).execute()
+            for row in r2.data or []:
+                y = row["case_year"]
+                by_year[y] = by_year.get(y, 0) + 1
+            if len(r2.data or []) < page_size:
+                break
+            offset += page_size
 
-    logger.info("Cases per year (case_law):")
+    logger.info("Documents in case_law (per year):")
     for y in sorted(by_year.keys(), reverse=True):
         if args.year is not None and y != args.year:
             continue
         logger.info("  %s: %s", y, by_year[y])
     if args.year is not None and args.year not in by_year:
-        logger.info("  %s: 0 (no rows in case_law)", args.year)
+        logger.info("  %s: 0", args.year)
 
-    # 3) By court_type
-    r3 = client.table("case_law").select("court_type").execute()
-    by_court: dict[str, int] = {}
-    for row in r3.data or []:
-        c = row["court_type"] or "?"
-        by_court[c] = by_court.get(c, 0) + 1
-    logger.info("Cases by court_type: %s", by_court)
-
-    # 4) Chunks (searchable sections)
-    r4 = client.table("case_law_sections").select("id", count="exact").execute()
-    chunk_count = r4.count if hasattr(r4, "count") and r4.count is not None else len(r4.data or [])
-    logger.info("Total chunks (case_law_sections): %s", chunk_count)
-
-    # 5) Ingestion tracking: per-year total, processed, failed, remaining, status
+    # 2) Ingestion tracking: total, processed, failed, remaining per year
     try:
         q = client.table("case_law_ingestion_tracking").select("*").order("year", desc=True)
         if args.year is not None:
@@ -126,11 +124,37 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         r5 = q.execute()
 
         if r5.data:
-            logger.info("")
+            if args.sync:
+                for row in r5.data:
+                    ct = row.get("court_type") or "?"
+                    dt = row.get("decision_type") or "?"
+                    yr = row.get("year")
+                    row_id = row.get("id")
+                    if row_id is None:
+                        continue
+                    actual = _actual_count_in_case_law(client, ct, dt, yr)
+                    if actual is not None:
+                        try:
+                            client.table("case_law_ingestion_tracking").update(
+                                {
+                                    "processed_cases": actual,
+                                    "last_updated": datetime.now().isoformat(),
+                                }
+                            ).eq("id", row_id).execute()
+                            logger.info("Synced %s | %s | %s: processed_cases -> %s", ct, dt, yr, actual)
+                        except Exception as e:
+                            logger.warning("Failed to sync tracking row %s: %s", row_id, e)
+
             logger.info(
                 "Ingestion tracking: total=expected for year, processed=in Supabase, failed=failed this run, remaining=total−processed"
             )
             logger.info("  [court_type | decision_type | year | status | processed | total | failed | remaining]")
+            # Re-fetch after sync so displayed values are current
+            if args.sync:
+                q2 = client.table("case_law_ingestion_tracking").select("*").order("year", desc=True)
+                if args.year is not None:
+                    q2 = q2.eq("year", args.year)
+                r5 = q2.execute()
             for row in r5.data:
                 total_t = row.get("total_cases") or 0
                 processed = row.get("processed_cases") or 0
@@ -174,11 +198,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             logger.info("(case_law_ingestion_tracking empty or not available)")
     except Exception as e:
         logger.exception("case_law_ingestion_tracking: %s", e)
-
-    logger.info("")
-    logger.info(
-        "To run the same per-year view in Supabase SQL editor, use docs/SUPABASE_QUERIES.sql (ingestion status query)."
-    )
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 
 .PHONY: help install run run-cli run-api test \
 	lint format lint-fix fix \
-	ingest-precedents ingest-precedents-force ingest-precedents-case-ids fix-json-precedents update-case-full-text verify-json-full-text check-ingestion-status \
+	ingest-precedents ingest-precedents-force ingest-precedents-case-ids fix-json-precedents update-case-full-text verify-json-full-text check-ingestion-status sync-ingestion-status \
 	ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
 	scrape-json-pdf-drive scrape-json-pdf-drive-range \
 	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
@@ -40,6 +40,7 @@ help:
 	@echo "  make update-case-full-text  Manually set full_text for one case. YEAR=... CASE_ID=... FILE=..."
 	@echo "  make verify-json-full-text  Scan precedent JSON for empty full_text; print fix commands."
 	@echo "  make check-ingestion-status  Show Supabase ingestion status (per year). Optional: YEAR=..."
+	@echo "  make sync-ingestion-status   Update tracking.processed_cases from case_law (sync DB). Optional: YEAR=..."
 	@echo "  make ingest-rulings       Ingest KKO other rulings (Muut päätökset). Optional: YEAR=2026"
 	@echo "  make ingest-leaves        Ingest KKO leaves to appeal (Valitusluvat). Optional: YEAR=2026"
 	@echo "  make ingest-kko           Ingest KKO all subtypes (precedent + ruling + leave) for one year. Optional: YEAR=2026"
@@ -138,6 +139,10 @@ verify-json-full-text:
 # Check Supabase ingestion status (total/processed/failed per year). Optional: YEAR=2025
 check-ingestion-status:
 	python3 scripts/case_law/core/check_ingestion_status.py $(if $(YEAR),--year $(YEAR),)
+
+# Sync case_law_ingestion_tracking.processed_cases from actual case_law count (fixes out-of-sync tracking)
+sync-ingestion-status:
+	python3 scripts/case_law/core/check_ingestion_status.py --sync $(if $(YEAR),--year $(YEAR),)
 
 ingest-rulings:
 	python3 scripts/case_law/supreme_court/ingest_rulings.py --year $(YEAR)
