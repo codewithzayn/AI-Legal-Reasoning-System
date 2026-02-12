@@ -64,13 +64,15 @@ def _inject_custom_css() -> None:
                 min-height: 120px !important;
                 padding: 1rem 1.25rem !important;
                 border-radius: 12px !important;
-                border: 2px solid {THEME_BORDER} !important;
+                border: 1px solid {THEME_BORDER} !important;
                 font-size: 1rem !important;
                 line-height: 1.5 !important;
+                outline: none !important;
             }}
             [data-testid="stChatInput"] textarea:focus {{
-                border-color: {THEME_ACCENT} !important;
-                box-shadow: 0 0 0 3px rgba(14,165,233,0.15) !important;
+                border-color: #94a3b8 !important;
+                box-shadow: none !important;
+                outline: none !important;
             }}
             [data-testid="stChatInput"] textarea::placeholder {{
                 color: #64748b;
