@@ -127,23 +127,11 @@ def main():
 
     st.markdown('<div class="input-card">', unsafe_allow_html=True)
     st.markdown(f"**{t('ask_question', lang)}**")
-    with st.form("chat_form", clear_on_submit=True):
-        query = st.text_area(
-            "Query",
-            value="",
-            height=112,
-            placeholder=t("placeholder", lang),
-            label_visibility="collapsed",
-            key="query_input",
-        )
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            submitted = st.form_submit_button(t("send", lang))
-        with col2:
-            st.caption(t("input_hint", lang))
+    query = st.chat_input(t("placeholder", lang))
+    st.caption(t("input_hint", lang))
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if submitted and query and query.strip():
+    if query and query.strip():
         q = query.strip()
         if len(q) > config.MAX_QUERY_LENGTH:
             st.error(t("query_too_long", lang, max=config.MAX_QUERY_LENGTH))
