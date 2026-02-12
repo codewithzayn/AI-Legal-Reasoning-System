@@ -96,34 +96,6 @@ def _inject_custom_css() -> None:
             [data-testid="stSidebar"] > div {{
                 padding-top: 0.75rem;
             }}
-            .sidebar-header {{
-                padding: 0.5rem 0;
-                margin-bottom: 0.75rem;
-                border-bottom: 1px solid {THEME_BORDER};
-                color: {THEME_TEXT};
-                font-weight: 600;
-                font-size: 0.9rem;
-            }}
-            .welcome-card {{
-                background: {THEME_SURFACE};
-                border: 1px solid {THEME_BORDER};
-                border-radius: 10px;
-                padding: 1.5rem 1.25rem;
-                margin: 0.75rem 0 1rem 0;
-                text-align: center;
-            }}
-            .welcome-card p {{
-                color: #64748b;
-                font-size: 0.9375rem;
-                margin: 0;
-                line-height: 1.5;
-            }}
-            .welcome-card p:first-child {{
-                color: {THEME_TEXT};
-                font-weight: 500;
-                font-size: 1rem;
-                margin-bottom: 0.4rem;
-            }}
             /* Responsive: mobile */
             @media (max-width: 640px) {{
                 .block-container {{
@@ -135,10 +107,6 @@ def _inject_custom_css() -> None:
                 }}
                 .main-header h1 {{ font-size: 1.125rem; }}
                 .main-header .subtitle {{ font-size: 0.75rem; }}
-                .welcome-card {{
-                    padding: 1.25rem 1rem;
-                    margin: 0.5rem 0 0.75rem 0;
-                }}
                 [data-testid="stChatMessage"] {{
                     padding: 0.75rem 0.875rem;
                 }}
@@ -200,15 +168,10 @@ def main():
             with st.chat_message(message["role"], avatar=avatar):
                 st.write(message["content"])
     else:
-        st.markdown(
-            f"""
-            <div class="welcome-card">
-                <p>{t("welcome_title", lang)}</p>
-                <p>{t("welcome_subtitle", lang)}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        with st.container():
+            st.markdown(f"**{t('welcome_title', lang)}**")
+            st.markdown(t("welcome_body", lang))
+            st.markdown("---")
 
     query = st.chat_input(t("placeholder", lang))
 
@@ -221,18 +184,17 @@ def main():
         st.rerun()
 
     with st.sidebar:
-        st.markdown(
-            f'<div class="sidebar-header">{t("settings", lang)}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"**{t('sidebar_app_name', lang)}**")
+        st.caption(t("sidebar_tagline", lang))
+        st.markdown("---")
 
         lang_labels = list(LANGUAGE_OPTIONS.keys())
         lang_values = list(LANGUAGE_OPTIONS.values())
-        current_index = lang_values.index(lang) if lang in lang_values else 0
+        current_idx = lang_values.index(lang) if lang in lang_values else 0
         selected_label = st.selectbox(
             t("language", lang),
             lang_labels,
-            index=current_index,
+            index=current_idx,
             key="lang_selector",
         )
         new_lang = LANGUAGE_OPTIONS[selected_label]
@@ -240,14 +202,13 @@ def main():
             st.session_state.lang = new_lang
             st.rerun()
 
-        st.divider()
+        st.markdown("---")
 
         if st.button(t("clear_chat", lang), use_container_width=True, type="secondary"):
             clear_chat_history()
             st.rerun()
 
-        st.divider()
-
+        st.markdown("---")
         st.caption(t("messages_count", lang, count=len(chat_history)))
         st.caption(t("input_hint", lang))
 
