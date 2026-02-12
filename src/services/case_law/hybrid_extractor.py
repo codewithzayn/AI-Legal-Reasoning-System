@@ -173,6 +173,7 @@ def _call_llm_for_sections(full_text: str, case_id: str) -> list[CaseSection]:
 def extract_precedent_hybrid(full_text: str, case_id: str) -> CaseExtractionResult | None:
     """
     Extract structured data: regex first, LLM fallback if coverage insufficient.
+    When USE_AI_EXTRACTION=false, uses regex only (no LLM) to save cost.
     Never returns empty sections; normalizes to avoid nulls.
     """
     if not full_text or not full_text.strip():
@@ -203,6 +204,23 @@ def extract_precedent_hybrid(full_text: str, case_id: str) -> CaseExtractionResu
         metadata = _minimal_metadata(case_id)
         lower_courts = _minimal_lower_courts()
         references = _minimal_references()
+
+    # When USE_AI_EXTRACTION=false, use regex only: never call LLM.
+    # Return regex result even if insufficient, or full_text as single section.
+    use_ai = getattr(config, "USE_AI_EXTRACTION", True)
+    if not use_ai:
+        if regex_result and regex_result.sections:
+            sections = _normalize_sections(regex_result.sections, text)
+            logger.info("%s | regex-only (insufficient coverage, %s sections)", case_id, len(sections))
+        else:
+            sections = _normalize_sections([], text)
+            logger.info("%s | regex-only (no sections, using full_text fallback)", case_id)
+        return CaseExtractionResult(
+            metadata=metadata,
+            lower_courts=lower_courts,
+            references=references,
+            sections=sections,
+        )
 
     logger.info("%s | LLM fallback (regex insufficient)", case_id)
     llm_sections = _call_llm_for_sections(full_text, case_id)

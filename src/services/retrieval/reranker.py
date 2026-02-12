@@ -9,6 +9,7 @@ import cohere
 from dotenv import load_dotenv
 
 from src.config.logging_config import setup_logger
+from src.utils.retry import with_retry
 
 load_dotenv()
 logger = setup_logger(__name__)
@@ -33,6 +34,7 @@ class CohereReranker:
         self.model = model or os.getenv("COHERE_RERANK_MODEL", "rerank-v4.0-fast").strip() or "rerank-v4.0-fast"
         logger.debug("Cohere Rerank initialized (model=%s)", self.model)
 
+    @with_retry()
     def rerank(self, query: str, results: list[dict], top_k: int = 10) -> list[dict]:
         """
         Re-rank search results using Cohere.

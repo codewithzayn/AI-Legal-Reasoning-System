@@ -1,8 +1,11 @@
 """
-Extended chunk inspector - shows ALL chunks with keyword matching
+Extended chunk inspector – shows ALL chunks with keyword matching.
+
+Run from project root: python3 scripts/inspect_case_chunks.py
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -10,37 +13,44 @@ _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
+os.environ.setdefault("LOG_FORMAT", "simple")
+
+from src.config.logging_config import setup_logger
 from src.services.retrieval.search import HybridRetrieval
 
+logger = setup_logger(__name__)
 
-async def inspect_all_chunks():
+
+async def inspect_all_chunks() -> None:
     retrieval = HybridRetrieval()
     chunks = await retrieval.fetch_case_chunks("KKO:1995:213")
 
-    print(f"Total chunks: {len(chunks)}\n")
+    logger.info("Total chunks: %s", len(chunks))
+    logger.info("")
 
-    # Keywords to look for
-    keywords = ["osakkeenomistaja", "puuttua", "oikeudenkäyntiin", "välitulo", "puhevalta", "intervene", "edellytykset"]
+    keywords = [
+        "osakkeenomistaja",
+        "puuttua",
+        "oikeudenkäyntiin",
+        "välitulo",
+        "puhevalta",
+        "intervene",
+        "edellytykset",
+    ]
 
     for i, chunk in enumerate(chunks, 1):
         text = chunk.get("text", "")
         section_type = chunk.get("metadata", {}).get("type", "?")
-
-        # Count keyword matches
         matches = [kw for kw in keywords if kw in text.lower()]
 
-        print(f"\n{'=' * 60}")
-        print(f"CHUNK {i} | Type: {section_type} | Keywords: {len(matches)}/{len(keywords)}")
-        print("=" * 60)
-
+        logger.info("CHUNK %s | Type: %s | Keywords: %s/%s", i, section_type, len(matches), len(keywords))
         if matches:
-            print(f"✓ Keywords found: {', '.join(matches)}\n")
+            logger.info("  Keywords found: %s", ", ".join(matches))
         else:
-            print("✗ No keywords found\n")
-
-        # Show full text (not truncated)
-        print(text)
-        print()
+            logger.info("  No keywords found")
+        logger.info("%s", text)
+        logger.info("")
 
 
-asyncio.run(inspect_all_chunks())
+if __name__ == "__main__":
+    asyncio.run(inspect_all_chunks())

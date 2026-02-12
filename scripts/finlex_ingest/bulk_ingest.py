@@ -96,12 +96,12 @@ class BulkIngestionManager:
             return result["success"]
 
         except Exception as e:
-            logger.error(f"❌ Error processing {document_uri}: {e}")
+            logger.error("❌ Error processing %s: %s", document_uri, e)
             return False
 
     async def process_year(self, category: str, doc_type: str, year: int) -> None:
         """Process all documents for a specific category/type/year"""
-        logger.info(f"Processing: {category}/{doc_type}/{year}")
+        logger.info("Processing: %s/%s/%s", category, doc_type, year)
 
         # Get or init tracking
         tracking = self.get_tracking_status(category, doc_type, year)
@@ -119,7 +119,7 @@ class BulkIngestionManager:
         # Fetch documents page by page
         page = start_page
         while True:
-            logger.info(f"📄 Page {page}...")
+            logger.info("📄 Page %s...", page)
 
             try:
                 # Fetch page (async)
@@ -153,24 +153,24 @@ class BulkIngestionManager:
 
                 # Update tracking
                 self.update_tracking(category, doc_type, year, page, processed, failed)
-                logger.info(f"📊 Progress: {processed} processed, {failed} failed")
+                logger.info("📊 Progress: %s processed, %s failed", processed, failed)
 
                 # Next page
                 page += 1
 
             except Exception as e:
-                logger.error(f"❌ Error on page {page}: {e!s}")
+                logger.error("❌ Error on page %s: %s", page, e)
                 break
 
     async def run(self) -> None:
         logger.info("🚀 BULK DOCUMENT INGESTION")
-        logger.info(f"Years: {START_YEAR} → {END_YEAR}")
-        logger.info(f"Categories: {list(CATEGORIES.keys())}")
+        logger.info("Years: %s → %s", START_YEAR, END_YEAR)
+        logger.info("Categories: %s", list(CATEGORIES.keys()))
         total_start = time.time()
 
         # Process each year (newest first)
         for year in range(START_YEAR, END_YEAR - 1, -1):
-            logger.info(f"# YEAR: {year}")
+            logger.info("# YEAR: %s", year)
 
             # Process each category/type
             for category, doc_types in CATEGORIES.items():
@@ -179,7 +179,7 @@ class BulkIngestionManager:
 
         total_elapsed = time.time() - total_start
         logger.info("✅ BULK INGESTION COMPLETED")
-        logger.info(f"⏱️  TOTAL TIME: {total_elapsed:.2f}s")
+        logger.info("⏱️  TOTAL TIME: %.2fs", total_elapsed)
 
 
 def main():

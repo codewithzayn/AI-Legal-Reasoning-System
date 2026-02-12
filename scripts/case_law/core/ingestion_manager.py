@@ -52,7 +52,7 @@ class IngestionManager:
         use_ai = use_ai and getattr(config, "USE_AI_EXTRACTION", True)
         subtype_str = f" ({subtype})" if subtype else " (ALL)"
         extract_str = " + extract" if use_ai else " (regex only)"
-        logger.info(f"🚀 Starting Ingestion: {self.court.upper()} {year}{subtype_str}{extract_str}")
+        logger.info("🚀 Starting Ingestion: %s %s%s%s", self.court.upper(), year, subtype_str, extract_str)
 
         # 1. Resolve paths & load/scrape
         json_file, no_json_cache = self._resolve_json_path(year, subtype)
@@ -61,14 +61,17 @@ class IngestionManager:
 
         if not documents:
             logger.info("❌ No documents found.")
-            self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
+            self._track_status(
+                year, "completed", total=0, processed=0, failed=0, tracking_id=tracking_id, subtype=subtype
+            )
             return []
 
         # 1b. Skip documents whose content hasn't changed (hash-based idempotency)
+        total_loaded = len(documents)
+        skipped_unchanged = 0
         existing_hashes = self._fetch_existing_content_hashes(year)
         if existing_hashes:
             new_docs = []
-            skipped_unchanged = 0
             for d in documents:
                 doc_hash = self.storage.compute_content_hash(d)
                 stored_hash = existing_hashes.get(d.case_id)
@@ -82,33 +85,50 @@ class IngestionManager:
 
         if not documents:
             logger.info("✅ All documents already in Supabase with same content — nothing to process.")
-            self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
+            self._track_status(
+                year,
+                "completed",
+                total=total_loaded,
+                processed=total_loaded,
+                failed=0,
+                tracking_id=tracking_id,
+                subtype=subtype,
+            )
             return []
 
-        # 2. Extraction (hybrid: regex first, LLM fallback for KKO precedents)
-        if use_ai and self.court == "supreme_court" and subtype == "precedent":
+        # 2. Extraction (regex + optional LLM fallback for KKO precedents)
+        # Always run extraction for supreme_court precedent; extractor uses config.USE_AI_EXTRACTION
+        if self.court == "supreme_court" and subtype == "precedent":
             self._run_extraction(documents, json_file, no_json_cache, tracking_id)
 
         # 3. Store in Database & track progress
         stored_count, failed_ids = self._store_documents(documents, year, subtype, tracking_id)
+        failed_count = len(failed_ids)
 
-        # 4. Track Completion
-        final_status = "completed" if stored_count > 0 else "failed"
-        if not documents:
-            final_status = "completed"
-
+        # 4. Track completion: total = full year count; processed = in Supabase (skipped + stored); failed = this run
+        processed_total = skipped_unchanged + stored_count
+        final_status = "completed" if failed_count == 0 else "partial"
         self._track_status(
             year,
             final_status,
-            total=len(documents),
-            processed=stored_count,
+            total=total_loaded,
+            processed=processed_total,
+            failed=failed_count,
             last_case=documents[-1].case_id if documents else None,
             tracking_id=tracking_id,
             subtype=subtype,
         )
 
         elapsed = time.time() - start_time
-        logger.info("✅ COMPLETED: %s/%s stored in %.2fs", stored_count, len(documents), elapsed)
+        logger.info(
+            "✅ COMPLETED: total=%s | in Supabase=%s (skipped %s, stored %s) | failed=%s | %.2fs",
+            total_loaded,
+            processed_total,
+            skipped_unchanged,
+            stored_count,
+            failed_count,
+            elapsed,
+        )
 
         if failed_ids:
             logger.error("⚠️  FAILED DOCUMENTS for %s %s (%s):", year, subtype or "ALL", len(failed_ids))
@@ -124,11 +144,15 @@ class IngestionManager:
         case_ids: list[str],
         use_ai: bool = True,
         update_json_cache: bool = True,
+        json_only: bool = False,
     ) -> list[str]:
-        """Run ingestion for specific case IDs only: Scrape those cases -> Extract -> Store.
-        Optionally updates the year JSON cache so the local file has correct full_text for future runs.
+        """Run ingestion for specific case IDs only: Scrape -> Update JSON -> [Store in Supabase].
 
-        Use this to fix a few documents (e.g. empty full_text) without re-running the full year.
+        If json_only=True: Only re-scrape and update the JSON file (full_text). No Supabase storage.
+        Use this to fix empty full_text in JSON so PDF export / Drive upload has real content.
+
+        Otherwise: Full flow (JSON update + extract + store in Supabase).
+
         Returns list of failed case_id descriptions (empty if all succeeded).
         """
         if not case_ids:
@@ -136,65 +160,102 @@ class IngestionManager:
             return []
         start_time = time.time()
         use_ai = use_ai and getattr(config, "USE_AI_EXTRACTION", True)
-        logger.info("🚀 Ingesting %s case(s) only: %s", len(case_ids), case_ids)
+        mode = "JSON-only (no Supabase)" if json_only else "JSON + Supabase"
+        logger.info("🚀 Ingesting %s case(s) [%s]: %s", len(case_ids), mode, case_ids)
 
         json_file, _ = self._resolve_json_path(year, subtype)
-        tracking_id = self._init_tracking(year, subtype)
+        tracking_id = None if json_only else self._init_tracking(year, subtype)
 
         async with CaseLawScraper() as scraper:
             documents = await scraper.fetch_cases_by_ids(self.court, year, subtype, case_ids)
 
         if not documents:
             logger.warning("No documents fetched for case_ids=%s", case_ids)
-            self._track_status(year, "completed", total=0, processed=0, tracking_id=tracking_id, subtype=subtype)
+            if not json_only:
+                self._track_status(
+                    year, "completed", total=0, processed=0, failed=0, tracking_id=tracking_id, subtype=subtype
+                )
             return list(case_ids)
 
         if update_json_cache and json_file.exists():
             self._merge_docs_into_json(documents, json_file)
 
-        if use_ai and self.court == "supreme_court" and subtype == "precedent":
+        if json_only:
+            elapsed = time.time() - start_time
+            updated = sum(1 for d in documents if (getattr(d, "full_text", None) or "").strip())
+            logger.info(
+                "✅ JSON-only done: %s/%s cases updated in %s | %.2fs", updated, len(documents), json_file.name, elapsed
+            )
+            return []
+
+        if self.court == "supreme_court" and subtype == "precedent":
             self._run_extraction(documents, json_file, False, tracking_id)
 
         stored_count, failed_ids = self._store_documents(documents, year, subtype, tracking_id)
+        failed_count = len(failed_ids)
         self._track_status(
             year,
-            "completed" if stored_count > 0 else "failed",
+            "completed" if failed_count == 0 else "partial",
             total=len(documents),
             processed=stored_count,
+            failed=failed_count,
             last_case=documents[-1].case_id if documents else None,
             tracking_id=tracking_id,
             subtype=subtype,
         )
         elapsed = time.time() - start_time
-        logger.info("✅ Case-ID ingestion done: %s/%s stored in %.2fs", stored_count, len(documents), elapsed)
+        logger.info("✅ Case-ID ingestion done: %s stored, %s failed in %.2fs", stored_count, failed_count, elapsed)
         if failed_ids:
             for fid in failed_ids:
                 logger.error("  - %s", fid)
         return failed_ids
 
     def _merge_docs_into_json(self, new_documents: list[CaseLawDocument], json_file: Path) -> None:
-        """Load JSON cache, replace entries with same case_id as in new_documents, save."""
+        """Load JSON cache, replace entries with same case_id as in new_documents, save.
+        Skips docs with empty full_text so we don't overwrite good content with empty."""
         try:
             with open(json_file, encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
             logger.warning("Could not load JSON for merge: %s", e)
             return
+        # Boilerplate-only content (Finlex page without case text) - treat as empty
+        _BOILERPLATE_MAX = 300
+        _BOILERPLATE_MARKERS = ("Korkeimman oikeuden verkkosivuilla", "Vuosilta 1926")
+
+        def _is_meaningful_content(ft: str) -> bool:
+            return (
+                bool(ft)
+                and len(ft) >= 100
+                and not (len(ft) < _BOILERPLATE_MAX and all(m in ft for m in _BOILERPLATE_MARKERS))
+            )
+
         new_by_id = {d.case_id: d for d in new_documents}
         updated = 0
+        skipped_empty = 0
         for i, item in enumerate(data):
             cid = item.get("case_id")
             if cid in new_by_id:
                 doc = new_by_id[cid]
+                ft = (getattr(doc, "full_text", None) or "").strip()
+                if not _is_meaningful_content(ft):
+                    logger.warning(
+                        "Skipping merge for %s (scraped full_text empty or boilerplate only; preserve existing)", cid
+                    )
+                    skipped_empty += 1
+                    continue
                 data[i] = doc.to_dict()
                 data[i]["references"] = [vars(r) for r in doc.references]
                 updated += 1
         if not updated:
+            if skipped_empty:
+                logger.info("No entries updated (skipped %s with empty/boilerplate full_text)", skipped_empty)
             return
         try:
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info("Updated %s entries in %s", updated, json_file.name)
+            extra = f" (skipped {skipped_empty} empty)" if skipped_empty else ""
+            logger.info("Updated %s entries in %s%s", updated, json_file.name, extra)
         except Exception as e:
             logger.warning("Could not save JSON after merge: %s", e)
 
@@ -234,7 +295,7 @@ class IngestionManager:
             if tracking_id and documents:
                 self._update_tracking_total(tracking_id, len(documents))
         else:
-            logger.info(f"📡 Scraping fresh data from Finlex (Court: {self.court}, Subtype: {subtype})...")
+            logger.info("📡 Scraping fresh data from Finlex (Court: %s, Subtype: %s)...", self.court, subtype)
             async with CaseLawScraper() as scraper:
                 documents = await scraper.fetch_year(self.court, year, subtype=subtype)
             if tracking_id:
@@ -300,6 +361,21 @@ class IngestionManager:
         stored_count = 0
         failed_ids: list[str] = []
         for i, doc in enumerate(documents, 1):
+            full_text = (getattr(doc, "full_text", None) or "").strip()
+            if not full_text:
+                logger.warning(
+                    "[%s/%s] %s | SKIP (empty full_text; re-scrape required)", i, total_to_store, doc.case_id
+                )
+                failed_ids.append(f"{doc.case_id} (empty full_text; re-scrape required)")
+                if tracking_id:
+                    self._track_error(
+                        tracking_id=tracking_id,
+                        case_id=doc.case_id,
+                        url=doc.url,
+                        error_type="empty_full_text",
+                        error_msg="Document has no full_text in JSON; re-scrape this case to populate content.",
+                    )
+                continue
             logger.info("[%s/%s] %s | Storing", i, total_to_store, doc.case_id)
             try:
                 case_uuid = self.storage.store_case(doc)
@@ -420,7 +496,7 @@ class IngestionManager:
 
     def _load_from_json(self, path: Path) -> list[CaseLawDocument]:
         """Load documents from cached JSON"""
-        logger.info(f"📂 Loading existing data from {path}...")
+        logger.info("📂 Loading existing data from %s...", path)
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -438,15 +514,15 @@ class IngestionManager:
                 doc.references = refs
                 docs.append(doc)
 
-            logger.info(f"   Loaded {len(docs)} cases")
+            logger.info("   Loaded %s cases", len(docs))
             return docs
         except Exception as e:
-            logger.error(f"Failed to load JSON: {e}")
+            logger.error("Failed to load JSON: %s", e)
             return []
 
     async def _scrape_fresh(self, year: int, subtype: str = None) -> list[CaseLawDocument]:
         """Scrape fresh data using Playwright"""
-        logger.info(f"📡 Scraping fresh data from Finlex (Court: {self.court}, Subtype: {subtype})...")
+        logger.info("📡 Scraping fresh data from Finlex (Court: %s, Subtype: %s)...", self.court, subtype)
         async with CaseLawScraper() as scraper:
             return await scraper.fetch_year(self.court, year, subtype=subtype)
 
@@ -461,9 +537,9 @@ class IngestionManager:
 
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(output, f, ensure_ascii=False, indent=2)
-            logger.info(f"   Saved backup to {path}")
+            logger.info("   Saved backup to %s", path)
         except Exception as e:
-            logger.error(f"Failed to save JSON: {e}")
+            logger.error("Failed to save JSON: %s", e)
 
     def _init_tracking(self, year: int, subtype: str) -> str | None:
         """Initialize tracking entry and return ID"""
@@ -502,7 +578,7 @@ class IngestionManager:
             if res.data:
                 return res.data[0]["id"]
         except Exception as e:
-            logger.error(f"Failed to init tracking: {e}")
+            logger.error("Failed to init tracking: %s", e)
         return None
 
     def _update_tracking_total(self, tracking_id: str, total: int):
@@ -515,7 +591,7 @@ class IngestionManager:
                 {"total_cases": total, "last_updated": datetime.now().isoformat()}
             ).eq("id", tracking_id).execute()
         except Exception as e:
-            logger.error(f"Failed to update tracking total: {e}")
+            logger.error("Failed to update tracking total: %s", e)
 
     def _track_status(
         self,
@@ -523,33 +599,38 @@ class IngestionManager:
         status: str,
         total: int = 0,
         processed: int = 0,
+        failed: int = 0,
         last_case: str = None,
         tracking_id: str = None,
         subtype: str = None,
     ):
-        """Update ingestion status"""
+        """Update ingestion status. total = full year count; processed = in Supabase; failed = this run."""
         if not self.sb_client:
             return
 
         try:
-            data = {"status": status, "processed_cases": processed, "last_updated": datetime.now().isoformat()}
+            data = {
+                "status": status,
+                "processed_cases": processed,
+                "failed_cases": failed,
+                "last_updated": datetime.now().isoformat(),
+            }
             if total > 0:
                 data["total_cases"] = total
             if last_case:
                 data["last_processed_case"] = last_case
-            if status == "completed":
+            if status in ("completed", "partial", "failed"):
                 data["completed_at"] = datetime.now().isoformat()
 
             if tracking_id:
                 self.sb_client.table("case_law_ingestion_tracking").update(data).eq("id", tracking_id).execute()
             else:
-                # Fallback if no ID passed (legacy calls)
                 self.sb_client.table("case_law_ingestion_tracking").update(data).match(
                     {"court_type": self.court, "decision_type": subtype or "unknown", "year": year}
                 ).execute()
 
         except Exception as e:
-            logger.error(f"Failed to track status: {e}")
+            logger.error("Failed to track status: %s", e)
 
     def _track_error(self, tracking_id: str, case_id: str, error_type: str, error_msg: str, url: str = None):
         """Log specific error to database"""
@@ -568,4 +649,4 @@ class IngestionManager:
                 }
             ).execute()
         except Exception as e:
-            logger.error(f"Failed to log error to DB: {e}")
+            logger.error("Failed to log error to DB: %s", e)

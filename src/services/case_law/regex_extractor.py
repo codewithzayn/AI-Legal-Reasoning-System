@@ -58,7 +58,7 @@ SECTION_HEADERS = [
     (
         "lower_court",
         re.compile(
-            r"^(?:Hearing of the case in lower courts|Asian käsittely alemmissa oikeuksissa|Previous handling of the case)\s*$",
+            r"^(?:Hearing of the case in lower courts|Asian käsittely alemmissa oikeuksissa|Previous handling of the case|Asian käsittely)\s*$",
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
@@ -73,7 +73,13 @@ SECTION_HEADERS = [
         "supreme_decision",
         re.compile(r"^(?:Supreme Court decision|Korkeimman oikeuden ratkaisu)\s*$", re.IGNORECASE | re.MULTILINE),
     ),
-    ("reasoning", re.compile(r"^(?:Reasoning|Perustelut)\s*$", re.IGNORECASE | re.MULTILINE)),
+    (
+        "reasoning",
+        re.compile(
+            r"^(?:Reasoning|Perustelut|Pääasiaratkaisun perustelut|Korkeimman oikeuden kannanotot|Johtopäätös)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
     (
         "background",
         re.compile(
@@ -95,7 +101,13 @@ SECTION_HEADERS = [
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
-    ("judgment", re.compile(r"^(?:Judgment|Tuomiolauselma|Päätöslauselma)\s*$", re.IGNORECASE | re.MULTILINE)),
+    (
+        "judgment",
+        re.compile(
+            r"^(?:Judgment|Tuomiolauselma|Päätöslauselma|Päätös)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
     (
         "dissenting",
         re.compile(
@@ -211,8 +223,21 @@ def _extract_judges(text: str) -> tuple[list[str], str]:
     return judges, rapporteur
 
 
+# Optional: date with 2-digit year (e.g. "1.1.59", "18.12.24") for older documents
+PATTERN_DATE_DMYY_2DIGIT = re.compile(
+    r"(?:Date of issue|Antopäivä)\s*\n\s*(\d{1,2})\.(\d{1,2})\.(\d{2})\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _two_digit_year_to_four(yy: str) -> str:
+    """Convert 2-digit year to 4-digit: 00-30 -> 2000-2030, 31-99 -> 1931-1999."""
+    n = int(yy)
+    return str(2000 + n) if n <= 30 else str(1900 + n)
+
+
 def _extract_date_of_issue(text: str, case_year: str) -> str:
-    """Extract date of issue from header block. Returns ISO date string."""
+    """Extract date of issue from header block. Returns ISO date string. Tries multiple formats."""
     header = text[:4000]
     date_m = PATTERN_DATE_EN.search(header)
     if date_m:
@@ -224,7 +249,24 @@ def _extract_date_of_issue(text: str, case_year: str) -> str:
         result = _normalize_date_dmyy(date_dm)
         if result:
             return result
-    return f"{case_year}-01-01" if case_year else ""
+    date_dm2 = PATTERN_DATE_DMYY_2DIGIT.search(header)
+    if date_dm2:
+        yyyy = _two_digit_year_to_four(date_dm2.group(3))
+        return f"{yyyy}-{int(date_dm2.group(2)):02d}-{int(date_dm2.group(1)):02d}"
+    if case_year and str(case_year).strip() and re.match(r"^\d{4}$", str(case_year).strip()):
+        return f"{case_year.strip()}-01-01"
+    return ""
+
+
+def _year_from_case_id(case_id: str) -> str:
+    """Derive 4-digit year from case_id (e.g. KKO:1959:II-110 or KKO:1959-II-110 -> 1959). Empty if unparseable."""
+    if not case_id:
+        return ""
+    parts = re.split(r"[:\-]", str(case_id).strip(), maxsplit=2)
+    for p in parts[1:2] if len(parts) >= 2 else []:
+        if re.match(r"^\d{4}$", p.strip()):
+            return p.strip()
+    return ""
 
 
 def _extract_metadata_block(text: str, case_id: str) -> CaseMetadata:
@@ -252,10 +294,17 @@ def _extract_metadata_block(text: str, case_id: str) -> CaseMetadata:
     elif re.search(r"remanded|palautetaan", text, re.IGNORECASE):
         decision_outcome = "case_remanded"
 
+    # Year: from header "Case year" or from case_id (e.g. KKO:1959:II-110) so we never emit invalid "-01-01"
+    effective_year = (
+        case_year.strip()
+        if (case_year and re.match(r"^\d{4}$", str(case_year).strip()))
+        else _year_from_case_id(case_id)
+    )
+    year_fallback = f"{effective_year}-01-01" if effective_year else ""
     return CaseMetadata(
         case_id=case_id,
         ecli=ecli or f"ECLI:FI:KKO:{case_id.split(':')[-2]}:{case_id.split(':')[-1]}" if ":" in case_id else "",
-        date_of_issue=date_of_issue or f"{case_year}-01-01",
+        date_of_issue=date_of_issue or year_fallback,
         diary_number=diary_number,
         volume=volume,
         decision_outcome=decision_outcome,
@@ -401,8 +450,16 @@ def extract_precedent(full_text: str, case_id: str) -> CaseExtractionResult | No
         sections = _build_sections(text)
 
         if not sections:
-            reasoning_start = re.search(r"\n\s*(?:Reasoning|Perustelut)\s*\n", text, re.IGNORECASE)
-            judgment_start = re.search(r"\n\s*(?:Judgment|Tuomiolauselma)\s*\n", text, re.IGNORECASE)
+            reasoning_start = re.search(
+                r"\n\s*(?:Reasoning|Perustelut|Pääasiaratkaisun perustelut|Johtopäätös)\s*\n",
+                text,
+                re.IGNORECASE,
+            )
+            judgment_start = re.search(
+                r"\n\s*(?:Judgment|Tuomiolauselma|Päätöslauselma|Päätös)\s*\n",
+                text,
+                re.IGNORECASE,
+            )
             if reasoning_start and judgment_start:
                 sections.append(
                     CaseSection(

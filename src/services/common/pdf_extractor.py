@@ -45,7 +45,7 @@ class PDFExtractor:
                 for chunk in response.iter_content(chunk_size=8192):
                     temp_pdf.write(chunk)
 
-            logger.debug(f"PDF downloaded to {temp_pdf_path}")
+            logger.debug("PDF downloaded to %s", temp_pdf_path)
 
             # Step 2: Extract text from PDF
             logger.debug("Extracting text from PDF...")
@@ -61,7 +61,7 @@ class PDFExtractor:
 
             full_text = "\n\n".join(text_parts)
 
-            logger.info(f"Extracted {len(full_text)} characters from {page_count} pages")
+            logger.info("Extracted %s characters from %s pages", len(full_text), page_count)
 
             return {"text": full_text, "page_count": page_count, "char_count": len(full_text)}
 
@@ -74,6 +74,6 @@ class PDFExtractor:
             if temp_pdf_path and Path(temp_pdf_path).exists():
                 try:
                     Path(temp_pdf_path).unlink()
-                    logger.debug(f"Deleted temp PDF: {temp_pdf_path}")
+                    logger.debug("Deleted temp PDF: %s", temp_pdf_path)
                 except Exception as e:
-                    logger.warning(f"Failed to delete temp PDF {temp_pdf_path}: {e}")
+                    logger.warning("Failed to delete temp PDF %s: %s", temp_pdf_path, e)

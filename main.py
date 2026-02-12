@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agent.stream import stream_query_response
+from src.config.settings import validate_env_for_app
 
 
 def run_streamlit():
@@ -30,9 +31,8 @@ def run_streamlit():
 
 async def run_cli_async():
     """Run interactive CLI mode (Async)"""
-    logger.info("=" * 60)
+    validate_env_for_app()
     logger.info("🇫🇮 AI Legal Reasoning System - CLI Mode")
-    logger.info("=" * 60)
     logger.info("Type your legal questions. Type 'exit' to quit.\n")
 
     while True:

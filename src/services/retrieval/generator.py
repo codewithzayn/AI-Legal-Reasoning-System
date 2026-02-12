@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
 from src.config.settings import config
+from src.utils.retry import retry_async
 
 load_dotenv()
 logger = setup_logger(__name__)
@@ -94,11 +95,16 @@ class LLMGenerator:
 
         logger.info("Calling LLM...")
         api_start = time.time()
-        response = self.llm.invoke(messages)
+        response = self._invoke_with_retry_sync(messages)
         api_elapsed = time.time() - api_start
-        logger.info(f"LLM done in {api_elapsed:.1f}s")
+        logger.info("LLM done in %.1fs", api_elapsed)
 
         return response.content
+
+    def _invoke_with_retry_sync(self, messages):
+        from src.utils.retry import _sync_retry_impl
+
+        return _sync_retry_impl(lambda: self.llm.invoke(messages))
 
     async def agenerate_response(
         self, query: str, context_chunks: list[dict], focus_case_ids: list[str] | None = None
@@ -113,9 +119,9 @@ class LLMGenerator:
 
         logger.info("Calling LLM...")
         api_start = time.time()
-        response = await self.llm.ainvoke(messages)
+        response = await retry_async(lambda: self.llm.ainvoke(messages))
         api_elapsed = time.time() - api_start
-        logger.info(f"LLM done in {api_elapsed:.1f}s")
+        logger.info("LLM done in %.1fs", api_elapsed)
 
         return response.content
 

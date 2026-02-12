@@ -71,9 +71,33 @@ class Config:
     CASE_LAW_EXPORT_ROOT: str = (os.getenv("CASE_LAW_EXPORT_ROOT") or "data/case_law_export").strip()
     GOOGLE_DRIVE_ROOT_FOLDER_ID: str = (os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID") or "").strip()
 
+    # Query length limit (chars) - reject oversize queries to avoid abuse and cost
+    MAX_QUERY_LENGTH: int = int(os.getenv("MAX_QUERY_LENGTH", "2000"))
+
 
 # Singleton instance
 config = Config()
+
+
+def validate_env_for_app() -> None:
+    """
+    Validate required env vars for the chat app. Call at startup.
+    Raises SystemExit with clear message if any required var is missing.
+    """
+    required = {
+        "SUPABASE_URL": os.getenv("SUPABASE_URL", "").strip(),
+        "SUPABASE_KEY": os.getenv("SUPABASE_KEY", "").strip(),
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", "").strip(),
+    }
+    missing = [k for k, v in required.items() if not v]
+    if missing:
+        msg = f"Missing required env vars: {', '.join(missing)}. Set them in .env or environment."
+        raise SystemExit(msg)
+
+    if config.RERANK_ENABLED:
+        cohere_key = os.getenv("COHERE_API_KEY", "").strip()
+        if not cohere_key:
+            raise SystemExit("RERANK_ENABLED=true but COHERE_API_KEY is missing. Set it or disable rerank.")
 
 
 # ============================================

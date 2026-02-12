@@ -12,12 +12,34 @@
 
 ## Railway / Render (Procfile)
 
-Uses `Procfile`: `web: streamlit run app.py --server.port=8501 --server.address=0.0.0.0`
+Uses `Procfile`: `web: sh -c 'streamlit run app.py --server.port=${PORT:-8501} --server.address=0.0.0.0'`
 
-Set `PORT` env var if the platform requires it; otherwise 8501 is used.
+- `PORT` is set by the platform (Railway, Render, Heroku); defaults to 8501 if unset.
 
 ## Concurrency
 
 - Session state is per-user (Streamlit isolates)
 - Supabase client uses async lock for concurrent requests
 - CORS and XSRF enabled in `.streamlit/config.toml`
+
+## Case Law Ingestion (Supabase)
+
+Set `USE_AI_EXTRACTION=false` in `.env` for regex-only extraction (no LLM cost).
+
+**Ingest precedents 2025→1926 (newest first):**
+```bash
+make ingest-history START=1926 END=2025 COURT=supreme_court SUBTYPE=precedent
+```
+
+**Ingest single year:**
+```bash
+make ingest-precedents YEAR=2010
+```
+
+**Check status (processed vs remaining):**
+```bash
+make check-ingestion-status
+# or for one year: make check-ingestion-status YEAR=2025
+```
+
+Query `case_law_ingestion_tracking` in Supabase for per-year expected/processed/failed.

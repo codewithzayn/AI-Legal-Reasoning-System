@@ -80,7 +80,7 @@ class CaseLawStorage:
             if result:
                 stored_count += 1
 
-        logger.info(f"Stored {stored_count}/{len(docs)} cases")
+        logger.info("Stored %s/%s cases", stored_count, len(docs))
         return stored_count
 
     def _store_references(self, case_id: str, doc: CaseLawDocument) -> int:
@@ -102,25 +102,33 @@ class CaseLawStorage:
 
             return len(response.data) if response.data else 0
         except Exception as e:
-            logger.error(f"Error storing references for {doc.case_id}: {e}")
+            logger.error("Error storing references for %s: %s", doc.case_id, e)
             return 0
 
     _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     _FINNISH_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+    _FINNISH_DATE_2YEAR_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{2})$")
 
     @classmethod
     def _validate_date(cls, value: str | None) -> str | None:
-        """Ensure a date value is valid ISO YYYY-MM-DD, or convert Finnish d.m.yyyy.
-        Returns None if the date is invalid or unparseable (prevents Supabase errors)."""
+        """Ensure a date value is valid ISO YYYY-MM-DD, or convert from Finnish formats.
+        Accepts d.m.yyyy and d.m.yy (2-digit year: 00-30 -> 20xx, 31-99 -> 19xx).
+        Returns None only when value is empty or clearly invalid (e.g. leading '-')."""
         if not value:
             return None
         value = value.strip()
+        if not value or value.startswith("-"):
+            return None
         if cls._ISO_DATE_RE.match(value):
             return value
-        # Try Finnish format (e.g. "31.3.2025" -> "2025-03-31")
         m = cls._FINNISH_DATE_RE.match(value)
         if m:
             return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+        m2 = cls._FINNISH_DATE_2YEAR_RE.match(value)
+        if m2:
+            yy = int(m2.group(3))
+            yyyy = str(2000 + yy) if yy <= 30 else str(1900 + yy)
+            return f"{yyyy}-{int(m2.group(2)):02d}-{int(m2.group(1)):02d}"
         logger.warning("Invalid date dropped: %r", value)
         return None
 
@@ -187,7 +195,7 @@ class CaseLawStorage:
                 return response.data[0]["id"]
             return None
         except Exception as e:
-            logger.error(f"Error inserting metadata for {doc.case_id}: {e}")
+            logger.error("Error inserting metadata for %s: %s", doc.case_id, e)
             return None
 
     # Max chars per chunk for embedding.  Smaller = more focused embedding.

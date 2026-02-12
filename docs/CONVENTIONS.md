@@ -43,8 +43,9 @@ Where to put what, and how the project is organized.
 ### `scripts/` – Runnable jobs and migrations
 
 - **Finlex ingestion:** `finlex_ingest/` – uses the Finlex API (documented).
-- **Case law ingestion:** `case_law/` – per court/subtype; uses scraping (no API). See [DATA_SOURCES.md](DATA_SOURCES.md).
-- **Case law core:** `case_law/core/` – shared modules: `ingestion_manager.py` (scrape + extract + store), `export_pdf_to_drive.py` (PDF + Drive backup), `ingest_history.py` (multi-year batch runner).
+- **Case law:** `case_law/` – per court/subtype; uses scraping (no API). See [DATA_SOURCES.md](DATA_SOURCES.md).
+  - **Core** (`case_law/core/`): shared pipeline – `ingestion_manager.py`, `ingest_history.py`, `export_pdf_to_drive.py`, `scrape_json_pdf_drive.py`, `check_ingestion_status.py` (Supabase ingestion status).
+  - **Supreme Court** (`case_law/supreme_court/`): `ingest_precedents.py`, `ingest_rulings.py`, `ingest_leaves.py`, `ingest_all_subtypes.py`, `verify_json_full_text.py` (scan JSON for empty full_text), `update_case_full_text.py` (manual full_text fix).
 - **Migrations:** `migrations/*.sql` – all schema/DB changes.
 - Scripts import from `src/` only. Run from **project root** (optionally with `PYTHONPATH` set to project root).
 
@@ -72,6 +73,13 @@ Where to put what, and how the project is organized.
 - **Code config:** `src/config/settings.py` and `src/config/logging_config.py`.
 - **Secrets and env-specific values:** `.env` (never committed). Copy from `.env.example`. For every variable see `.env.example`; do not commit `.env`.
 - No hardcoded secrets, API keys, or DB URLs in code.
+
+### Logging
+
+- **Single entry point:** All modules use `from src.config.logging_config import setup_logger` and `logger = setup_logger(__name__)`.
+- **No `print()` in library or pipeline code:** Use `logger.info()`, `logger.warning()`, `logger.error()` (or `logger.debug()` / `logger.exception()`). CLI scripts that produce human-readable reports (e.g. `verify_json_full_text.py`) also use the logger with `LOG_FORMAT=simple` so output is message-only.
+- **Format:** Use `%s` placeholders in log messages (e.g. `logger.info("Count: %s", n)`), not f-strings, so formatting is lazy and consistent.
+- **Env:** `LOG_LEVEL` (default INFO), `LOG_FORMAT` – set to `simple` for human-readable progress (e.g. ingestion, verify scripts); unset for JSON logs in production.
 
 ---
 
@@ -113,7 +121,7 @@ All commands from **project root**. Prefer **Make:** `make <target>` (e.g. `make
 | `make run-api` | FastAPI ingest API – http://0.0.0.0:8000 |
 | `make test` | Run pytest |
 
-**Case law (KKO):** `make ingest-precedents` (default YEAR=2026), `make ingest-precedents-force`, `make ingest-rulings`, `make ingest-leaves`, `make ingest-kko`, `make ingest-history` (START/END/COURT).  
+**Case law (KKO):** `make ingest-precedents`, `make ingest-precedents-force`, `make ingest-precedents-case-ids`, `make fix-json-precedents`, `make update-case-full-text`, `make verify-json-full-text`, `make check-ingestion-status`, `make ingest-rulings`, `make ingest-leaves`, `make ingest-kko`, `make ingest-history` (START/END/COURT).  
 **PDF/Drive backup:** `make export-pdf-drive`, `make export-pdf-drive-range`, `make export-pdf-drive-type`.  
 **KHO:** `make ingest-kho`. **Finlex:** `make ingest-finlex`.  
 **Linting:** `make lint`, `make lint-fix`, `make format`.

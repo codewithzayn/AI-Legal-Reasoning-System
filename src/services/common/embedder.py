@@ -10,6 +10,7 @@ from openai import OpenAI
 
 from src.config.logging_config import setup_logger
 from src.config.settings import config
+from src.utils.retry import with_retry
 
 logger = setup_logger(__name__)
 
@@ -72,7 +73,7 @@ class DocumentEmbedder:
             texts = [chunk.text for chunk in batch]
 
             # Generate embeddings
-            logger.info(f"Generating embeddings for batch {i // batch_size + 1} ({len(batch)} chunks)...")
+            logger.info("Generating embeddings for batch %s (%s chunks)...", i // batch_size + 1, len(batch))
             response = self.client.embeddings.create(model=self.model, input=texts)
 
             # Combine chunks with embeddings
@@ -89,6 +90,7 @@ class DocumentEmbedder:
 
         return embedded_chunks
 
+    @with_retry()
     def embed_query(self, query_text: str) -> list[float]:
         """
         Generate embedding for a single query

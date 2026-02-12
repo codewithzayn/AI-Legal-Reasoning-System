@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
+from src.utils.retry import retry_async
 
 logger = setup_logger(__name__)
 
@@ -94,7 +95,9 @@ async def check_relevancy(query: str, answer: str) -> dict:
     user_content = f"KYSYMYS:\n{query}\n\nVASTAUKSEN TIivistelmä / ote:\n{compact}"
 
     try:
-        response = await llm.ainvoke([SystemMessage(content=RELEVANCY_SYSTEM), HumanMessage(content=user_content)])
+        response = await retry_async(
+            lambda: llm.ainvoke([SystemMessage(content=RELEVANCY_SYSTEM), HumanMessage(content=user_content)])
+        )
         text = (response.content or "").strip()
         # Allow markdown code block
         if "```" in text:
@@ -105,8 +108,8 @@ async def check_relevancy(query: str, answer: str) -> dict:
         score = max(score, 1)
         score = min(score, 5)
         reason = str(data.get("reason", "")) or "—"
-        logger.info(f"Relevancy check: score={score}, reason={reason[:80]}")
+        logger.info("Relevancy check: score=%s, reason=%s", score, reason[:80])
         return {"score": score, "reason": reason}
     except (json.JSONDecodeError, Exception) as e:
-        logger.warning(f"Relevancy check failed: {e}")
+        logger.warning("Relevancy check failed: %s", e)
         return {"score": 0, "reason": "Relevanssin tarkistus epäonnistui."}

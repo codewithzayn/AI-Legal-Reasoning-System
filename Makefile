@@ -3,7 +3,8 @@
 
 .PHONY: help install run run-cli run-api test \
 	lint format lint-fix fix \
-	ingest-precedents ingest-precedents-force ingest-precedents-case-ids ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
+	ingest-precedents ingest-precedents-force ingest-precedents-case-ids fix-json-precedents update-case-full-text verify-json-full-text check-ingestion-status \
+	ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
 	scrape-json-pdf-drive scrape-json-pdf-drive-range \
 	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
 	ingest-finlex
@@ -34,7 +35,11 @@ help:
 	@echo "--- Case law: Supreme Court (KKO) ---"
 	@echo "  make ingest-precedents    Ingest KKO precedents (Ennakkopäätökset). Optional: YEAR=2026"
 	@echo "  make ingest-precedents-force  Same, force re-scrape (ignore JSON cache)"
-	@echo "  make ingest-precedents-case-ids  Ingest only given case IDs. YEAR=... CASE_IDS=\"KKO:2018:72,KKO:2018:73\""
+	@echo "  make ingest-precedents-case-ids  Ingest only given case IDs (JSON + Supabase). YEAR=... CASE_IDS=\"...\""
+	@echo "  make fix-json-precedents  Re-scrape case IDs, update JSON only (no Supabase). Fix empty full_text."
+	@echo "  make update-case-full-text  Manually set full_text for one case. YEAR=... CASE_ID=... FILE=..."
+	@echo "  make verify-json-full-text  Scan precedent JSON for empty full_text; print fix commands."
+	@echo "  make check-ingestion-status  Show Supabase ingestion status (per year). Optional: YEAR=..."
 	@echo "  make ingest-rulings       Ingest KKO other rulings (Muut päätökset). Optional: YEAR=2026"
 	@echo "  make ingest-leaves        Ingest KKO leaves to appeal (Valitusluvat). Optional: YEAR=2026"
 	@echo "  make ingest-kko           Ingest KKO all subtypes (precedent + ruling + leave) for one year. Optional: YEAR=2026"
@@ -108,11 +113,31 @@ ingest-precedents:
 ingest-precedents-force:
 	python3 scripts/case_law/supreme_court/ingest_precedents.py --year $(YEAR) --force
 
-# Ingest only specific precedent case IDs (e.g. to fix empty full_text). Updates JSON cache and DB.
+# Ingest only specific precedent case IDs. Updates JSON + Supabase.
 # Example: make ingest-precedents-case-ids YEAR=2018 CASE_IDS="KKO:2018:72,KKO:2018:73"
 CASE_IDS ?=
 ingest-precedents-case-ids:
 	python3 scripts/case_law/supreme_court/ingest_precedents.py --year $(YEAR) --case-ids "$(CASE_IDS)"
+
+# Re-scrape case IDs and update JSON only (no Supabase). Use to fix empty full_text before PDF/Drive export.
+# Example: make fix-json-precedents YEAR=1983 CASE_IDS="KKO:1983:II-55,KKO:1983:II-56"
+fix-json-precedents:
+	python3 scripts/case_law/supreme_court/ingest_precedents.py --year $(YEAR) --case-ids "$(CASE_IDS)" --json-only
+
+# Manually update full_text for a case (when scraper fails). FILE=path to text file.
+# Example: make update-case-full-text YEAR=1983 CASE_ID=KKO:1983:II-55 FILE=content.txt
+CASE_ID ?=
+FILE ?=
+update-case-full-text:
+	python3 scripts/case_law/supreme_court/update_case_full_text.py --year $(YEAR) --case-id "$(CASE_ID)" --file "$(FILE)"
+
+# Verify precedent JSON files for empty full_text; print re-scrape commands.
+verify-json-full-text:
+	python3 scripts/case_law/supreme_court/verify_json_full_text.py
+
+# Check Supabase ingestion status (total/processed/failed per year). Optional: YEAR=2025
+check-ingestion-status:
+	python3 scripts/case_law/core/check_ingestion_status.py $(if $(YEAR),--year $(YEAR),)
 
 ingest-rulings:
 	python3 scripts/case_law/supreme_court/ingest_rulings.py --year $(YEAR)

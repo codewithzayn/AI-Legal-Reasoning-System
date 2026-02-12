@@ -20,6 +20,7 @@ TRANSLATIONS = {
         "stream_relevancy_short": "Relevancy: {score}/5.",
         "stream_error": "Error: {error}",
         "stream_connection_error": "Connection error: {error}",
+        "query_too_long": "Query too long (max {max} characters). Please shorten your question.",
     },
     "fi": {
         "page_title": "Tekoälypohjainen oikeudellinen päättelyjärjestelmä",
@@ -42,6 +43,7 @@ TRANSLATIONS = {
         "stream_relevancy_short": "Relevanssi: {score}/5.",
         "stream_error": "Virhe: {error}",
         "stream_connection_error": "Virhe yhteydessä: {error}",
+        "query_too_long": "Kysymys on liian pitkä (max {max} merkkiä). Lyhennä kysymystäsi.",
     },
 }
 

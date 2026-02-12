@@ -138,7 +138,7 @@ class FinlexIngestionService:
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Failed to process {document_uri}: {error_msg}")
+            logger.error("Failed to process %s: %s", document_uri, error_msg)
             try:
                 self.storage.log_failed_document(
                     document_uri=document_uri,
@@ -150,7 +150,7 @@ class FinlexIngestionService:
                     language=language,
                 )
             except Exception as log_error:
-                logger.error(f"Failed to log error: {log_error}")
+                logger.error("Failed to log error: %s", log_error)
             return {
                 "document_uri": document_uri,
                 "success": False,
@@ -176,7 +176,7 @@ class FinlexIngestionService:
                 pdf_data = self.pdf_extractor.extract_from_url(pdf_url)
                 return {"success": True, "url": pdf_url, "data": pdf_data}
             except Exception as e:
-                logger.warning(f"Failed to extract embedded PDF {pdf_url}: {e}")
+                logger.warning("Failed to extract embedded PDF %s: %s", pdf_url, e)
                 return {"success": False, "url": pdf_url, "error": str(e)}
 
         with ThreadPoolExecutor(max_workers=config.PDF_MAX_WORKERS) as executor:
@@ -240,4 +240,4 @@ class FinlexIngestionService:
                     }
                 ).execute()
         except Exception as e:
-            logger.warning(f"Failed to update tracking: {e}")
+            logger.warning("Failed to update tracking: %s", e)

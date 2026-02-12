@@ -17,6 +17,7 @@ from supabase import AsyncClient, create_async_client
 from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.common.embedder import DocumentEmbedder
+from src.utils.retry import retry_async
 
 from .reranker import CohereReranker
 
@@ -28,13 +29,13 @@ logger = setup_logger(__name__)
 # ---------------------------------------------------------------------------
 _CASE_ID_RE = re.compile(r"\b(KKO|KHO)\s*:\s*(\d{4})\s*:\s*(\d+)\b", re.IGNORECASE)
 
-_expansion_llm = None
+_expansion_llm_holder: list = []  # lazy singleton; list avoids global statement
+
 
 def _get_expansion_llm():
-    global _expansion_llm
-    if _expansion_llm is None:
-        _expansion_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.4)
-    return _expansion_llm
+    if not _expansion_llm_holder:
+        _expansion_llm_holder.append(ChatOpenAI(model="gpt-4o-mini", temperature=0.4))
+    return _expansion_llm_holder[0]
 
 
 class HybridRetrieval:
@@ -99,11 +100,13 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 1. OYL yhtiökokouksen määrääminen tuomioistuimen päätöksellä edellytykset
 2. Millä perusteella tuomioistuin voi velvoittaa yhtiön kutsumaan koolle yhtiökokouksen"""
         try:
-            response = await _get_expansion_llm().ainvoke(
-                [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=f"Alkuperäinen: {query}"),
-                ]
+            response = await retry_async(
+                lambda: _get_expansion_llm().ainvoke(
+                    [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=f"Alkuperäinen: {query}"),
+                    ]
+                )
             )
             lines = [ln.strip().lstrip("0123456789.-) ") for ln in response.content.strip().splitlines() if ln.strip()]
             alternatives = [ln for ln in lines if ln][:2]
@@ -270,15 +273,16 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         document's content when the user references it by ID."""
         try:
             client = await self._get_client()
+            case_law_resp = await client.table("case_law").select("id").eq("case_id", case_id).limit(1).execute()
+            if not case_law_resp.data or len(case_law_resp.data) == 0:
+                logger.info("Direct case lookup → case %s not found in DB", case_id)
+                return []
+
+            case_law_id = case_law_resp.data[0]["id"]
             response = (
                 await client.table("case_law_sections")
                 .select("id, content, section_type, section_title, case_law_id")
-                .eq(
-                    "case_law_id",
-                    (await client.table("case_law").select("id").eq("case_id", case_id).limit(1).execute()).data[0][
-                        "id"
-                    ],
-                )
+                .eq("case_law_id", case_law_id)
                 .execute()
             )
 
@@ -343,7 +347,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
             return response.data or []
         except Exception as e:
-            logger.error(f"Vector search error: {e}")
+            logger.error("Vector search error: %s", e)
             return []
 
     def _sanitize_fts_query(self, query: str) -> str:
@@ -375,7 +379,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
             return response.data or []
         except Exception as e:
-            logger.error(f"FTS search error: {e}")
+            logger.error("FTS search error: %s", e)
             return []
 
     def rrf_merge(self, vector_results: list[dict], fts_results: list[dict], k: int = 60) -> list[dict]:
@@ -473,7 +477,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 )
             return results
         except Exception as e:
-            logger.error(f"Case law search error: {e}")
+            logger.error("Case law search error: %s", e)
             return []
 
     async def hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:

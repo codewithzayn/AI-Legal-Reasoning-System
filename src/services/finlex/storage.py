@@ -71,7 +71,7 @@ class SupabaseStorage:
             )
 
         # Upsert into Supabase (prevents duplicates via unique constraint)
-        logger.info(f"Upserting {len(rows)} chunks into Supabase...")
+        logger.info("Upserting %s chunks into Supabase...", len(rows))
         response = self.client.table("legal_chunks").upsert(rows, on_conflict="document_uri,chunk_index").execute()
 
         return len(response.data)
@@ -132,4 +132,4 @@ class SupabaseStorage:
                     }
                 ).execute()
         except Exception as e:
-            logger.error(f"Failed to log error: {e}")
+            logger.error("Failed to log error: %s", e)

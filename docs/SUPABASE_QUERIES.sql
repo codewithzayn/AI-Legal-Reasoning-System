@@ -34,10 +34,62 @@ FROM case_law
 WHERE court_type = 'supreme_court' AND case_year = 2026
 ORDER BY case_id;
 
--- Check ingestion tracking status
-SELECT court_type, decision_type, year, status, total_cases, processed_cases, last_processed_case, started_at, completed_at
+-- -----------------------------------------------------------------------------
+-- Check whether data for a year is present in Supabase (use for 2026, 2025, … any year)
+-- Replace 2026 with the year you want to check.
+-- -----------------------------------------------------------------------------
+-- Count by court and type for that year
+SELECT court_type, decision_type, case_year, COUNT(*) AS documents_in_supabase
+FROM case_law
+WHERE case_year = 2026
+GROUP BY court_type, decision_type, case_year
+ORDER BY court_type, decision_type;
+
+-- List all case_id for that year (to compare with JSON or ingestion tracking)
+SELECT case_id, court_type, decision_type, case_year
+FROM case_law
+WHERE case_year = 2026
+ORDER BY case_id;
+
+-- -----------------------------------------------------------------------------
+-- Ingestion status: per year, how many total / processed / failed / remaining
+-- (Matches ingestion_manager: total=expected, processed=in Supabase, failed=this run, remaining=total−processed)
+-- -----------------------------------------------------------------------------
+SELECT
+    court_type,
+    decision_type,
+    year,
+    status,
+    total_cases AS total,
+    processed_cases AS processed,
+    failed_cases AS failed,
+    GREATEST(0, total_cases - processed_cases) AS remaining,
+    last_processed_case,
+    completed_at
 FROM case_law_ingestion_tracking
-ORDER BY year DESC, court_type;
+ORDER BY year DESC, court_type, decision_type;
+
+-- Same but for one specific year (replace 1983 with your year)
+-- SELECT court_type, decision_type, year, status, total_cases, processed_cases, failed_cases,
+--        GREATEST(0, total_cases - processed_cases) AS remaining, completed_at
+-- FROM case_law_ingestion_tracking
+-- WHERE year = 1983
+-- ORDER BY court_type, decision_type;
+
+-- Validate: compare tracking.processed_cases to actual count in case_law (should match)
+SELECT
+    t.court_type,
+    t.decision_type,
+    t.year,
+    t.status,
+    t.total_cases,
+    t.processed_cases AS tracking_processed,
+    COUNT(c.id) AS actual_in_case_law,
+    t.processed_cases - COUNT(c.id) AS diff
+FROM case_law_ingestion_tracking t
+LEFT JOIN case_law c ON c.court_type = t.court_type AND c.decision_type = t.decision_type AND c.case_year = t.year
+GROUP BY t.court_type, t.decision_type, t.year, t.status, t.total_cases, t.processed_cases
+ORDER BY t.year DESC, t.court_type, t.decision_type;
 
 -- View ingestion errors (failed documents)
 SELECT e.case_id, e.error_type, e.error_message, e.url, e.occurred_at, t.year, t.court_type

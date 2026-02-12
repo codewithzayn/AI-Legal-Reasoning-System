@@ -13,6 +13,7 @@ from src.config.settings import config
 from src.services.retrieval import HybridRetrieval
 from src.services.retrieval.generator import LLMGenerator
 from src.services.retrieval.relevancy import check_relevancy
+from src.utils.retry import retry_async
 
 from .state import AgentState
 
@@ -86,12 +87,14 @@ async def analyze_intent(state: AgentState) -> AgentState:
     """
 
     try:
-        response = await _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+        response = await retry_async(
+            lambda: _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+        )
         intent = response.content.strip().lower()
         if intent not in ["legal_search", "general_chat", "clarification"]:
             intent = "legal_search"
 
-        logger.info(f"Intent: {intent}")
+        logger.info("Intent: %s", intent)
         return {
             "intent": intent,
             "stage": "analyze",
@@ -100,7 +103,7 @@ async def analyze_intent(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error(f"Intent error: {e}")
+        logger.error("Intent error: %s", e)
         return {"intent": "legal_search", "stage": "analyze"}
 
 
@@ -113,7 +116,7 @@ async def reformulate_query(state: AgentState) -> AgentState:
     attempts = state.get("search_attempts", 0) + 1
     state["search_attempts"] = attempts
 
-    logger.info(f"[REFORMULATE] Attempt {attempts}: Rewriting query...")
+    logger.info("[REFORMULATE] Attempt %s: Rewriting query...", attempts)
 
     system_prompt = """You are a legal search expert. The previous search found 0 results.
     Rewrite the user's query to be a better keyword search for a Finnish legal database (Finlex/Case Law).
@@ -126,13 +129,15 @@ async def reformulate_query(state: AgentState) -> AgentState:
     """
 
     try:
-        response = await _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=original)])
+        response = await retry_async(
+            lambda: _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=original)])
+        )
         new_query = response.content.strip()
         state["query"] = new_query
-        logger.info(f"[REFORMULATE] New query: {new_query}")
+        logger.info("[REFORMULATE] New query: %s", new_query)
 
     except Exception as e:
-        logger.error(f"[REFORMULATE] Error: {e}")
+        logger.error("[REFORMULATE] Error: %s", e)
 
     return state
 
@@ -145,13 +150,15 @@ async def ask_clarification(state: AgentState) -> AgentState:
     query = state["query"]
 
     try:
-        response = await _llm_mini.ainvoke(
-            [
-                SystemMessage(
-                    content="The user's legal question is too vague. Ask a polite follow-up question in Finnish to clarify what they are looking for."
-                ),
-                HumanMessage(content=query),
-            ]
+        response = await retry_async(
+            lambda: _llm_mini.ainvoke(
+                [
+                    SystemMessage(
+                        content="The user's legal question is too vague. Ask a polite follow-up question in Finnish to clarify what they are looking for."
+                    ),
+                    HumanMessage(content=query),
+                ]
+            )
         )
         state["response"] = response.content
     except Exception:
@@ -174,7 +181,9 @@ async def general_chat(state: AgentState) -> AgentState:
     """
 
     try:
-        response = await _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+        response = await retry_async(
+            lambda: _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
+        )
         state["response"] = response.content
     except Exception:
         state["response"] = "Hei! Kuinka voin auttaa sinua oikeudellisissa asioissa?"
@@ -198,7 +207,7 @@ async def search_knowledge(state: AgentState) -> AgentState:
             final_limit=config.CHUNKS_TO_LLM,
         )
         elapsed = time.time() - start_time
-        logger.info(f"Reranking done → {len(results)} chunks in {elapsed:.1f}s")
+        logger.info("Reranking done → %s chunks in %.1fs", len(results), elapsed)
 
         state["search_results"] = results
         state["rrf_results"] = results
@@ -209,7 +218,7 @@ async def search_knowledge(state: AgentState) -> AgentState:
             "search_time": elapsed,
         }
     except Exception as e:
-        logger.error(f"Search error: {e}")
+        logger.error("Search error: %s", e)
         state["error"] = f"Search failed: {e!s}"
         state["search_results"] = []
 
@@ -231,7 +240,7 @@ async def reason_legal(state: AgentState) -> AgentState:
         return state
 
     start_time = time.time()
-    logger.info(f"Generating response from {len(results)} chunks...")
+    logger.info("Generating response from %s chunks...", len(results))
     focus_case_ids = HybridRetrieval.extract_case_ids(state["query"]) if state.get("query") else []
     if focus_case_ids:
         logger.info("Focus case(s) for answer: %s", focus_case_ids)
@@ -241,7 +250,7 @@ async def reason_legal(state: AgentState) -> AgentState:
         )
         state["response"] = response
         elapsed = time.time() - start_time
-        logger.info(f"Response ready in {elapsed:.1f}s")
+        logger.info("Response ready in %.1fs", elapsed)
 
         # Relevancy check (optional, adds ~2-5s; set RELEVANCY_CHECK_ENABLED=true to enable)
         if config.RELEVANCY_CHECK_ENABLED and response and not response.startswith("Pahoittelut"):
@@ -250,14 +259,14 @@ async def reason_legal(state: AgentState) -> AgentState:
                 state["relevancy_score"] = float(rel["score"])
                 state["relevancy_reason"] = rel.get("reason") or ""
             except Exception as rel_err:
-                logger.warning(f"Relevancy check failed: {rel_err}")
+                logger.warning("Relevancy check failed: %s", rel_err)
                 state["relevancy_score"] = None
                 state["relevancy_reason"] = None
         else:
             state["relevancy_score"] = None
             state["relevancy_reason"] = None
     except Exception as e:
-        logger.error(f"LLM error: {e}")
+        logger.error("LLM error: %s", e)
         state["error"] = f"LLM generation failed: {e!s}"
         state["response"] = "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen."
         state["relevancy_score"] = None

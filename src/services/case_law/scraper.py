@@ -158,7 +158,7 @@ class CaseLawScraper:
             if subtype in patterns:
                 target_index_url_patterns.extend(patterns[subtype])
             else:
-                logger.warning(f"Subtype {subtype} not found for {court}, skipping.")
+                logger.warning("Subtype %s not found for %s, skipping.", subtype, court)
                 return []
         else:
             for p_list in patterns.values():
@@ -169,7 +169,7 @@ class CaseLawScraper:
 
         for index_url_pattern in target_index_url_patterns:
             index_url = index_url_pattern.format(year=year)
-            logger.info(f"Fetching index: {index_url}")
+            logger.info("Fetching index: %s", index_url)
 
             try:
                 # Use Playwright to handle React/CSR
@@ -179,7 +179,7 @@ class CaseLawScraper:
 
                 page_num = 1
                 while True:
-                    logger.info(f"Processing page {page_num} for {index_url}...")
+                    logger.info("Processing page %s for %s...", page_num, index_url)
                     content = await self.page.content()
                     soup = BeautifulSoup(content, "html.parser")
 
@@ -195,7 +195,7 @@ class CaseLawScraper:
                             seen_urls.add(full_url)
                             found_on_page += 1
 
-                    logger.info(f"Found {found_on_page} new cases on page {page_num}")
+                    logger.info("Found %s new cases on page %s", found_on_page, page_num)
 
                     # Check for Next button
                     # Selector based on debug analysis: a[aria-label="Seuraava sivu"]
@@ -223,7 +223,7 @@ class CaseLawScraper:
                     page_num += 1
 
             except Exception as e:
-                logger.error(f"Error fetching index {index_url}: {e}")
+                logger.error("Error fetching index %s: %s", index_url, e)
 
         return sorted(list(all_case_urls))
 
@@ -236,15 +236,15 @@ class CaseLawScraper:
             year: Year to fetch
             subtype: Optional subtype (e.g. "precedent", "ruling")
         """
-        logger.info(f"Starting year fetch: {court} {year} (subtype={subtype})")
+        logger.info("Starting year fetch: %s %s (subtype=%s)", court, year, subtype)
 
         urls = await self.fetch_year_index(court, year, subtype)
 
         if not urls:
-            logger.warning(f"No cases found in index for {court} {year}")
+            logger.warning("No cases found in index for %s %s", court, year)
             return []
 
-        logger.info(f"Found {len(urls)} cases to fetch")
+        logger.info("Found %s cases to fetch", len(urls))
 
         documents = []
         for i, url in enumerate(urls):
@@ -340,15 +340,41 @@ class CaseLawScraper:
                     logger.warning("Case %s returned 404 based on title", url)
                     return None
 
-                full_text = await self.page.evaluate("""() => {
-                const article = document.querySelector('article');
-                if (article) return article.innerText;
-                const main = document.querySelector('main');
-                if (main) return main.innerText;
-                return document.body.innerText;
-            }""")
+                async def _extract_content() -> str:
+                    return await self.page.evaluate("""() => {
+                        const candidates = [];
+                        const sel = (selector) => { const el = document.querySelector(selector); return el ? el.innerText : ''; };
+                        const text = (el) => el ? (el.innerText || '') : '';
+                        const article = document.querySelector('article');
+                        if (article) candidates.push(text(article));
+                        const main = document.querySelector('main');
+                        if (main) candidates.push(text(main));
+                        candidates.push(sel('[role="main"]'));
+                        candidates.push(sel('.document-content'));
+                        candidates.push(sel('.content'));
+                        candidates.push(sel('#content'));
+                        candidates.push(sel('#main-content'));
+                        candidates.push(text(document.body));
+                        let best = '';
+                        for (const t of candidates) {
+                            const s = (t || '').trim();
+                            if (s.length > best.length) best = s;
+                        }
+                        return best || (document.body ? document.body.innerText : '');
+                    }""")
 
-                if "Sivua ei löytynyt" in full_text:
+                full_text = (await _extract_content() or "").strip()
+                # If empty or very short, wait longer for Finlex React/JS to render; retry up to 3 waits
+                for wait_round in range(3):
+                    if full_text and len(full_text) > 200:
+                        break
+                    if wait_round == 0:
+                        await self.page.wait_for_timeout(5000)
+                    else:
+                        await self.page.wait_for_timeout(8000)
+                    full_text = (await _extract_content() or "").strip()
+
+                if "Sivua ei löytynyt" in (full_text or ""):
                     logger.warning("Case %s content indicates 404", url)
                     return None
 
@@ -487,11 +513,19 @@ class CaseLawScraper:
         return ""
 
     def _convert_finnish_date(self, date_str: str) -> str:
-        """Convert Finnish date '7.1.2026' to ISO '2026-01-07'."""
-        m = re.match(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", date_str.strip())
+        """Convert Finnish date to ISO. Accepts '7.1.2026' or '7.1.26' (2-digit year -> 19xx/20xx)."""
+        s = date_str.strip()
+        if not s:
+            return ""
+        m = re.match(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\b", s)
         if m:
             return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
-        return date_str  # Return as-is if not parseable
+        m2 = re.match(r"(\d{1,2})\.(\d{1,2})\.(\d{2})\b", s)
+        if m2:
+            yy = int(m2.group(3))
+            yyyy = str(2000 + yy) if yy <= 30 else str(1900 + yy)
+            return f"{yyyy}-{int(m2.group(2)):02d}-{int(m2.group(1)):02d}"
+        return date_str
 
     def _parse_case_text(
         self, text: str, court: str, year: int, number: int, url: str, *, url_suffix: str | None = None

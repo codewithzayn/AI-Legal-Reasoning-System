@@ -77,7 +77,7 @@ class FinlexAPI:
                 response.raise_for_status()
                 return response.json()
         except httpx.RequestError as e:
-            logger.error(f"API error: {e}")
+            logger.error("API error: %s", e)
             return []
 
     def _extract_language(self, uri: str) -> str:

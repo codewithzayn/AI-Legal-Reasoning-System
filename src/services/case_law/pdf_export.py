@@ -489,6 +489,47 @@ def _render_body(body_lines: list[str], styles: dict, story: list) -> None:
     flush()
 
 
+def doc_to_placeholder_pdf(doc: CaseLawDocument | None) -> bytes:
+    """
+    Generate a one-page placeholder PDF when full_text is missing.
+    Used so we still upload something to Drive (don't skip); user can re-scrape later.
+    """
+    from io import BytesIO
+
+    if doc is None:
+        raise ValueError("doc must not be None")
+    case_id = getattr(doc, "case_id", None) or "unknown"
+    url = (getattr(doc, "url", None) or "").strip()
+
+    buffer = BytesIO()
+    styles = _build_styles()
+    doc_template = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+    )
+    story = [
+        Paragraph(_escape(case_id), styles["title"]),
+        Spacer(1, 12),
+        Paragraph(
+            _escape("Content not available. Full text was empty at export. Re-scrape this case to populate content."),
+            styles["body"],
+        ),
+        Spacer(1, 8),
+        Paragraph(
+            _escape("Sisältö puuttuu. Tallenna uudelleen tai aja uudelleen kaavinta tälle tapaukselle."), styles["body"]
+        ),
+    ]
+    if url:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph(f"Source: {_escape(url)}", styles["footer_note"]))
+    doc_template.build(story)
+    return buffer.getvalue()
+
+
 def doc_to_pdf(doc: CaseLawDocument | None) -> bytes:
     """
     Convert a CaseLawDocument to a professionally formatted PDF that mirrors

@@ -16,7 +16,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.agent.stream import stream_query_response
-from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR  # noqa: F401
+from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR, config, validate_env_for_app
 from src.config.translations import LANGUAGE_OPTIONS, t
 from src.utils.chat_helpers import add_message, clear_chat_history, get_chat_history, initialize_chat_history
 
@@ -91,6 +91,8 @@ def _process_prompt(prompt: str) -> None:
 
 
 def main():
+    validate_env_for_app()
+
     if "lang" not in st.session_state:
         st.session_state.lang = "en"
     lang = _get_lang()
@@ -142,7 +144,11 @@ def main():
     st.markdown("</div>", unsafe_allow_html=True)
 
     if submitted and query and query.strip():
-        _process_prompt(query.strip())
+        q = query.strip()
+        if len(q) > config.MAX_QUERY_LENGTH:
+            st.error(t("query_too_long", lang, max=config.MAX_QUERY_LENGTH))
+        else:
+            _process_prompt(q)
         st.rerun()
 
     with st.sidebar:

@@ -27,7 +27,7 @@ def process_query(user_query: str, chat_history: list = None) -> str:
     """
 
     total_start = time.time()
-    logger.info(f"QUERY: {user_query}")
+    logger.info("QUERY: %s", user_query)
 
     # Initialize state
     initial_state: AgentState = {
@@ -50,7 +50,7 @@ def process_query(user_query: str, chat_history: list = None) -> str:
         final_state = agent_graph.invoke(initial_state)
 
         total_elapsed = time.time() - total_start
-        logger.info(f"TOTAL TIME: {total_elapsed:.2f}s")
+        logger.info("TOTAL TIME: %.2fs", total_elapsed)
 
         resp = final_state.get("response", "Error: No response generated")
         return _strip_relevancy_line(resp)

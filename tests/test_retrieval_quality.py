@@ -51,7 +51,6 @@ async def evaluate_retrieval():
 
     for item in EVAL_QUERIES:
         logger.info("")
-        logger.info("=" * 60)
         logger.info("Query: %s", item["query"])
         logger.info("Expected: %s", item["expected_cases"])
         logger.info("Type: %s", item["query_type"])
@@ -102,7 +101,6 @@ async def evaluate_retrieval():
     # Overall metrics
     n = len(metrics["mrr"]) or 1
     logger.info("")
-    logger.info("=" * 60)
     logger.info("OVERALL METRICS:")
     logger.info("Mean Reciprocal Rank: %.3f", sum(metrics["mrr"]) / n)
     logger.info("Recall@3:  %.1f%%", sum(metrics["recall_at_3"]) / n * 100)

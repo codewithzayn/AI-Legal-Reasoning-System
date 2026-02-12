@@ -31,7 +31,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 from src.config.logging_config import setup_logger
 from src.config.settings import config
-from src.services.case_law.pdf_export import doc_to_pdf, get_pdf_filename
+from src.services.case_law.pdf_export import doc_to_pdf, doc_to_placeholder_pdf, get_pdf_filename
 from src.services.case_law.scraper import CaseLawDocument, CaseLawScraper
 from src.services.drive import credentials_file_exists
 from src.services.drive.uploader import GoogleDriveUploader
@@ -130,28 +130,29 @@ def _pdf_and_upload(
     export_root: Path,
     drive_uploader,
 ) -> tuple[int, int, int, list[str]]:
-    """Generate PDF from scraped full_text (ditto copy of website) and upload to Drive. Returns (success, fail, skipped, failed_ids)."""
+    """Generate PDF from scraped full_text (or placeholder if empty) and upload to Drive. Returns (success, fail, skipped, failed_ids). skipped is always 0 (placeholders uploaded instead)."""
     type_label = TYPE_LABEL_MAP.get(subtype, subtype)
     write_local = _write_local_enabled()
     if write_local:
         out_dir = export_root / type_label / str(year)
         out_dir.mkdir(parents=True, exist_ok=True)
-    success = fail = skipped = 0
+    success = fail = 0
+    skipped = 0  # No longer skip empty full_text; we export placeholder PDF and upload
     failed_ids: list[str] = []
     for i, doc in enumerate(documents, 1):
         full_text_val = (getattr(doc, "full_text", None) or "").strip()
-        if not full_text_val:
-            logger.warning(
-                "[%s/%s] %s SKIP — no full_text; not exported, not uploaded",
-                i,
-                len(documents),
-                getattr(doc, "case_id", "?"),
-            )
-            skipped += 1
-            continue
         pdf_name = get_pdf_filename(getattr(doc, "case_id", None) or "unknown")
         try:
-            pdf_bytes = doc_to_pdf(doc)
+            if full_text_val:
+                pdf_bytes = doc_to_pdf(doc)
+            else:
+                logger.warning(
+                    "[%s/%s] %s — no full_text; exporting placeholder PDF and uploading to Drive",
+                    i,
+                    len(documents),
+                    getattr(doc, "case_id", "?"),
+                )
+                pdf_bytes = doc_to_placeholder_pdf(doc)
         except Exception as e:
             logger.exception("[%s/%s] %s PDF failed: %s", i, len(documents), doc.case_id, e)
             fail += 1
@@ -218,7 +219,7 @@ def main() -> int:
         logger.error("Nothing to do: set CASE_LAW_EXPORT_LOCAL=1 or configure Google Drive.")
         return 1
 
-    total_ok = total_fail = total_skipped = 0
+    total_ok = total_fail = 0
     all_failed: list[str] = []
 
     for year in years:
@@ -230,14 +231,15 @@ def main() -> int:
         json_path = json_dir / f"{year}.json"
         _save_to_json(documents, json_path)
         logger.info("Generating PDFs (ditto copy of website text) and uploading to Drive...")
-        ok, f, sk, failed_ids = _pdf_and_upload(documents, year, subtype, export_root, drive_uploader)
+        ok, f, _sk, failed_ids = _pdf_and_upload(documents, year, subtype, export_root, drive_uploader)
         total_ok += ok
         total_fail += f
-        total_skipped += sk
         all_failed.extend(failed_ids)
 
     logger.info(
-        "Done. PDFs exported (ditto): %s ok, %s skipped (no full_text), %s failed.", total_ok, total_skipped, total_fail
+        "Done. PDFs exported: %s ok, %s failed. (Documents with no full_text were exported as placeholders and uploaded.)",
+        total_ok,
+        total_fail,
     )
     if all_failed:
         for fid in all_failed:

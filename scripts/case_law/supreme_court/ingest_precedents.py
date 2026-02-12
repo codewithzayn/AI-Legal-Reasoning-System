@@ -27,12 +27,12 @@ def _parse_case_ids(value: str) -> list[str]:
     return [cid.strip() for cid in value.split(",") if cid.strip()]
 
 
-async def main(year: int, force: bool = False, case_ids: list[str] | None = None):
+async def main(year: int, force: bool = False, case_ids: list[str] | None = None, json_only: bool = False):
     logger.info("Starting KKO Precedents Ingestion for %s", year)
 
     manager = IngestionManager("supreme_court")
     if case_ids:
-        await manager.ingest_case_ids(year, "precedent", case_ids)
+        await manager.ingest_case_ids(year, "precedent", case_ids, json_only=json_only)
     else:
         await manager.ingest_year(year, force_scrape=force, subtype="precedent")
 
@@ -47,7 +47,12 @@ if __name__ == "__main__":
         default=None,
         help="Comma-separated case IDs to ingest only (e.g. KKO:2018:72,KKO:2018:73). Skips full-year run.",
     )
+    parser.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Re-scrape and update JSON only (no Supabase). Use to fix empty full_text for PDF export.",
+    )
     args = parser.parse_args()
 
     ids = _parse_case_ids(args.case_ids) if args.case_ids else None
-    asyncio.run(main(args.year, args.force, case_ids=ids))
+    asyncio.run(main(args.year, args.force, case_ids=ids, json_only=args.json_only))

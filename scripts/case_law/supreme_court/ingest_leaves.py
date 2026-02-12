@@ -17,7 +17,7 @@ logger = setup_logger(__name__)
 
 
 async def main(year: int):
-    logger.info(f"Starting KKO Leaves to Appeal Ingestion for {year}")
+    logger.info("Starting KKO Leaves to Appeal Ingestion for %s", year)
 
     manager = IngestionManager("supreme_court")
     await manager.ingest_year(year, subtype="leave_to_appeal")

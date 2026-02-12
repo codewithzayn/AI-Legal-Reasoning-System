@@ -5,6 +5,7 @@ Streaming version of agent for Streamlit
 from collections.abc import AsyncIterator
 
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 from src.config.translations import t
 
 from .graph import agent_graph
@@ -37,6 +38,10 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
     Yields:
         Response chunks as they're generated
     """
+    if len(user_query) > config.MAX_QUERY_LENGTH:
+        yield f"\u26a0\ufe0f {t('query_too_long', lang, max=config.MAX_QUERY_LENGTH)}"
+        return
+
     initial_state: AgentState = {
         "query": user_query,
         "messages": [],
