@@ -56,6 +56,7 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
         "error": None,
     }
 
+    last_response: str | None = None
     try:
         async for event in agent_graph.astream(initial_state):
             for key, value in event.items():
@@ -75,8 +76,11 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
                     pass
 
                 elif key == "respond":
-                    resp = value.get("response", "")
-                    yield _strip_relevancy_line(resp)
+                    resp = _strip_relevancy_line(value.get("response", ""))
+                    # Deduplicate: only yield if different from last yielded response
+                    if resp and resp != last_response:
+                        last_response = resp
+                        yield resp
 
                 elif key == "error":
                     yield f"\u274c {t('stream_error', lang, error=value.get('error'))}"
