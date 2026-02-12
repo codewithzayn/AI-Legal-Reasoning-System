@@ -2,7 +2,7 @@
 # and keep terminal output clean. Restart the app manually after code changes.
 [server]
 fileWatcherType = "none"
-port = 5000
+# Do not set port here: Streamlit Cloud expects 8501; local dev can use streamlit run --server.port 5000
 address = "0.0.0.0"
 headless = true
 # Production: allow concurrent connections from multiple users
