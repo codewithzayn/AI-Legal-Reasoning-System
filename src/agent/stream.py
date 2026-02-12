@@ -71,7 +71,8 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
                     yield f"\U0001f504 {t('stream_reformulating', lang, query=new_query)}\n\n"
 
                 elif key in {"clarify", "chat"}:
-                    yield value.get("response", "")
+                    # Do not yield here: respond node will yield the same response; avoid duplicate
+                    pass
 
                 elif key == "respond":
                     resp = value.get("response", "")
