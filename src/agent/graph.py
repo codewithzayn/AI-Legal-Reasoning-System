@@ -78,10 +78,10 @@ def create_agent_graph() -> StateGraph:
     # Loop: Reformulate -> Search
     workflow.add_edge("reformulate", "search")
 
-    # Linear edges
+    # Linear edges: reason goes through respond; chat/clarify end directly (avoid duplicate response)
     workflow.add_edge("reason", "respond")
-    workflow.add_edge("chat", "respond")  # Unify output path
-    workflow.add_edge("clarify", "respond")  # Unify output path
+    workflow.add_edge("chat", END)
+    workflow.add_edge("clarify", END)
     workflow.add_edge("respond", END)
     workflow.add_edge("error", END)
 

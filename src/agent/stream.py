@@ -56,10 +56,12 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
         "error": None,
     }
 
-    last_response: str | None = None
     try:
-        async for event in agent_graph.astream(initial_state):
-            for key, value in event.items():
+        async for event in agent_graph.astream(initial_state, stream_mode="updates"):
+            payload = event[-1] if isinstance(event, tuple) else event
+            if not isinstance(payload, dict):
+                continue
+            for key, value in payload.items():
                 if key == "analyze":
                     yield f"\U0001f914 {t('stream_analyzing', lang)}\n\n"
 
@@ -71,15 +73,9 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
                     new_query = value.get("query", "")
                     yield f"\U0001f504 {t('stream_reformulating', lang, query=new_query)}\n\n"
 
-                elif key in {"clarify", "chat"}:
-                    # Do not yield here: respond node will yield the same response; avoid duplicate
-                    pass
-
-                elif key == "respond":
+                elif key in {"clarify", "chat", "respond"}:
                     resp = _strip_relevancy_line(value.get("response", ""))
-                    # Deduplicate: only yield if different from last yielded response
-                    if resp and resp != last_response:
-                        last_response = resp
+                    if resp:
                         yield resp
 
                 elif key == "error":
