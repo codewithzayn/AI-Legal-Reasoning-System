@@ -174,22 +174,6 @@ def main():
         unsafe_allow_html=True,
     )
 
-    _, col_lang = st.columns([4, 1])
-    with col_lang:
-        lang_labels = list(LANGUAGE_OPTIONS.keys())
-        lang_values = list(LANGUAGE_OPTIONS.values())
-        current_idx = lang_values.index(lang) if lang in lang_values else 0
-        selected_label = st.selectbox(
-            t("language", lang),
-            lang_labels,
-            index=current_idx,
-            key="lang_selector",
-        )
-        new_lang = LANGUAGE_OPTIONS[selected_label]
-        if new_lang != lang:
-            st.session_state.lang = new_lang
-            st.rerun()
-
     initialize_chat_history()
     chat_history = get_chat_history()
 
@@ -218,6 +202,22 @@ def main():
     with st.sidebar:
         st.markdown(f"**{t('sidebar_app_name', lang)}**")
         st.caption(t("sidebar_tagline", lang))
+        st.markdown("---")
+
+        lang_labels = list(LANGUAGE_OPTIONS.keys())
+        lang_values = list(LANGUAGE_OPTIONS.values())
+        current_idx = lang_values.index(lang) if lang in lang_values else 0
+        selected_label = st.selectbox(
+            t("language", lang),
+            lang_labels,
+            index=current_idx,
+            key="lang_selector",
+        )
+        new_lang = LANGUAGE_OPTIONS[selected_label]
+        if new_lang != lang:
+            st.session_state.lang = new_lang
+            st.rerun()
+
         st.markdown("---")
 
         if st.button(t("clear_chat", lang), use_container_width=True, type="secondary"):
