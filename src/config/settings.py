@@ -57,6 +57,13 @@ class Config:
     EXTRACTION_MODEL: str = os.getenv("EXTRACTION_MODEL", "gpt-4o")
     # Set to false for regex-only extraction (no LLM calls during ingestion; saves cost).
     USE_AI_EXTRACTION: bool = (os.getenv("USE_AI_EXTRACTION", "true")).strip().lower() in ("true", "1", "yes")
+    # When true: skip documents whose content_hash matches Supabase (faster, idempotent).
+    # When false: always re-run pipeline and re-store (no skip). Use for re-ingest tests (e.g. 2000→1926).
+    INGESTION_SKIP_UNCHANGED: bool = (os.getenv("INGESTION_SKIP_UNCHANGED", "false")).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
     # Embedding Settings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")

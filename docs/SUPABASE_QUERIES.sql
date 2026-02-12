@@ -52,6 +52,16 @@ WHERE case_year = 2026
 ORDER BY case_id;
 
 -- -----------------------------------------------------------------------------
+-- Last year that was ingested (run the ingestion pipeline) – from actual data
+-- Use this to know where you left off before running ingest-history again.
+-- -----------------------------------------------------------------------------
+SELECT MAX(case_year) AS last_year_ingested
+FROM case_law;
+
+-- Same idea from ingestion tracking (latest year with a tracking row)
+-- SELECT MAX(year) AS last_year_in_tracking FROM case_law_ingestion_tracking;
+
+-- -----------------------------------------------------------------------------
 -- Ingestion status: per year, how many total / processed / failed / remaining
 -- (Matches ingestion_manager: total=expected, processed=in Supabase, failed=this run, remaining=total−processed)
 -- -----------------------------------------------------------------------------
@@ -201,11 +211,50 @@ WHERE court_type = 'supreme_court' AND case_year = 2026 AND decision_type = 'pre
 
 
 -- =============================================
--- 6. DELETE ALL DATA FOR A YEAR RANGE (e.g. 2020-2026)
+-- 6. DELETE ALL DATA FOR A YEAR RANGE (e.g. 1958–2000 or 2020–2026)
 -- =============================================
--- Deletes everything: sections, references, errors, documents, tracking
--- for supreme_court precedents between 2020 and 2026.
+-- Deletes from all 5 tables: case_law_sections, case_law_references,
+-- case_law_ingestion_errors, case_law, case_law_ingestion_tracking.
+-- Replace 1958 and 2000 with your range. Run PREVIEW first.
 
+-- ---------- PREVIEW: rows that will be removed (run first) ----------
+SELECT 'case_law' AS tbl, COUNT(*) AS cnt FROM case_law WHERE case_year BETWEEN 1958 AND 2000
+UNION ALL
+SELECT 'case_law_sections', COUNT(*) FROM case_law_sections WHERE case_law_id IN (SELECT id FROM case_law WHERE case_year BETWEEN 1958 AND 2000)
+UNION ALL
+SELECT 'case_law_references', COUNT(*) FROM case_law_references WHERE source_case_id IN (SELECT id FROM case_law WHERE case_year BETWEEN 1958 AND 2000)
+UNION ALL
+SELECT 'case_law_ingestion_errors', COUNT(*) FROM case_law_ingestion_errors WHERE tracking_id IN (SELECT id FROM case_law_ingestion_tracking WHERE year BETWEEN 1958 AND 2000)
+UNION ALL
+SELECT 'case_law_ingestion_tracking', COUNT(*) FROM case_law_ingestion_tracking WHERE year BETWEEN 1958 AND 2000;
+
+-- ---------- DELETE 1958–2000 (all courts/types). Run in order. ----------
+-- Step 1: Sections (child of case_law)
+DELETE FROM case_law_sections
+WHERE case_law_id IN (SELECT id FROM case_law WHERE case_year BETWEEN 1958 AND 2000);
+
+-- Step 2: References (child of case_law)
+DELETE FROM case_law_references
+WHERE source_case_id IN (SELECT id FROM case_law WHERE case_year BETWEEN 1958 AND 2000);
+
+-- Step 3: Ingestion errors (by tracking year)
+DELETE FROM case_law_ingestion_errors
+WHERE tracking_id IN (SELECT id FROM case_law_ingestion_tracking WHERE year BETWEEN 1958 AND 2000);
+
+-- Step 4: Documents
+DELETE FROM case_law
+WHERE case_year BETWEEN 1958 AND 2000;
+
+-- Step 5: Tracking rows for that year range
+DELETE FROM case_law_ingestion_tracking
+WHERE year BETWEEN 1958 AND 2000;
+
+-- After this, re-ingest the range (e.g. 2000 down to 1926):
+--   make ingest-history START=1926 END=2000 COURT=supreme_court SUBTYPE=precedent
+-- (Or only 1958–2000: START=1958 END=2000)
+
+
+-- ---------- Same pattern for another range (e.g. 2020–2026, supreme_court precedent only) ----------
 -- Step 1: Delete sections
 DELETE FROM case_law_sections
 WHERE case_law_id IN (

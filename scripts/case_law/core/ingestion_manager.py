@@ -66,22 +66,25 @@ class IngestionManager:
             )
             return []
 
-        # 1b. Skip documents whose content hasn't changed (hash-based idempotency)
+        # 1b. Optionally skip documents whose content hasn't changed (hash-based idempotency)
         total_loaded = len(documents)
         skipped_unchanged = 0
-        existing_hashes = self._fetch_existing_content_hashes(year)
-        if existing_hashes:
-            new_docs = []
-            for d in documents:
-                doc_hash = self.storage.compute_content_hash(d)
-                stored_hash = existing_hashes.get(d.case_id)
-                if stored_hash and stored_hash == doc_hash:
-                    skipped_unchanged += 1
-                else:
-                    new_docs.append(d)
-            if skipped_unchanged:
-                logger.info("⏩ Skipping %s documents (content unchanged in Supabase)", skipped_unchanged)
-            documents = new_docs
+        if getattr(config, "INGESTION_SKIP_UNCHANGED", False):
+            existing_hashes = self._fetch_existing_content_hashes(year)
+            if existing_hashes:
+                new_docs = []
+                for d in documents:
+                    doc_hash = self.storage.compute_content_hash(d)
+                    stored_hash = existing_hashes.get(d.case_id)
+                    if stored_hash and stored_hash == doc_hash:
+                        skipped_unchanged += 1
+                    else:
+                        new_docs.append(d)
+                if skipped_unchanged:
+                    logger.info("⏩ Skipping %s documents (content unchanged in Supabase)", skipped_unchanged)
+                documents = new_docs
+        else:
+            logger.info("Re-ingest mode (INGESTION_SKIP_UNCHANGED=false): processing all %s documents", total_loaded)
 
         if not documents:
             logger.info("✅ All documents already in Supabase with same content — nothing to process.")
