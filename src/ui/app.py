@@ -51,15 +51,29 @@ def _inject_custom_css() -> None:
                 box-shadow: 0 1px 2px rgba(15,23,42,0.0);
                 border: 1px solid {THEME_BORDER};
             }}
-            [data-testid="stChatInput"] {{ margin-top: 0.75rem; }}
-            [data-testid="stChatInput"] textarea {{
-                border-radius: 10px !important;
+            /* Chat input: prominent, card-style (best practice: clear container, good contrast) */
+            [data-testid="stChatInput"] {{
+                margin-top: 1.5rem !important;
+                padding: 1.25rem !important;
+                background: {THEME_SURFACE} !important;
                 border: 1px solid {THEME_BORDER} !important;
-                font-size: 0.9375rem !important;
+                border-radius: 12px !important;
+                box-shadow: 0 1px 3px rgba(15,23,42,0.04) !important;
+            }}
+            [data-testid="stChatInput"] textarea {{
+                min-height: 120px !important;
+                padding: 1rem 1.25rem !important;
+                border-radius: 12px !important;
+                border: 2px solid {THEME_BORDER} !important;
+                font-size: 1rem !important;
+                line-height: 1.5 !important;
             }}
             [data-testid="stChatInput"] textarea:focus {{
                 border-color: {THEME_ACCENT} !important;
-                box-shadow: 0 0 0 2px rgba(14,165,233,0.12) !important;
+                box-shadow: 0 0 0 3px rgba(14,165,233,0.15) !important;
+            }}
+            [data-testid="stChatInput"] textarea::placeholder {{
+                color: #64748b;
             }}
             .stButton > button[kind="primary"] {{
                 background: {THEME_PRIMARY} !important;
@@ -73,7 +87,7 @@ def _inject_custom_css() -> None:
                 background: linear-gradient(135deg, {THEME_PRIMARY} 0%, {THEME_PRIMARY_LIGHT} 100%);
                 padding: 1rem 1.25rem;
                 border-radius: 10px;
-                margin-bottom: 1.25rem;
+                margin-bottom: 0.5rem;
                 box-shadow: 0 1px 4px rgba(15,23,42,0.06);
             }}
             .main-header h1 {{
@@ -89,6 +103,7 @@ def _inject_custom_css() -> None:
                 font-size: 0.8125rem;
                 line-height: 1.4;
             }}
+            .lang-row {{ margin-bottom: 1rem; }}
             [data-testid="stSidebar"] {{
                 background: {THEME_SURFACE};
                 border-right: 1px solid {THEME_BORDER};
@@ -96,20 +111,20 @@ def _inject_custom_css() -> None:
             [data-testid="stSidebar"] > div {{
                 padding-top: 0.75rem;
             }}
-            /* Responsive: mobile */
             @media (max-width: 640px) {{
-                .block-container {{
-                    padding: 1rem 0.75rem;
-                }}
+                .block-container {{ padding: 1rem 0.75rem; }}
                 .main-header {{
                     padding: 0.875rem 1rem;
                     margin-bottom: 1rem;
                 }}
                 .main-header h1 {{ font-size: 1.125rem; }}
                 .main-header .subtitle {{ font-size: 0.75rem; }}
-                [data-testid="stChatMessage"] {{
-                    padding: 0.75rem 0.875rem;
+                [data-testid="stChatInput"] {{ padding: 1rem !important; margin-top: 1rem !important; }}
+                [data-testid="stChatInput"] textarea {{
+                    min-height: 100px !important;
+                    padding: 0.875rem 1rem !important;
                 }}
+                [data-testid="stChatMessage"] {{ padding: 0.75rem 0.875rem; }}
             }}
             /* Responsive: tablet+ */
             @media (min-width: 768px) {{
@@ -155,9 +170,25 @@ def main():
             <h1>{t("header_title", lang)}</h1>
             <p class="subtitle">{t("header_subtitle", lang)}</p>
         </div>
-    """,
+        """,
         unsafe_allow_html=True,
     )
+
+    _, col_lang = st.columns([4, 1])
+    with col_lang:
+        lang_labels = list(LANGUAGE_OPTIONS.keys())
+        lang_values = list(LANGUAGE_OPTIONS.values())
+        current_idx = lang_values.index(lang) if lang in lang_values else 0
+        selected_label = st.selectbox(
+            t("language", lang),
+            lang_labels,
+            index=current_idx,
+            key="lang_selector",
+        )
+        new_lang = LANGUAGE_OPTIONS[selected_label]
+        if new_lang != lang:
+            st.session_state.lang = new_lang
+            st.rerun()
 
     initialize_chat_history()
     chat_history = get_chat_history()
@@ -173,6 +204,7 @@ def main():
             st.markdown(t("welcome_body", lang))
             st.markdown("---")
 
+    st.markdown(f"**{t('ask_question', lang)}**")
     query = st.chat_input(t("placeholder", lang))
 
     if query and query.strip():
@@ -186,22 +218,6 @@ def main():
     with st.sidebar:
         st.markdown(f"**{t('sidebar_app_name', lang)}**")
         st.caption(t("sidebar_tagline", lang))
-        st.markdown("---")
-
-        lang_labels = list(LANGUAGE_OPTIONS.keys())
-        lang_values = list(LANGUAGE_OPTIONS.values())
-        current_idx = lang_values.index(lang) if lang in lang_values else 0
-        selected_label = st.selectbox(
-            t("language", lang),
-            lang_labels,
-            index=current_idx,
-            key="lang_selector",
-        )
-        new_lang = LANGUAGE_OPTIONS[selected_label]
-        if new_lang != lang:
-            st.session_state.lang = new_lang
-            st.rerun()
-
         st.markdown("---")
 
         if st.button(t("clear_chat", lang), use_container_width=True, type="secondary"):
