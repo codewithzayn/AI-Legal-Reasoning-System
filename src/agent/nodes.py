@@ -119,14 +119,15 @@ async def reformulate_query(state: AgentState) -> AgentState:
 
     logger.info("[REFORMULATE] Attempt %s: Rewriting query...", attempts)
 
-    system_prompt = """You are a legal search expert. The previous search found 0 results.
-    Rewrite the user's query to be a better keyword search for a Finnish legal database (Finlex/Case Law).
+    system_prompt = """You are a Finnish legal search expert. The previous search found 0 results.
+    Rewrite the query to improve keyword matching in a Finnish case law database.
 
     Rules:
-    - Extract core legal concepts.
-    - Remove noise words.
-    - Include synonyms if helpful.
-    - Output ONLY the new search string in Finnish.
+    - KEEP all original legal terms from the query (do NOT remove or replace them).
+    - Add morphological variants (e.g. osamaksukauppa -> osamaksukauppa, osamaksu, osamaksusopimus).
+    - Do NOT add conceptually different terms (e.g. do NOT add 'kuluttajansuoja' if user asked about 'osamaksukauppa').
+    - Remove only non-Finnish filler words (tell me about, what is, etc.).
+    - Output ONLY the new search string in Finnish, comma-separated.
     """
 
     try:

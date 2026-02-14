@@ -39,8 +39,9 @@ class Config:
     # Lower candidates = faster. 20 is a good balance for production.
     SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "30"))
     CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "8"))
-    # Max documents sent to Cohere (fewer = faster). Default 15 for production latency.
-    RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "15"))
+    # Max documents sent to Cohere reranker. Higher = better recall, slower.
+    # 25 ensures cases at rank 20+ still get a chance from the reranker.
+    RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "25"))
     # Set to false to skip Cohere rerank (use hybrid + RRF + exact-match only). Saves ~15-25s.
     RERANK_ENABLED: bool = (os.getenv("RERANK_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
     # Set to false to skip relevancy check (saves ~2-5s, no score shown).

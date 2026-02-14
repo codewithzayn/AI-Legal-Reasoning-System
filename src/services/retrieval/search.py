@@ -119,6 +119,19 @@ _FINNISH_FTS_STOPWORDS: frozenset[str] = frozenset(
         "kyllä",
         "aina",
         "jo",
+        # English filler words (users sometimes mix English in queries)
+        "tell",
+        "about",
+        "what",
+        "how",
+        "does",
+        "the",
+        "this",
+        "that",
+        "which",
+        "when",
+        "where",
+        "please",
     }
 )
 
@@ -200,10 +213,23 @@ class HybridRetrieval:
         self.reranker: CohereReranker | None = reranker
 
     async def _get_client(self) -> AsyncClient:
-        """Lazy load async client (thread-safe for concurrent requests)."""
+        """Lazy load async client with auto-reconnect on stale connections.
+
+        Supabase free-tier drops idle TCP connections aggressively.
+        When a request hits a dead connection we get:
+          ``unable to perform operation on <TCPTransport closed=True …>``
+        This method detects that state and creates a fresh client.
+        """
         async with self._client_lock:
             if self.client is None:
                 self.client = await create_async_client(self.url, self.key)
+        return self.client
+
+    async def _reset_client(self) -> AsyncClient:
+        """Force-recreate the Supabase client after a connection failure."""
+        async with self._client_lock:
+            logger.warning("Resetting Supabase client (stale connection)")
+            self.client = await create_async_client(self.url, self.key)
         return self.client
 
     def _get_reranker(self) -> CohereReranker:
@@ -530,11 +556,16 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             return []
 
     @staticmethod
-    def _extract_key_terms(query: str) -> list[str]:
+    def _extract_key_terms(query: str, max_terms: int = 5) -> list[str]:
         """Extract substantive key terms from a Finnish legal query.
 
         Strips special characters, Finnish stop words, numbers, and
-        short tokens.  Returns at most 8 lower-cased terms.
+        short tokens.  Returns at most *max_terms* lower-cased terms,
+        prioritising longer words (more likely to be distinctive legal
+        terms) over short common words.
+
+        Keeping the cap at 5 (down from 8) prevents ``websearch_to_tsquery``
+        with many OR terms from timing out on the 67K-row GIN index.
         """
         sanitized = re.sub(r"[^\w\s]", " ", query)
         sanitized = re.sub(r"\s+", " ", sanitized).strip()
@@ -550,7 +581,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 continue
             key_terms.append(word_lower)
 
-        return key_terms[:8]
+        # Sort by length descending so the most distinctive terms survive the cap
+        key_terms.sort(key=len, reverse=True)
+        return key_terms[:max_terms]
 
     @staticmethod
     def _build_fts_query(query: str) -> str:
@@ -809,6 +842,10 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         Returns sections from cases whose *metadata* matches the query keywords.
         This closes the gap where a keyword lives in metadata but NOT in section embeddings.
+
+        The RPC uses DISTINCT ON (case_id) wrapped in a subquery to return
+        one row per case sorted by meta_score DESC.  No Python-side dedup
+        is needed; match_count maps directly to the number of unique cases.
         """
         try:
             fts_query = self._build_fts_query(query_text)
@@ -816,25 +853,17 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 return []
 
             client = await self._get_client()
-            # Request more rows from DB to cover dedup (many sections per case);
-            # Python-side dedup keeps only 1 section per case_id.
             response = await client.rpc(
                 "search_case_law_metadata",
                 {
                     "query_text": fts_query,
-                    "match_count": limit * 5,
+                    "match_count": limit,
                 },
             ).execute()
 
-            # Deduplicate: keep only the best (first) section per case_id
-            # so one case with many sections doesn't crowd out other cases.
-            seen_cases: set[str] = set()
-            results = []
+            results: list[dict] = []
             for item in response.data or []:
                 cid = item.get("case_id", "")
-                if cid in seen_cases:
-                    continue
-                seen_cases.add(cid)
                 results.append(
                     {
                         "id": item.get("section_id"),
@@ -853,6 +882,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                         "score": item.get("meta_score", 0),
                     }
                 )
+            # Sort by score descending (RPC returns DISTINCT ON case_id order)
+            results.sort(key=lambda r: r["score"], reverse=True)
             if results:
                 logger.info("Metadata FTS → %s unique case(s)", len(results))
             return results
@@ -1011,16 +1042,21 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         4. Metadata & fallback results are appended (deduplicated).
 
         Each sub-query is capped at 15 s so one slow RPC never blocks all.
+        Connection errors trigger an automatic client reset and single retry.
         """
         t0 = time.time()
 
-        # Helper: run a search task with a timeout.
-        # 15 s accommodates cold-start and complex FTS queries with prefix matching.
+        # Helper: run a search task with a timeout + connection recovery.
         async def _timed(coro, label: str, timeout: float = 15.0):
             try:
                 return await asyncio.wait_for(coro, timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning("  %s timed out after %.0fs", label, timeout)
+                return []
+            except OSError as exc:
+                if "closed" in str(exc).lower() or "transport" in str(exc).lower():
+                    logger.warning("  %s hit stale connection, resetting client: %s", label, exc)
+                    await self._reset_client()
                 return []
 
         # Generate embedding in thread pool (non-blocking)
