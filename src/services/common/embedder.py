@@ -36,21 +36,26 @@ class DocumentEmbedder:
     - Error handling and retries
     """
 
-    def __init__(self, api_key: str = None, model: str = None):
-        """
-        Initialize embedder
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        dimensions: int | None = None,
+    ):
+        """Initialize embedder.
 
         Args:
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
-            model: Embedding model to use
+            api_key: OpenAI API key. Falls back to OPENAI_API_KEY env var.
+            model: Embedding model name. Falls back to config.EMBEDDING_MODEL.
+            dimensions: Embedding vector dimensions. Falls back to config.EMBEDDING_DIMENSIONS.
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        if not self.api_key:
+        resolved_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not resolved_key:
             raise ValueError("OpenAI API key required. Set OPENAI_API_KEY env var or pass api_key parameter.")
 
-        self.client = OpenAI(api_key=self.api_key)
+        self.client = OpenAI(api_key=resolved_key)
         self.model = model or config.EMBEDDING_MODEL
-        self.dimensions = config.EMBEDDING_DIMENSIONS
+        self.dimensions = dimensions or config.EMBEDDING_DIMENSIONS
 
     def embed_chunks(self, chunks: list, batch_size: int = 100) -> list[EmbeddedChunk]:
         """

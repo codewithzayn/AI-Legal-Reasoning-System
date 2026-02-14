@@ -642,6 +642,97 @@ FROM (
 WHERE c.id = sub.id
   AND array_length(sub.refs, 1) > 0;
 
+-- =============================================
+-- 9. FIND UNPROCESSED YEARS / INCOMPLETE INGESTIONS
+-- =============================================
+-- Run this to find years where documents exist in JSON but are missing from
+-- Supabase, or where tracking says there are still remaining documents.
+-- This is crucial before going to production — it answers:
+--   "Is there any year or document that still needs to be processed?"
+
+-- ── 9a. Years with incomplete ingestion (remaining > 0) ──
+-- Shows every year/court/type where tracking says some docs are NOT yet in Supabase.
+SELECT
+    court_type,
+    decision_type,
+    year,
+    status,
+    total_cases,
+    processed_cases,
+    failed_cases,
+    GREATEST(0, total_cases - processed_cases) AS remaining,
+    ROUND(
+        CASE WHEN total_cases > 0
+             THEN (processed_cases::NUMERIC / total_cases) * 100
+             ELSE 0
+        END, 1
+    ) AS pct_done,
+    completed_at
+FROM case_law_ingestion_tracking
+WHERE total_cases > processed_cases
+   OR status NOT IN ('completed', 'skipped')
+ORDER BY year DESC, court_type, decision_type;
+
+-- ── 9b. Years with failed documents that were never retried ──
+SELECT
+    t.court_type,
+    t.decision_type,
+    t.year,
+    t.failed_cases,
+    COUNT(e.id) AS error_count,
+    string_agg(DISTINCT e.error_type, ', ') AS error_types
+FROM case_law_ingestion_tracking t
+LEFT JOIN case_law_ingestion_errors e ON e.tracking_id = t.id
+WHERE t.failed_cases > 0
+GROUP BY t.court_type, t.decision_type, t.year, t.failed_cases
+ORDER BY t.year DESC;
+
+-- ── 9c. Documents in case_law that have 0 sections (metadata stored, but
+--        sections failed — e.g. embedding timeout). These need re-ingestion. ──
+SELECT
+    cl.case_id,
+    cl.court_type,
+    cl.case_year,
+    cl.decision_type,
+    cl.title
+FROM case_law cl
+LEFT JOIN case_law_sections cs ON cs.case_law_id = cl.id
+WHERE cs.id IS NULL
+ORDER BY cl.case_year DESC, cl.case_id;
+
+-- ── 9d. Year-level coverage gap: compare tracking totals to actual counts ──
+-- If tracking says total=50 but actual=45, then 5 documents were never stored.
+SELECT
+    t.court_type,
+    t.decision_type,
+    t.year,
+    t.total_cases AS expected,
+    COUNT(c.id) AS actual_in_db,
+    GREATEST(0, t.total_cases - COUNT(c.id)) AS missing_from_db,
+    t.status
+FROM case_law_ingestion_tracking t
+LEFT JOIN case_law c
+    ON  c.court_type    = t.court_type
+    AND c.decision_type = t.decision_type
+    AND c.case_year     = t.year
+GROUP BY t.court_type, t.decision_type, t.year, t.total_cases, t.status
+HAVING t.total_cases > COUNT(c.id)
+ORDER BY t.year DESC, t.court_type, t.decision_type;
+
+-- ── 9e. Quick summary: overall ingestion health ──
+SELECT
+    COUNT(*)                                                         AS total_tracking_rows,
+    COUNT(*) FILTER (WHERE status = 'completed')                     AS completed,
+    COUNT(*) FILTER (WHERE status = 'in_progress')                   AS in_progress,
+    COUNT(*) FILTER (WHERE status = 'pending')                       AS pending,
+    COUNT(*) FILTER (WHERE status = 'failed')                        AS failed,
+    SUM(total_cases)                                                 AS total_expected,
+    SUM(processed_cases)                                             AS total_processed,
+    SUM(failed_cases)                                                AS total_failed,
+    SUM(GREATEST(0, total_cases - processed_cases))                  AS total_remaining
+FROM case_law_ingestion_tracking;
+
+
 -- -------------------------------------------------------------------------
 -- Step K: Verify all columns after backfill
 -- -------------------------------------------------------------------------

@@ -38,46 +38,80 @@ def _inject_custom_css() -> None:
     st.markdown(
         f"""
         <style>
-            /* Production: optimized layout */
+            /* ── Base layout ─────────────────────────────────── */
             .block-container {{
-                max-width: min(720px, 100vw - 2rem);
+                max-width: min(720px, 100vw);
                 margin: 0 auto;
-                padding: 1.25rem 1rem;
+                padding: 1.25rem 1rem 6rem 1rem;
             }}
+
+            /* ── Chat bubbles ────────────────────────────────── */
             [data-testid="stChatMessage"] {{
                 padding: 0.875rem 1rem;
-                border-radius: 10px;
+                border-radius: 12px;
                 margin-bottom: 0.5rem;
                 background: {THEME_BG};
-                box-shadow: 0 1px 2px rgba(15,23,42,0.0);
                 border: 1px solid {THEME_BORDER};
             }}
-            /* Chat input: prominent, card-style (best practice: clear container, good contrast) */
-            [data-testid="stChatInput"] {{
-                margin-top: 1.5rem !important;
-                padding: 1.25rem !important;
-                background: {THEME_SURFACE} !important;
-                border: 1px solid {THEME_BORDER} !important;
-                border-radius: 12px !important;
-                box-shadow: 0 1px 3px rgba(15,23,42,0.04) !important;
+            [data-testid="stChatMessage"] p {{
+                font-size: 0.9375rem;
+                line-height: 1.6;
             }}
+
+            /* ── Sticky bottom input bar ─────────────────────── */
+            [data-testid="stBottom"] {{
+                background: {THEME_BG} !important;
+                border-top: 1px solid {THEME_BORDER} !important;
+                padding: 0.5rem 0.75rem !important;
+            }}
+            [data-testid="stChatInput"] {{
+                margin: 0 !important;
+                padding: 0 !important;
+                background: transparent !important;
+                border: none !important;
+                box-shadow: none !important;
+            }}
+            /* The actual textarea inside the chat input */
             [data-testid="stChatInput"] textarea {{
-                min-height: 120px !important;
-                padding: 1rem 1.25rem !important;
-                border-radius: 12px !important;
-                border: 1px solid {THEME_BORDER} !important;
+                min-height: 48px !important;
+                max-height: 160px !important;
+                padding: 0.75rem 1rem !important;
+                border-radius: 24px !important;
+                border: 2px solid {THEME_BORDER} !important;
+                background: {THEME_SURFACE} !important;
                 font-size: 1rem !important;
                 line-height: 1.5 !important;
-                outline: none !important;
+                resize: none !important;
+                transition: border-color 0.15s ease !important;
             }}
             [data-testid="stChatInput"] textarea:focus {{
-                border-color: #94a3b8 !important;
-                box-shadow: none !important;
+                border-color: {THEME_ACCENT} !important;
+                box-shadow: 0 0 0 3px rgba(14,165,233,0.12) !important;
                 outline: none !important;
             }}
             [data-testid="stChatInput"] textarea::placeholder {{
-                color: #64748b;
+                color: #94a3b8;
+                font-size: 0.9375rem;
             }}
+            /* Send button inside the chat input container */
+            [data-testid="stChatInput"] button {{
+                border-radius: 50% !important;
+                width: 40px !important;
+                height: 40px !important;
+                min-width: 40px !important;
+                padding: 0 !important;
+                background: {THEME_PRIMARY} !important;
+                border: none !important;
+                transition: transform 0.1s ease !important;
+            }}
+            [data-testid="stChatInput"] button:hover {{
+                transform: scale(1.05) !important;
+            }}
+            [data-testid="stChatInput"] button svg {{
+                fill: white !important;
+            }}
+
+            /* ── Primary buttons ─────────────────────────────── */
             .stButton > button[kind="primary"] {{
                 background: {THEME_PRIMARY} !important;
                 color: white !important;
@@ -86,27 +120,41 @@ def _inject_custom_css() -> None:
                 padding: 0.5rem 1rem !important;
                 font-weight: 600 !important;
             }}
+
+            /* ── Header banner ───────────────────────────────── */
             .main-header {{
                 background: linear-gradient(135deg, {THEME_PRIMARY} 0%, {THEME_PRIMARY_LIGHT} 100%);
-                padding: 1rem 1.25rem;
-                border-radius: 10px;
-                margin-bottom: 0.5rem;
-                box-shadow: 0 1px 4px rgba(15,23,42,0.06);
+                padding: 1.125rem 1.25rem;
+                border-radius: 12px;
+                margin-bottom: 0.75rem;
+                box-shadow: 0 2px 8px rgba(15,23,42,0.08);
             }}
             .main-header h1 {{
                 color: white;
                 margin: 0;
                 font-size: 1.25rem;
-                font-weight: 600;
+                font-weight: 700;
                 letter-spacing: -0.02em;
             }}
             .main-header .subtitle {{
-                color: rgba(255,255,255,0.9);
+                color: rgba(255,255,255,0.88);
                 margin: 0.25rem 0 0 0;
                 font-size: 0.8125rem;
                 line-height: 1.4;
             }}
-            .lang-row {{ margin-bottom: 1rem; }}
+
+            /* ── Welcome card ────────────────────────────────── */
+            .welcome-card {{
+                background: {THEME_SURFACE};
+                border: 1px solid {THEME_BORDER};
+                border-radius: 12px;
+                padding: 1.25rem 1.25rem 1rem;
+                margin-bottom: 0.75rem;
+            }}
+            .welcome-card strong {{ font-size: 1rem; }}
+            .welcome-card p {{ color: #475569; font-size: 0.875rem; line-height: 1.6; margin: 0.5rem 0 0 0; }}
+
+            /* ── Sidebar ─────────────────────────────────────── */
             [data-testid="stSidebar"] {{
                 background: {THEME_SURFACE};
                 border-right: 1px solid {THEME_BORDER};
@@ -114,27 +162,59 @@ def _inject_custom_css() -> None:
             [data-testid="stSidebar"] > div {{
                 padding-top: 0.75rem;
             }}
+
+            /* ── Mobile (< 640px) ────────────────────────────── */
             @media (max-width: 640px) {{
-                .block-container {{ padding: 1rem 0.75rem; }}
+                .block-container {{
+                    padding: 0.75rem 0.5rem 5rem 0.5rem;
+                }}
                 .main-header {{
                     padding: 0.875rem 1rem;
-                    margin-bottom: 1rem;
+                    border-radius: 10px;
+                    margin-bottom: 0.5rem;
                 }}
-                .main-header h1 {{ font-size: 1.125rem; }}
+                .main-header h1 {{ font-size: 1.0625rem; }}
                 .main-header .subtitle {{ font-size: 0.75rem; }}
-                [data-testid="stChatInput"] {{ padding: 1rem !important; margin-top: 1rem !important; }}
-                [data-testid="stChatInput"] textarea {{
-                    min-height: 100px !important;
-                    padding: 0.875rem 1rem !important;
+                [data-testid="stBottom"] {{
+                    padding: 0.375rem 0.5rem !important;
                 }}
-                [data-testid="stChatMessage"] {{ padding: 0.75rem 0.875rem; }}
+                [data-testid="stChatInput"] textarea {{
+                    min-height: 44px !important;
+                    max-height: 120px !important;
+                    padding: 0.625rem 0.875rem !important;
+                    font-size: 1rem !important;
+                    border-radius: 22px !important;
+                    /* Prevent iOS zoom-on-focus (font must be >= 16px) */
+                    -webkit-text-size-adjust: 100%;
+                }}
+                [data-testid="stChatInput"] button {{
+                    width: 36px !important;
+                    height: 36px !important;
+                    min-width: 36px !important;
+                }}
+                [data-testid="stChatMessage"] {{
+                    padding: 0.625rem 0.75rem;
+                    border-radius: 10px;
+                }}
+                [data-testid="stChatMessage"] p {{
+                    font-size: 0.875rem;
+                }}
+                .welcome-card {{
+                    padding: 1rem;
+                }}
             }}
-            /* Responsive: tablet+ */
+
+            /* ── Tablet+ (>= 768px) ─────────────────────────── */
             @media (min-width: 768px) {{
                 .block-container {{
-                    padding: 1.5rem 1.25rem;
+                    padding: 1.5rem 1.25rem 6rem 1.25rem;
                 }}
             }}
+
+            /* ── Hide Streamlit branding for cleaner mobile look ── */
+            #MainMenu {{ visibility: hidden; }}
+            footer {{ visibility: hidden; }}
+            header {{ visibility: hidden; }}
         </style>
     """,
         unsafe_allow_html=True,
@@ -186,12 +266,14 @@ def main():
             with st.chat_message(message["role"], avatar=avatar):
                 st.write(message["content"])
     else:
-        with st.container():
-            st.markdown(f"**{t('welcome_title', lang)}**")
-            st.markdown(t("welcome_body", lang))
-            st.markdown("---")
+        st.markdown(
+            f"""<div class="welcome-card">
+                <strong>{t("welcome_title", lang)}</strong>
+                <p>{t("welcome_body", lang)}</p>
+            </div>""",
+            unsafe_allow_html=True,
+        )
 
-    st.markdown(f"**{t('ask_question', lang)}**")
     query = st.chat_input(t("placeholder", lang))
 
     if query and query.strip():

@@ -21,13 +21,19 @@ class CohereReranker:
     Set COHERE_RERANK_MODEL to rerank-v4.0-pro for higher quality (slower).
     """
 
-    def __init__(self, model: str | None = None):
-        """Initialize Cohere client"""
-        api_key = os.getenv("COHERE_API_KEY")
-        if not api_key:
+    def __init__(self, api_key: str | None = None, model: str | None = None):
+        """Initialize Cohere client.
+
+        Args:
+            api_key: Cohere API key. Falls back to COHERE_API_KEY env var.
+            model: Rerank model name. Falls back to COHERE_RERANK_MODEL env var
+                   or ``rerank-v4.0-fast``.
+        """
+        resolved_key = api_key or os.getenv("COHERE_API_KEY")
+        if not resolved_key:
             raise ValueError("COHERE_API_KEY not found in environment")
 
-        self.client = cohere.Client(api_key)
+        self.client = cohere.Client(resolved_key)
         # v4.0-fast: low latency; v4.0-pro: higher quality (slower)
         self.model = model or os.getenv("COHERE_RERANK_MODEL", "rerank-v4.0-fast").strip() or "rerank-v4.0-fast"
         logger.debug("Cohere Rerank initialized (model=%s)", self.model)

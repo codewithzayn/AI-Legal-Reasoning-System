@@ -11,11 +11,13 @@ import time
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from postgrest.exceptions import APIError as PostgrestAPIError
 from supabase import AsyncClient, create_async_client
 
 from src.config.logging_config import setup_logger
 from src.config.settings import config  # load_dotenv() runs here
 from src.services.common.embedder import DocumentEmbedder
+from src.services.protocols import EmbeddingService
 from src.utils.retry import retry_async
 
 from .reranker import CohereReranker
@@ -55,8 +57,23 @@ class HybridRetrieval:
     - fetch_case_chunks: Direct case-ID lookup (bypasses vector search)
     """
 
-    def __init__(self, url: str = None, key: str = None):
-        """Initialize Supabase client and embedder"""
+    def __init__(
+        self,
+        url: str | None = None,
+        key: str | None = None,
+        embedder: EmbeddingService | None = None,
+        reranker: CohereReranker | None = None,
+    ):
+        """Initialize Supabase client, embedder, and optional reranker.
+
+        Args:
+            url: Supabase project URL. Falls back to SUPABASE_URL env var.
+            key: Supabase anon/service key. Falls back to SUPABASE_KEY env var.
+            embedder: Embedding service for query vectors. Falls back to
+                      the default DocumentEmbedder (OpenAI text-embedding-3-small).
+            reranker: Cohere reranker instance. Created lazily on first use when
+                      not provided.
+        """
         self.url = url or os.getenv("SUPABASE_URL")
         self.key = key or os.getenv("SUPABASE_KEY")
 
@@ -65,8 +82,8 @@ class HybridRetrieval:
 
         self.client: AsyncClient | None = None
         self._client_lock = asyncio.Lock()
-        self.embedder = DocumentEmbedder()
-        self.reranker = None
+        self.embedder: EmbeddingService = embedder or DocumentEmbedder()
+        self.reranker: CohereReranker | None = reranker
 
     async def _get_client(self) -> AsyncClient:
         """Lazy load async client (thread-safe for concurrent requests)."""
@@ -119,7 +136,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 for i, alt in enumerate(alternatives, 1):
                     logger.info("  alt-%s: %s", i, alt)
             return alternatives
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.warning("Multi-query expansion failed (non-critical): %s", e)
             return []
 
@@ -151,8 +168,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         query_lower = query.lower()
         # Abbreviation style: RL 10:3, OYL 5:21
         statute_pattern = r"\b(OYL|RL|OK|VML|SOL|SotOikL)\s*\d+:\d+\b"
-        query_statutes = set(re.findall(statute_pattern, query, re.IGNORECASE))
-        chunk_statutes = set(re.findall(statute_pattern, text, re.IGNORECASE))
+        query_statutes = {s.upper() for s in re.findall(statute_pattern, query, re.IGNORECASE)}
+        chunk_statutes = {s.upper() for s in re.findall(statute_pattern, text, re.IGNORECASE)}
         if query_statutes & chunk_statutes:
             boost *= 2.0
         # Finnish style: "10 luvun 3 §", "rikoslain 10 luvun 3 §" — boost if chunk discusses same chapter/section
@@ -340,14 +357,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 )
             logger.info("Direct case lookup → %s chunks for %s", len(results), case_id)
             return results
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.warning("Direct case lookup failed for %s: %s", case_id, e)
             return []
 
     # ------------------------------------------------------------------
     # Core search methods
     # ------------------------------------------------------------------
-    async def vector_search(self, query_embedding: list[float], limit: int = None) -> list[dict]:
+    async def vector_search(self, query_embedding: list[float], limit: int | None = None) -> list[dict]:
         """
         Vector similarity search using cosine distance
 
@@ -370,7 +387,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             ).execute()
 
             return response.data or []
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.error("Vector search error: %s", e)
             return []
 
@@ -382,7 +399,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         sanitized = re.sub(r"\s+", " ", sanitized).strip()
         return sanitized
 
-    async def fts_search(self, query_text: str, limit: int = None) -> list[dict]:
+    async def fts_search(self, query_text: str, limit: int | None = None) -> list[dict]:
         """
         Full-text search using PostgreSQL ts_rank
 
@@ -402,7 +419,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             ).execute()
 
             return response.data or []
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.error("FTS search error: %s", e)
             return []
 
@@ -462,7 +479,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         return merged
 
-    async def search_case_law(self, query_embedding: list[float], query_text: str, limit: int = None) -> list[dict]:
+    async def search_case_law(
+        self, query_embedding: list[float], query_text: str, limit: int | None = None
+    ) -> list[dict]:
         """
         Search case law using the specific SQL function (Hybrid internally)
         """
@@ -502,7 +521,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                     }
                 )
             return results
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.error("Case law search error: %s", e)
             return []
 
@@ -559,7 +578,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if results:
                 logger.info("Metadata FTS → %s unique case(s)", len(results))
             return results
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.warning("Metadata FTS search failed (non-critical): %s", e)
             return []
 
@@ -615,7 +634,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if results:
                 logger.info("Case-ID fallback → %s chunks for pattern '%s'", len(results), case_id_pattern)
             return results
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.warning("Case-ID fallback search failed (non-critical): %s", e)
             return []
 

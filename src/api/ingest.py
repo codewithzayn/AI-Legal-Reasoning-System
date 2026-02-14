@@ -1,4 +1,5 @@
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +22,16 @@ from src.services.finlex.ingestion import FinlexIngestionService
 app = FastAPI(title="AI Legal Reasoning - Ingest API", version="1.0.0")
 
 
+class IngestDocumentStatus(str, Enum):
+    """Status of a document submitted for ingestion."""
+
+    PENDING = "PENDING"
+    MODIFIED = "MODIFIED"
+
+
 class DocumentItem(BaseModel):
     document_uri: str
-    status: str | None = "PENDING"  # PENDING | MODIFIED
+    status: IngestDocumentStatus = IngestDocumentStatus.PENDING
 
 
 class IngestRequest(BaseModel):
@@ -72,7 +80,7 @@ async def ingest_documents(request: IngestRequest):
         status = doc_item.status
         try:
             # Check if force re-ingest is needed based on status
-            force_reingest = status == "MODIFIED"
+            force_reingest = status == IngestDocumentStatus.MODIFIED
 
             result = await service.process_document(document_uri=document_uri, force_reingest=force_reingest)
 

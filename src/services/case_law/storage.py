@@ -8,11 +8,14 @@ import os
 import re
 from dataclasses import dataclass
 
+from openai import APIError as OpenAIAPIError
+from postgrest.exceptions import APIError as PostgrestAPIError
 from supabase import Client, create_client
 
 from src.config.logging_config import setup_logger
 from src.services.case_law.scraper import CaseLawDocument
 from src.services.common.embedder import DocumentEmbedder
+from src.services.protocols import EmbeddingService
 
 logger = setup_logger(__name__)
 
@@ -33,8 +36,20 @@ class CaseLawStorage:
     Store case law documents and sections in Supabase (New Schema)
     """
 
-    def __init__(self, url: str | None = None, key: str | None = None):
-        """Initialize Supabase client and embedder"""
+    def __init__(
+        self,
+        url: str | None = None,
+        key: str | None = None,
+        embedder: EmbeddingService | None = None,
+    ):
+        """Initialize Supabase client and embedder.
+
+        Args:
+            url: Supabase project URL. Falls back to SUPABASE_URL env var.
+            key: Supabase anon/service key. Falls back to SUPABASE_KEY env var.
+            embedder: Embedding service for generating vectors. Falls back to
+                      the default DocumentEmbedder (OpenAI text-embedding-3-small).
+        """
         self.url = url or os.getenv("SUPABASE_URL")
         self.key = key or os.getenv("SUPABASE_KEY")
 
@@ -42,7 +57,7 @@ class CaseLawStorage:
             raise ValueError("Supabase URL and KEY required. Set SUPABASE_URL and SUPABASE_KEY env vars.")
 
         self.client: Client = create_client(self.url, self.key)
-        self.embedder = DocumentEmbedder()
+        self.embedder: EmbeddingService = embedder or DocumentEmbedder()
 
     def store_case(self, doc: CaseLawDocument) -> str | None:
         """Store a single case law document with all its sections.
@@ -82,7 +97,7 @@ class CaseLawStorage:
             )
             return case_id
 
-        except Exception as e:
+        except (PostgrestAPIError, OpenAIAPIError, OSError) as e:
             logger.error("%s | store error: %s", doc.case_id, e)
             return None
 
@@ -115,7 +130,7 @@ class CaseLawStorage:
             )
 
             return len(response.data) if response.data else 0
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.error("Error storing references for %s: %s", doc.case_id, e)
             return 0
 
@@ -210,7 +225,7 @@ class CaseLawStorage:
             if response.data:
                 return response.data[0]["id"]
             return None
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.error("Error inserting metadata for %s: %s", doc.case_id, e)
             return None
 
@@ -364,7 +379,7 @@ class CaseLawStorage:
 
         try:
             self.client.table("case_law_sections").delete().eq("case_law_id", case_law_id).execute()
-        except Exception as e:
+        except (PostgrestAPIError, OSError) as e:
             logger.error("%s | delete old sections error: %s", doc.case_id, e)
 
         max_attempts = 5
@@ -375,7 +390,7 @@ class CaseLawStorage:
                     self.client.table("case_law_sections").insert(section).execute()
                     stored += 1
                     break
-                except Exception as e:
+                except (PostgrestAPIError, OSError) as e:
                     err_str = str(e)
                     # Supabase/Cloudflare 520 = origin server unreachable; use longer backoff
                     is_5xx = "520" in err_str or "'code': 520" in err_str or "unknown error" in err_str.lower()
@@ -419,7 +434,7 @@ class CaseLawStorage:
             embeddings.append(embedding)
         return embeddings
 
-    def get_case_count(self, court_type: str = None, year: int = None) -> int:
+    def get_case_count(self, court_type: str | None = None, year: int | None = None) -> int:
         """Get count of stored cases"""
         query = self.client.table("case_law").select("id", count="exact")
 
@@ -431,5 +446,5 @@ class CaseLawStorage:
         try:
             response = query.execute()
             return response.count or 0
-        except Exception:
+        except (PostgrestAPIError, OSError):
             return 0

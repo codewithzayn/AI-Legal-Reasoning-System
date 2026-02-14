@@ -3,10 +3,14 @@ Configuration settings for AI Legal Reasoning System
 """
 
 import os
+from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
-load_dotenv()
+# Use find_dotenv() to locate .env regardless of the current working directory.
+# Falls back to an explicit path relative to this file (project root) if not found.
+_dotenv_path = find_dotenv(usecwd=True) or str(Path(__file__).resolve().parent.parent.parent / ".env")
+load_dotenv(_dotenv_path)
 
 
 # ============================================
