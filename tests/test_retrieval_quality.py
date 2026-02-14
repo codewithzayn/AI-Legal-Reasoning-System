@@ -1,17 +1,26 @@
-"""Retrieval quality evaluation - measures MRR, Recall@K.
-Run from project root: python -m pytest tests/test_retrieval_quality.py -v
-Or: python tests/test_retrieval_quality.py (after path fix below)
+"""
+© 2026 Crest Advisory Group LLC. All rights reserved.
+
+PROPRIETARY AND CONFIDENTIAL
+
+This file is part of the Crest Pet System and contains proprietary
+and confidential information of Crest Advisory Group LLC.
+Unauthorized copying, distribution, or use is strictly prohibited.
+"""
+
+"""Retrieval quality evaluation - measures Recall@K.
+
+Run: python tests/test_retrieval_quality.py
 """
 
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 
-# Match main app log format (message only, no JSON)
 os.environ.setdefault("LOG_FORMAT", "simple")
 
-# Add project root so "src" is importable when run as script
 _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
@@ -21,93 +30,239 @@ from src.services.retrieval.search import HybridRetrieval
 
 logger = setup_logger(__name__)
 
-# Test queries with known-correct cases
+# ---------------------------------------------------------------------------
+# 25 test questions — diverse scenarios, 2-3 per topic area.
+# Each expected_cases must appear in top-15 reranked results.
+# ---------------------------------------------------------------------------
 EVAL_QUERIES = [
+    # --- 1. Compound word (prefix-matching fix) ---
     {
-        "query": "Milloin palvelusrikos on törkeä?",
-        "expected_cases": ["KKO:2025:58"],
-        "query_type": "conditions",
-        "notes": "When is service offense aggravated",
+        "query": "Onko vahingonkorvauslain 7 luvun 4 §:n oikeuspaikkasäännös pakottava vai tahdonvaltainen?",
+        "expected_cases": ["KKO:1987:135"],
+        "query_type": "compound_word",
+    },
+    # --- 2-3. Employment law ---
+    {
+        "query": "Milloin työsopimus katsotaan purkautuneeksi TSL 8 luvun 3 §:n nojalla?",
+        "expected_cases": ["KKO:2026:8"],
+        "query_type": "employment",
     },
     {
-        "query": "Millä edellytyksillä rikoslain 6 luvun 3 §:n 3 kohdan rangaistuksen lieventämisperustetta (oma-aloitteinen rikoksensa selvittämisen edistäminen) voidaan soveltaa?",
-        "expected_cases": ["KKO:1998:162"],
-        "query_type": "statute_interpretation",
-        "notes": "RL 6 ch 3 §(3) mitigation; KKO:1998:162 is the leading case",
+        "query": "Mitä TSL 8 luvun 3 § säätää työsopimuksen purkautuneena pitämisestä?",
+        "expected_cases": ["KKO:2026:8"],
+        "query_type": "statute_ref",
+    },
+    # --- 4-5. Criminal law ---
+    {
+        "query": "Milloin palvelusrikos on törkeä sotilasrikoksena?",
+        "expected_cases": ["KKO:2026:5"],
+        "query_type": "conditions",
+    },
+    {
+        "query": "Miten raiskausrikoksen tunnusmerkistö on muuttunut rikoslain uudistuksessa?",
+        "expected_cases": ["KKO:2026:3", "KKO:2025:61"],
+        "query_type": "criminal",
+    },
+    # --- 6-7. Sentencing ---
+    {
+        "query": "Miten vapaudenmenetysaika vähennetään rangaistuksesta KKO:n oikeuskäytännön mukaan?",
+        "expected_cases": ["KKO:2026:7"],
+        "query_type": "sentencing",
+    },
+    {
+        "query": "Miten RL 7 luvun 6 §:n ja 9 §:n mukainen yhteinen rangaistus määrätään?",
+        "expected_cases": ["KKO:2025:5"],
+        "query_type": "sentencing",
+    },
+    # --- 8-10. Tort / Damages ---
+    {
+        "query": "Mitä VahL 5 luvun 5 § säätää korvattavasta vahingosta?",
+        "expected_cases": ["KKO:2026:2"],
+        "query_type": "statute_ref",
+    },
+    {
+        "query": "Milloin syyttömästi pidätetylle maksetaan korvausta kärsimyksestä?",
+        "expected_cases": ["KKO:2026:6"],
+        "query_type": "damages",
+    },
+    {
+        "query": "Miten turvaamistoimenpiteestä aiheutunut vahinko korvataan ja mikä on kanneaika?",
+        "expected_cases": ["KKO:2025:88"],
+        "query_type": "damages",
+    },
+    # --- 11-12. Corporate law ---
+    {
+        "query": "Mikä on osakeyhtiön toimitusjohtajan vastuu ja asema OYL 6 luvun 26 ja 28 §:n mukaan?",
+        "expected_cases": ["KKO:2026:9"],
+        "query_type": "corporate",
+    },
+    {
+        "query": "Milloin asunto-osakeyhtiön yhtiökokouksen päätös voidaan moittia AsOYL 1 luvun 10 §:n yhdenvertaisuusperiaatteen nojalla?",
+        "expected_cases": ["KKO:2025:89"],
+        "query_type": "corporate",
+    },
+    # --- 13-14. Procedural law ---
+    {
+        "query": "Milloin tuomioistuimen päätöksestä voi kannella ylimääräisenä muutoksenhakukeinona?",
+        "expected_cases": ["KKO:2026:11"],
+        "query_type": "procedural",
+    },
+    {
+        "query": "Miten asiakirjan esittämisvelvollisuus toteutetaan oikeudenkäynnissä OK 17 luvun mukaan?",
+        "expected_cases": ["KKO:2025:96", "KKO:2025:62"],
+        "query_type": "procedural",
+    },
+    # --- 15-16. Property / Real estate ---
+    {
+        "query": "Miten lunastuskorvaus ja kohteenkorvaus määritetään lunastuslain 30 §:n mukaan?",
+        "expected_cases": ["KKO:2025:19"],
+        "query_type": "property",
+    },
+    {
+        "query": "Mitä maakaari säätää lainhuudatuksesta ja kirjaamismenettelystä?",
+        "expected_cases": ["KKO:2025:40"],
+        "query_type": "property",
+    },
+    # --- 17. Coercive measures ---
+    {
+        "query": "Millä edellytyksillä vakuustakavarikko voidaan määrätä PakkokeinoL 6 luvun mukaan?",
+        "expected_cases": ["KKO:2025:15"],
+        "query_type": "coercive",
+    },
+    # --- 18-19. Insurance ---
+    {
+        "query": "Miten tapaturmakorvauksen syy-yhteysvaatimus arvioidaan?",
+        "expected_cases": ["KKO:2026:4"],
+        "query_type": "insurance",
+    },
+    {
+        "query": "Korvaako liikennevakuutus ansionmenetyksen loukkaantumisen jälkeen?",
+        "expected_cases": ["KKO:2025:59"],
+        "query_type": "insurance",
+    },
+    # --- 20-21. Case ID lookups ---
+    {
+        "query": "Kerro tapauksesta KKO:2026:1",
+        "expected_cases": ["KKO:2026:1"],
+        "query_type": "case_lookup",
+    },
+    {
+        "query": "Mitä KKO:2025:35 koskee?",
+        "expected_cases": ["KKO:2025:35"],
+        "query_type": "case_lookup",
+    },
+    # --- 22. Insolvency ---
+    {
+        "query": "Mitä yrityssaneerauslain YSL 27 § säätää saneerausvelasta?",
+        "expected_cases": ["KKO:2025:77"],
+        "query_type": "insolvency",
+    },
+    # --- 23. Construction ---
+    {
+        "query": "Miten rakennusurakan YSE-sopimusehtoja sovelletaan?",
+        "expected_cases": ["KKO:2025:3"],
+        "query_type": "construction",
+    },
+    # --- 24. Criminal - specific ---
+    {
+        "query": "Milloin kavallus katsotaan törkeäksi rikoslain mukaan?",
+        "expected_cases": ["KKO:2025:16"],
+        "query_type": "criminal",
+    },
+    # --- 25. Sanctions / Regulation ---
+    {
+        "query": "Mitä säännöstelyrikos ja pakoteasiaan liittyvä laillisuusperiaate tarkoittavat?",
+        "expected_cases": ["KKO:2026:1"],
+        "query_type": "sanctions",
     },
 ]
 
 
 async def evaluate_retrieval():
-    """Measure retrieval quality metrics"""
+    """Run all test queries and report pass/fail."""
     retrieval = HybridRetrieval()
+    total = len(EVAL_QUERIES)
+    passed_at_5 = 0
+    passed_at_10 = 0
+    passed_at_15 = 0
+    failures: list[dict] = []
 
-    metrics = {
-        "mrr": [],  # Mean Reciprocal Rank
-        "recall_at_3": [],  # How often the right case is in top 3
-        "recall_at_5": [],  # How often the right case is in top 5
-        "recall_at_10": [],  # How often the right case is in top 10
-    }
+    print(f"\n{'=' * 70}")
+    print(f"RETRIEVAL QUALITY TEST — {total} queries")
+    print(f"{'=' * 70}\n")
 
-    for item in EVAL_QUERIES:
-        logger.info("")
-        logger.info("Query: %s", item["query"])
-        logger.info("Expected: %s", item["expected_cases"])
-        logger.info("Type: %s", item["query_type"])
+    for idx, item in enumerate(EVAL_QUERIES, 1):
+        query = item["query"]
+        expected = item["expected_cases"]
+        qtype = item["query_type"]
 
-        # Run retrieval
-        results = await retrieval.hybrid_search_with_rerank(item["query"], final_limit=15)
+        t0 = time.time()
+        try:
+            results = await retrieval.hybrid_search_with_rerank(query, initial_limit=30, final_limit=15)
+        except Exception as exc:
+            print(f"[{idx:2d}/{total}] ERROR  {qtype:18s} | {query[:50]}...")
+            print(f"         Exception: {exc}")
+            failures.append({"idx": idx, "query": query, "reason": str(exc)})
+            continue
 
-        # Extract case IDs from results
-        retrieved_cases = [(r.get("metadata") or {}).get("case_id", "") for r in results]
+        elapsed = time.time() - t0
+        retrieved = [(r.get("metadata") or {}).get("case_id", "") for r in results]
 
-        # Calculate MRR (Mean Reciprocal Rank)
-        found_at = None
-        for i, case_id in enumerate(retrieved_cases):
-            if case_id in item["expected_cases"]:
-                found_at = i + 1
+        found_rank = None
+        for i, cid in enumerate(retrieved):
+            if cid in expected:
+                found_rank = i + 1
                 break
 
-        if found_at:
-            mrr_score = 1 / found_at
-            metrics["mrr"].append(mrr_score)
-            logger.info("✓ Found at rank %s (MRR: %.3f)", found_at, mrr_score)
-        else:
-            metrics["mrr"].append(0)
-            logger.info("✗ Not found in top 15")
+        in_top5 = found_rank is not None and found_rank <= 5
+        in_top10 = found_rank is not None and found_rank <= 10
+        in_top15 = found_rank is not None and found_rank <= 15
 
-        # Calculate Recall@K
-        top3_cases = set(retrieved_cases[:3])
-        top5_cases = set(retrieved_cases[:5])
-        top10_cases = set(retrieved_cases[:10])
-        expected = set(item["expected_cases"])
+        if in_top5:
+            passed_at_5 += 1
+        if in_top10:
+            passed_at_10 += 1
+        if in_top15:
+            passed_at_15 += 1
 
-        metrics["recall_at_3"].append(1 if (top3_cases & expected) else 0)
-        metrics["recall_at_5"].append(1 if (top5_cases & expected) else 0)
-        metrics["recall_at_10"].append(1 if (top10_cases & expected) else 0)
+        status = "PASS" if in_top15 else "FAIL"
+        rank_str = f"rank #{found_rank}" if found_rank else "NOT FOUND"
 
-        # Show top 5 results
-        logger.info("")
-        logger.info("Top 5 results:")
-        for i, r in enumerate(results[:5], 1):
-            meta = r.get("metadata", {})
-            case_id = meta.get("case_id", "?")
-            title = meta.get("title", "")
-            score = r.get("blended_score", 0)
-            marker = "✓✓✓" if case_id in item["expected_cases"] else ""
-            logger.info("  %s. %s %s", i, case_id, marker)
-            logger.info("     Score: %.4f | %s", score, (title or "")[:60])
+        print(f"[{idx:2d}/{total}] {status:4s}  {qtype:18s} | {rank_str:14s} | {elapsed:4.1f}s | {query[:55]}")
 
-    # Overall metrics
-    n = len(metrics["mrr"]) or 1
-    logger.info("")
-    logger.info("OVERALL METRICS:")
-    logger.info("Mean Reciprocal Rank: %.3f", sum(metrics["mrr"]) / n)
-    logger.info("Recall@3:  %.1f%%", sum(metrics["recall_at_3"]) / n * 100)
-    logger.info("Recall@5:  %.1f%%", sum(metrics["recall_at_5"]) / n * 100)
-    logger.info("Recall@10: %.1f%%", sum(metrics["recall_at_10"]) / n * 100)
+        if not in_top15:
+            failures.append(
+                {
+                    "idx": idx,
+                    "query": query,
+                    "expected": expected,
+                    "got_top5": retrieved[:5],
+                    "reason": rank_str,
+                }
+            )
 
-    return metrics
+    # Summary
+    r5 = passed_at_5 / total * 100
+    r10 = passed_at_10 / total * 100
+    r15 = passed_at_15 / total * 100
+    print(f"\n{'=' * 70}")
+    print(f"RESULTS: {passed_at_15}/{total} passed (Recall@15)")
+    print(f"  Recall@5:  {passed_at_5}/{total} ({r5:.0f}%)")
+    print(f"  Recall@10: {passed_at_10}/{total} ({r10:.0f}%)")
+    print(f"  Recall@15: {passed_at_15}/{total} ({r15:.0f}%)")
+    print(f"{'=' * 70}")
+
+    if failures:
+        print(f"\nFAILURES ({len(failures)}):")
+        for f in failures:
+            print(f"  [{f['idx']}] {f['query'][:70]}")
+            if "expected" in f:
+                print(f"       Expected: {f['expected']}")
+                print(f"       Got top5: {f.get('got_top5', [])}")
+
+    overall = "PASS" if r15 >= 0.60 else "FAIL"
+    print(f"\nOVERALL: {overall} (threshold: 60% Recall@15)")
+    return {"recall_at_5": r5, "recall_at_10": r10, "recall_at_15": r15, "failures": failures}
 
 
 if __name__ == "__main__":

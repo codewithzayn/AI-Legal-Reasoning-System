@@ -78,13 +78,17 @@ class TestRRFMerge:
         merged = retrieval.rrf_merge(vec, [])
         assert len(merged) == 3
 
-    def test_ranks_are_recorded(self, retrieval: HybridRetrieval) -> None:
-        """Merged results should carry vector_rank and fts_rank metadata."""
-        vec = [{"id": "x"}]
-        fts = [{"id": "x"}]
-        merged = retrieval.rrf_merge(vec, fts)
-        assert merged[0]["vector_rank"] == 1
-        assert merged[0]["fts_rank"] == 1
+    def test_three_sources_boost_shared_higher(self, retrieval: HybridRetrieval) -> None:
+        """A chunk appearing in three sources should score higher than two."""
+        vec = [{"id": "shared"}, {"id": "vec_only"}]
+        fts = [{"id": "shared"}, {"id": "fts_only"}]
+        meta = [{"id": "shared"}, {"id": "meta_only"}]
+        merged = retrieval.rrf_merge(vec, fts, meta, k=60)
+
+        scores = {m["id"]: m["rrf_score"] for m in merged}
+        assert scores["shared"] > scores["vec_only"]
+        assert scores["shared"] > scores["fts_only"]
+        assert scores["shared"] > scores["meta_only"]
 
     def test_sorted_descending_by_rrf_score(self, retrieval: HybridRetrieval) -> None:
         """Merged list should be sorted by rrf_score descending."""
@@ -93,6 +97,68 @@ class TestRRFMerge:
         merged = retrieval.rrf_merge(vec, fts)
         scores = [m["rrf_score"] for m in merged]
         assert scores == sorted(scores, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# _build_fts_query
+# ---------------------------------------------------------------------------
+class TestBuildFtsQuery:
+    """Test Finnish FTS query builder."""
+
+    def test_strips_stop_words_and_joins_with_or(self, retrieval: HybridRetrieval) -> None:
+        query = "Onko vahingonkorvauslain 7 luvun 4 §:n oikeuspaikkasäännös pakottava vai tahdonvaltainen?"
+        result = retrieval._build_fts_query(query)
+        assert "OR" in result
+        assert "onko" not in result.lower().split(" or ")
+        assert "vai" not in result.lower().split(" or ")
+        assert "luvun" not in result.lower().split(" or ")
+        assert "vahingonkorvauslain" in result.lower()
+        assert "oikeuspaikkasäännös" in result.lower()
+
+    def test_removes_numbers_and_short_tokens(self, retrieval: HybridRetrieval) -> None:
+        query = "RL 10 luvun 3 §:n soveltaminen"
+        result = retrieval._build_fts_query(query)
+        # "10", "3" are pure digits → removed; "RL" is 2 chars → removed
+        assert "10" not in result.split(" OR ")
+        assert "soveltaminen" in result.lower()
+
+    def test_empty_when_all_stop_words(self, retrieval: HybridRetrieval) -> None:
+        query = "onko vai?"
+        result = retrieval._build_fts_query(query)
+        # Returns empty so callers can short-circuit (skip RPC)
+        assert result == ""
+
+    def test_caps_at_eight_terms(self, retrieval: HybridRetrieval) -> None:
+        query = "aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk"
+        result = retrieval._build_fts_query(query)
+        assert result.count(" OR ") <= 7  # 8 terms → 7 ORs
+
+
+# ---------------------------------------------------------------------------
+# _build_prefix_tsquery
+# ---------------------------------------------------------------------------
+class TestBuildPrefixTsquery:
+    """Test prefix-matching query builder for compound Finnish words."""
+
+    def test_generates_prefix_variants_for_long_words(self, retrieval: HybridRetrieval) -> None:
+        query = "oikeuspaikkasäännös"
+        result = retrieval._build_prefix_tsquery(query)
+        assert ":*" in result
+        assert "oikeuspaikka:*" in result  # 65% truncation of 18-char word
+
+    def test_no_prefix_for_short_words(self, retrieval: HybridRetrieval) -> None:
+        result = retrieval._build_prefix_tsquery("KKO tuomio")
+        assert ":*" not in result
+        assert "kko" in result
+        assert "tuomio" in result
+
+    def test_and_groups_for_two_compounds(self, retrieval: HybridRetrieval) -> None:
+        result = retrieval._build_prefix_tsquery("vahingonkorvauslain oikeuspaikkasäännös")
+        assert "&" in result  # AND between compound groups
+        assert "|" in result  # OR within each group
+
+    def test_empty_for_all_stop_words(self, retrieval: HybridRetrieval) -> None:
+        assert retrieval._build_prefix_tsquery("onko vai?") == ""
 
 
 # ---------------------------------------------------------------------------

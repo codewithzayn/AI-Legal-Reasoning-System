@@ -40,8 +40,9 @@ def route_search_result(state: AgentState) -> Literal["reason", "reformulate"]:
         # Found something -> Reason
         return "reason"
 
-    if attempts >= 3:
-        # Give up -> Reason (will generate apology)
+    if attempts >= 2:
+        # Give up after 2 attempts → reason (will generate apology).
+        # More retries just waste time when the DB cannot find matches.
         return "reason"
 
     # Formatting failed -> Try again

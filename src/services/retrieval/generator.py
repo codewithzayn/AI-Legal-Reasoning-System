@@ -82,7 +82,7 @@ class LLMGenerator:
             temperature=0.1,  # Low temperature for accuracy
             max_tokens=800,  # Cap response length for faster generation
             api_key=os.getenv("OPENAI_API_KEY"),
-            request_timeout=45,  # Allow enough time; retries are expensive
+            request_timeout=30,  # 30s cap; retries are expensive
         )
         self.model = model
 

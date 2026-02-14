@@ -25,6 +25,120 @@ from .reranker import CohereReranker
 logger = setup_logger(__name__)
 
 # ---------------------------------------------------------------------------
+# Finnish stop words — stripped from FTS queries so only substantive
+# legal terms remain.  When combined with to_tsquery OR (|) mode
+# this gives broad recall while ts_rank scores precision.
+# ---------------------------------------------------------------------------
+_FINNISH_FTS_STOPWORDS: frozenset[str] = frozenset(
+    {
+        # Question / modal words
+        "onko",
+        "voiko",
+        "oliko",
+        "miksi",
+        "miten",
+        "milloin",
+        "missä",
+        "mitä",
+        "kuka",
+        "minne",
+        "mistä",
+        "mikä",
+        "kumpi",
+        "voidaan",
+        "pitää",
+        "täytyy",
+        "saako",
+        "tuleeko",
+        # Conjunctions & particles
+        "ja",
+        "tai",
+        "vai",
+        "sekä",
+        "että",
+        "mutta",
+        "kun",
+        "jos",
+        "eli",
+        "niin",
+        "myös",
+        "joka",
+        "kuin",
+        "koska",
+        "vaikka",
+        "siis",
+        "kuitenkin",
+        "eikä",
+        "vain",
+        # Prepositions & postpositions
+        "mukaan",
+        "kanssa",
+        "ennen",
+        "jälkeen",
+        "yli",
+        "alle",
+        "vuoksi",
+        "perusteella",
+        "nojalla",
+        "lisäksi",
+        "välillä",
+        # Pronouns & demonstratives
+        "tämä",
+        "tuo",
+        "sen",
+        "tämän",
+        "nämä",
+        "nuo",
+        "sitä",
+        "siitä",
+        "hän",
+        "hänen",
+        "he",
+        "heidän",
+        "minä",
+        "sinä",
+        "me",
+        "te",
+        "näiden",
+        "niiden",
+        "muun",
+        # Common verbs (base + inflections)
+        "olla",
+        "ole",
+        "ollut",
+        "oleva",
+        "ollaan",
+        "olisi",
+        "ovat",
+        # Legal structure words (chapter/section markers)
+        "luvun",
+        "pykälän",
+        "kohdan",
+        "momentin",
+        # Misc
+        "kyllä",
+        "aina",
+        "jo",
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Compound-word prefix matching.  The PostgreSQL Finnish stemmer cannot
+# decompose compound words, so "oikeuspaikkasäännös" never matches
+# "oikeuspaikka" in the tsvector.  Instead of hardcoding known suffixes
+# (which only covers specific terms), we generate prefix-match variants
+# for ANY long word using to_tsquery :* (prefix operator).  This is fully
+# generic — works for any compound word in any question, without needing
+# a dictionary or suffix list.
+#
+# _PREFIX_RATIOS: truncation points as a fraction of word length.
+#   Multiple ratios increase the chance that at least one truncation
+#   lands on a compound-word boundary.
+# ---------------------------------------------------------------------------
+_COMPOUND_PREFIX_MIN_LENGTH = 10
+_PREFIX_RATIOS: tuple[float, ...] = (0.50, 0.65, 0.80)
+
+# ---------------------------------------------------------------------------
 # Regex to detect case IDs like KKO:2022:18, KHO:2023:5, KKO 2024:76, etc.
 # Supports: KKO:2024:76, KKO 2024:76, KKO2025:58 (no space),
 #           KKO 2025 58 (space-only), KKO/2024/76 (slash variant),
@@ -366,19 +480,23 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     # ------------------------------------------------------------------
     async def vector_search(self, query_embedding: list[float], limit: int | None = None) -> list[dict]:
         """
-        Vector similarity search using cosine distance
+        Vector similarity search on case_law_sections using HNSW index.
+
+        Calls the ``vector_search_case_law`` RPC which leverages the HNSW
+        index for fast approximate nearest-neighbour lookup.
 
         Args:
             query_embedding: Query embedding vector (1536-dim)
             limit: Number of results to return
 
         Returns:
-            List of chunks with similarity scores
+            List of section dicts with similarity scores, normalised
+            to the common format used by hybrid_search.
         """
         try:
             client = await self._get_client()
             response = await client.rpc(
-                "vector_search",
+                "vector_search_case_law",
                 {
                     "query_embedding": query_embedding,
                     "match_threshold": config.MATCH_THRESHOLD,
@@ -386,92 +504,252 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 },
             ).execute()
 
-            return response.data or []
+            # Normalise to the common format expected downstream
+            results: list[dict] = []
+            for item in response.data or []:
+                results.append(
+                    {
+                        "id": item.get("section_id"),
+                        "text": item.get("content", ""),
+                        "source": "case_law",
+                        "metadata": {
+                            "case_id": item.get("case_id"),
+                            "case_title": item.get("title", ""),
+                            "court": item.get("court_type"),
+                            "year": item.get("case_year"),
+                            "type": item.get("section_type"),
+                            "keywords": item.get("legal_domains", []),
+                            "url": item.get("url"),
+                        },
+                        "score": item.get("similarity", 0),
+                    }
+                )
+            return results
         except (PostgrestAPIError, OSError) as e:
             logger.error("Vector search error: %s", e)
             return []
 
-    def _sanitize_fts_query(self, query: str) -> str:
-        """Remove special characters that break to_tsquery"""
-        # Remove special chars, keep only letters, numbers, spaces
+    @staticmethod
+    def _extract_key_terms(query: str) -> list[str]:
+        """Extract substantive key terms from a Finnish legal query.
+
+        Strips special characters, Finnish stop words, numbers, and
+        short tokens.  Returns at most 8 lower-cased terms.
+        """
         sanitized = re.sub(r"[^\w\s]", " ", query)
-        # Replace multiple spaces with single space
         sanitized = re.sub(r"\s+", " ", sanitized).strip()
-        return sanitized
+
+        key_terms: list[str] = []
+        for word in sanitized.split():
+            word_lower = word.lower()
+            if word_lower in _FINNISH_FTS_STOPWORDS:
+                continue
+            if len(word) <= 2:
+                continue
+            if word.isdigit():
+                continue
+            key_terms.append(word_lower)
+
+        return key_terms[:8]
+
+    @staticmethod
+    def _build_fts_query(query: str) -> str:
+        """Build an OR-based FTS query for ``websearch_to_tsquery``.
+
+        Extracts key terms and joins them with ``OR`` so
+        ``websearch_to_tsquery`` matches documents containing *any* of
+        the terms (recall), while ``ts_rank`` scores higher when more
+        terms match (precision).
+
+        Returns an empty string when every word is a stop word so the
+        caller can short-circuit (skip the RPC call).
+        """
+        key_terms = HybridRetrieval._extract_key_terms(query)
+        if not key_terms:
+            return ""
+        return " OR ".join(key_terms)
+
+    @staticmethod
+    def _build_prefix_tsquery(query: str) -> str:
+        """Build a ``to_tsquery``-compatible query with ``:*`` prefix variants.
+
+        Strategy
+        --------
+        Take the 2–3 longest key terms (most likely Finnish compounds) and
+        build an **AND-of-OR-groups** query:
+
+            (word1 | prefix1a:* | prefix1b:*) & (word2 | prefix2a:* | prefix2b:*)
+
+        Each group contains the original word OR'd with its prefix variants
+        (at 50 %, 65 %, 80 % of word length).  Groups are AND'd so a
+        matching document must contain at least one form of EACH important
+        term.  This is far more precise than a flat OR across all terms.
+
+        Shorter words (≤ 10 chars, unlikely to be compounds) are appended
+        as a flat OR suffix so they help ranking but don't exclude documents.
+
+        Used for direct table queries via Supabase ``text_search`` which
+        calls ``to_tsquery`` under the hood.
+        """
+        key_terms = HybridRetrieval._extract_key_terms(query)
+        if not key_terms:
+            return ""
+
+        # Split terms into "long" (likely compounds) and "short" (not compounds).
+        long_terms: list[str] = sorted(
+            (t for t in key_terms if len(t) > _COMPOUND_PREFIX_MIN_LENGTH),
+            key=len,
+            reverse=True,
+        )
+        short_terms: list[str] = [t for t in key_terms if len(t) <= _COMPOUND_PREFIX_MIN_LENGTH]
+
+        # Only AND the top 2 longest compound terms (most distinctive).
+        # Extra long terms and all short terms go into a flat OR suffix.
+        and_candidates = long_terms[:2]
+        or_extras = long_terms[2:] + short_terms
+
+        # Build one OR group per AND candidate: original | prefix_50 | prefix_65 | prefix_80
+        and_groups: list[str] = []
+        for term in and_candidates:
+            group_parts = [term]
+            seen: set[str] = {term}
+            for ratio in _PREFIX_RATIOS:
+                prefix_len = max(6, int(len(term) * ratio))
+                if prefix_len >= len(term) - 2:
+                    continue
+                prefix_with_star = f"{term[:prefix_len]}:*"
+                if prefix_with_star not in seen:
+                    group_parts.append(prefix_with_star)
+                    seen.add(prefix_with_star)
+            # Parenthesise the OR group if it has multiple parts
+            if len(group_parts) > 1:
+                and_groups.append(f"( {' | '.join(group_parts)} )")
+            else:
+                and_groups.append(group_parts[0])
+
+        if not and_groups:
+            # No compound words — fall back to flat OR of all terms
+            all_remaining = or_extras if or_extras else key_terms
+            return " | ".join(all_remaining) if all_remaining else ""
+
+        # AND the compound-term groups together (high precision)
+        core = " & ".join(and_groups)
+
+        # Append remaining terms as a flat OR suffix (helps ranking but
+        # doesn't exclude documents that lack them).
+        if or_extras:
+            extras_or = " | ".join(or_extras)
+            return f"{core} | {extras_or}"
+
+        return core
 
     async def fts_search(self, query_text: str, limit: int | None = None) -> list[dict]:
         """
-        Full-text search using PostgreSQL ts_rank
+        Full-text search on case_law_sections using GIN index.
+
+        Calls the ``fts_search_case_law`` RPC which leverages the GIN
+        index on ``fts_vector`` for fast Finnish-stemmed keyword search.
+
+        The query is pre-processed by ``_build_fts_query`` which extracts
+        key terms and joins them with OR so ``websearch_to_tsquery`` can
+        match documents containing *any* of the terms (recall), while
+        ``ts_rank`` naturally scores higher when more terms match
+        (precision).
 
         Args:
             query_text: Search query in Finnish
             limit: Number of results to return
 
         Returns:
-            List of chunks with relevance scores
+            List of section dicts with relevance scores, normalised
+            to the common format used by hybrid_search.
         """
         try:
-            # Sanitize query for FTS
-            sanitized_query = self._sanitize_fts_query(query_text)
+            fts_query = self._build_fts_query(query_text)
+            if not fts_query.strip():
+                return []
+
             client = await self._get_client()
             response = await client.rpc(
-                "fts_search", {"query_text": sanitized_query, "match_count": limit or config.FTS_SEARCH_TOP_K}
+                "fts_search_case_law",
+                {
+                    "query_text": fts_query,
+                    "match_count": limit or config.FTS_SEARCH_TOP_K,
+                },
             ).execute()
 
-            return response.data or []
+            # Normalise to the common format expected downstream
+            results: list[dict] = []
+            for item in response.data or []:
+                results.append(
+                    {
+                        "id": item.get("section_id"),
+                        "text": item.get("content", ""),
+                        "source": "case_law",
+                        "metadata": {
+                            "case_id": item.get("case_id"),
+                            "case_title": item.get("title", ""),
+                            "court": item.get("court_type"),
+                            "year": item.get("case_year"),
+                            "type": item.get("section_type"),
+                            "keywords": item.get("legal_domains", []),
+                            "url": item.get("url"),
+                        },
+                        "score": item.get("rank", 0),
+                    }
+                )
+            return results
         except (PostgrestAPIError, OSError) as e:
             logger.error("FTS search error: %s", e)
             return []
 
-    def rrf_merge(self, vector_results: list[dict], fts_results: list[dict], k: int = 60) -> list[dict]:
+    def rrf_merge(self, *result_lists: list[dict], k: int = 60) -> list[dict]:
         """
-        Reciprocal Rank Fusion (RRF) to merge search results
+        Reciprocal Rank Fusion (RRF) to merge multiple ranked result lists.
 
-        Formula: RRF_score = 1/(k + rank_vector) + 1/(k + rank_fts)
+        Formula: RRF_score = Σ 1/(k + rank_i) for each list where the
+        chunk appears.  A chunk found in multiple lists gets a higher score,
+        naturally rewarding agreement across search channels.
 
         Args:
-            vector_results: Results from vector search
-            fts_results: Results from FTS
-            k: Constant to prevent division by zero (default: 60)
+            *result_lists: One or more ranked result lists (vector, FTS, metadata, etc.)
+            k: Smoothing constant (default: 60)
 
         Returns:
-            Merged and re-ranked results
+            Merged and re-ranked results sorted by RRF score descending.
         """
-        # Create rank maps
-        vector_ranks = {item["id"]: rank + 1 for rank, item in enumerate(vector_results)}
-        fts_ranks = {item["id"]: rank + 1 for rank, item in enumerate(fts_results)}
+        # Build per-list rank maps
+        rank_maps: list[dict[str, int]] = []
+        for results in result_lists:
+            rank_maps.append({item["id"]: rank + 1 for rank, item in enumerate(results)})
 
-        # Collect all unique chunk IDs
-        all_ids = set(vector_ranks.keys()) | set(fts_ranks.keys())
+        # Collect all unique chunk IDs across every list
+        all_ids: set[str] = set()
+        for rank_map in rank_maps:
+            all_ids |= set(rank_map.keys())
 
         # Calculate RRF scores
-        rrf_scores = {}
+        rrf_scores: dict[str, float] = {}
         for chunk_id in all_ids:
-            vector_rank = vector_ranks.get(chunk_id, 0)
-            fts_rank = fts_ranks.get(chunk_id, 0)
-
-            # RRF formula
             score = 0.0
-            if vector_rank > 0:
-                score += 1.0 / (k + vector_rank)
-            if fts_rank > 0:
-                score += 1.0 / (k + fts_rank)
-
+            for rank_map in rank_maps:
+                rank = rank_map.get(chunk_id, 0)
+                if rank > 0:
+                    score += 1.0 / (k + rank)
             rrf_scores[chunk_id] = score
 
-        # Get full chunk data (prefer vector results, fallback to FTS)
-        chunks_map = {}
-        for item in vector_results + fts_results:
-            if item["id"] not in chunks_map:
-                chunks_map[item["id"]] = item
+        # Build a chunk-data lookup (first occurrence wins)
+        chunks_map: dict[str, dict] = {}
+        for results in result_lists:
+            for item in results:
+                if item["id"] not in chunks_map:
+                    chunks_map[item["id"]] = item
 
         # Create merged results with RRF scores
-        merged = []
+        merged: list[dict] = []
         for chunk_id, rrf_score in rrf_scores.items():
             chunk = chunks_map[chunk_id].copy()
             chunk["rrf_score"] = rrf_score
-            chunk["vector_rank"] = vector_ranks.get(chunk_id)
-            chunk["fts_rank"] = fts_ranks.get(chunk_id)
             merged.append(chunk)
 
         # Sort by RRF score (descending)
@@ -486,8 +764,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         Search case law using the specific SQL function (Hybrid internally)
         """
         try:
-            # Sanitize query for FTS part of the internal function
-            sanitized_query = self._sanitize_fts_query(query_text)
+            # Build FTS query for the internal function
+            sanitized_query = self._build_fts_query(query_text)
 
             client = await self._get_client()
             response = await client.rpc(
@@ -533,8 +811,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         This closes the gap where a keyword lives in metadata but NOT in section embeddings.
         """
         try:
-            sanitized_query = self._sanitize_fts_query(query_text)
-            if not sanitized_query.strip():
+            fts_query = self._build_fts_query(query_text)
+            if not fts_query.strip():
                 return []
 
             client = await self._get_client()
@@ -543,7 +821,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             response = await client.rpc(
                 "search_case_law_metadata",
                 {
-                    "query_text": sanitized_query,
+                    "query_text": fts_query,
                     "match_count": limit * 5,
                 },
             ).execute()
@@ -638,18 +916,107 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Case-ID fallback search failed (non-critical): %s", e)
             return []
 
+    async def _prefix_title_search(self, query_text: str, limit: int = 10) -> list[dict]:
+        """Find cases whose *title* matches prefix-expanded compound words.
+
+        Uses direct table queries with ``to_tsquery`` (via Supabase
+        ``text_search``) which supports the ``:*`` prefix operator.
+        This bridges Finnish compound-word boundaries **generically**:
+        e.g. ``oikeuspaikka:*`` matches a title containing "Oikeuspaikka"
+        even when the user wrote "oikeuspaikkasäännös".
+
+        No SQL migration or RPC change is required — the Supabase
+        ``text_search`` filter calls ``to_tsquery`` under the hood.
+        """
+        prefix_query = self._build_prefix_tsquery(query_text)
+        if not prefix_query:
+            return []
+
+        try:
+            client = await self._get_client()
+            case_resp = await (
+                client.table("case_law")
+                .select("id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url")
+                .text_search("title", prefix_query, options={"config": "finnish"})
+                .execute()
+            )
+            if not case_resp.data:
+                return []
+
+            # Deduplicate by case_id (first occurrence wins)
+            seen_cases: set[str] = set()
+            unique_cases: list[dict] = []
+            for row in case_resp.data:
+                cid = row.get("case_id", "")
+                if cid in seen_cases:
+                    continue
+                seen_cases.add(cid)
+                unique_cases.append(row)
+                if len(unique_cases) >= limit:
+                    break
+
+            # Fetch one section per matched case to provide chunk text
+            results: list[dict] = []
+            section_tasks = []
+            for case_row in unique_cases:
+                section_tasks.append(
+                    client.table("case_law_sections")
+                    .select("id, content, section_type")
+                    .eq("case_law_id", case_row["id"])
+                    .limit(1)
+                    .execute()
+                )
+
+            section_responses = await asyncio.gather(*section_tasks, return_exceptions=True)
+
+            for case_row, sec_resp in zip(unique_cases, section_responses, strict=True):
+                if isinstance(sec_resp, BaseException) or not sec_resp.data:
+                    continue
+                sec = sec_resp.data[0]
+                results.append(
+                    {
+                        "id": sec["id"],
+                        "text": sec.get("content", ""),
+                        "source": "case_law",
+                        "metadata": {
+                            "case_id": case_row.get("case_id", ""),
+                            "case_title": case_row.get("title", ""),
+                            "court": case_row.get("court_type"),
+                            "year": case_row.get("case_year"),
+                            "type": sec.get("section_type"),
+                            "keywords": case_row.get("legal_domains", []),
+                            "decision_outcome": case_row.get("decision_outcome", ""),
+                            "url": case_row.get("url"),
+                        },
+                        "score": 0.5,
+                    }
+                )
+            if results:
+                logger.info("Prefix title FTS → %s case(s)", len(results))
+            return results
+        except (PostgrestAPIError, OSError) as exc:
+            logger.warning("Prefix title search failed (non-critical): %s", exc)
+            return []
+
     async def hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:
         """
-        Global Hybrid Search: (Statutes Hybrid) + (Case Law Hybrid) + (Metadata FTS)
-        Each sub-query is capped at 10s to prevent a single slow RPC from blocking all results.
+        Hybrid Search on case_law_sections: Vector (HNSW) + FTS (GIN)
+        + Metadata FTS + Prefix title FTS + Case-ID fallback.
 
-        Optimization: FTS (text-only) searches start immediately while embedding
-        is generated in a thread pool, saving 1-2s.
+        Architecture
+        ------------
+        1. Embedding generation + FTS + metadata FTS run concurrently.
+        2. Once the embedding is ready, vector search starts (uses HNSW).
+        3. Vector + FTS results are merged via RRF.
+        4. Metadata & fallback results are appended (deduplicated).
+
+        Each sub-query is capped at 15 s so one slow RPC never blocks all.
         """
         t0 = time.time()
 
-        # Helper: run a search task with a timeout
-        async def _timed(coro, label: str, timeout: float = 12.0):
+        # Helper: run a search task with a timeout.
+        # 15 s accommodates cold-start and complex FTS queries with prefix matching.
+        async def _timed(coro, label: str, timeout: float = 15.0):
             try:
                 return await asyncio.wait_for(coro, timeout=timeout)
             except asyncio.TimeoutError:
@@ -663,31 +1030,37 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.info("  embed: %.1fs", time.time() - t0)
             return emb
 
-        # Phase 1: Start ALL non-embedding searches + embedding generation concurrently.
-        # FTS + metadata FTS don't need embedding and often finish in <2s.
-        # Embedding takes ~1-2s. Vector searches depend on the embedding.
+        # Log the FTS queries that will be sent (useful for debugging relevance)
+        fts_query_preview = self._build_fts_query(query_text)
+        prefix_query_preview = self._build_prefix_tsquery(query_text)
+        logger.info("  fts_query: %s", fts_query_preview)
+        logger.info("  prefix_query: %s", prefix_query_preview)
+
+        # Phase 1: Start text-only searches + embedding generation concurrently.
         embedding_task = asyncio.create_task(_get_embedding())
         fts_task = asyncio.create_task(_timed(self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts"))
         meta_task = asyncio.create_task(_timed(self.search_case_law_metadata(query_text, limit=limit), "meta_fts"))
+        # Prefix title search: bridges Finnish compound-word boundaries
+        # by matching title keywords via to_tsquery :* prefix operator.
+        prefix_task = asyncio.create_task(_timed(self._prefix_title_search(query_text, limit=limit), "prefix_title"))
 
-        # Case-ID fallback: if query contains a recognizable case ID pattern,
-        # also search by ILIKE on case_id column so the case is always included.
+        # Case-ID fallback: if query mentions a case ID, fetch directly.
         mentioned_ids = self.extract_case_ids(query_text)
         fallback_tasks = [
             asyncio.create_task(_timed(self._case_id_fallback_search(cid), f"fallback_{cid}")) for cid in mentioned_ids
         ]
 
-        # Wait for embedding, then launch vector-dependent searches
+        # Phase 2: Wait for embedding, then launch vector search (HNSW).
         query_embedding = await embedding_task
         vec_task = asyncio.create_task(
             _timed(self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K), "vec")
         )
-        case_task = asyncio.create_task(
-            _timed(self.search_case_law(query_embedding, query_text, limit=limit), "case_law")
+
+        # Wait for all parallel searches
+        vec_results, fts_results, meta_results, prefix_results = await asyncio.gather(
+            vec_task, fts_task, meta_task, prefix_task
         )
 
-        # Wait for everything
-        stat_vec, case_results, stat_fts, meta_results = await asyncio.gather(vec_task, case_task, fts_task, meta_task)
         # Collect case-ID fallback results
         fallback_results: list[dict] = []
         if fallback_tasks:
@@ -697,57 +1070,35 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         t_search = time.time()
         logger.info(
-            "  search: %.1fs (vec=%s, fts=%s, case=%s, meta=%s, fallback=%s)",
+            "  search: %.1fs (vec=%s, fts=%s, meta=%s, prefix=%s, fallback=%s)",
             t_search - t0,
-            len(stat_vec),
-            len(stat_fts),
-            len(case_results),
+            len(vec_results),
+            len(fts_results),
             len(meta_results),
+            len(prefix_results),
             len(fallback_results),
         )
 
-        # Process Statute Results (Merge Vector + FTS)
-        statute_results = self.rrf_merge(stat_vec, stat_fts)
+        # RRF merge of ALL search channels (vector + FTS + metadata + prefix).
+        # A document found by multiple channels gets a score boost,
+        # which naturally promotes the most relevant cases.
+        rrf_merged = self.rrf_merge(vec_results, fts_results, meta_results, prefix_results, k=60)
 
-        # Normalize Statute Results
-        normalized_statutes = []
-        for item in statute_results:
-            normalized_statutes.append(
-                {
-                    "id": item["id"],
-                    "text": item.get("chunk_text", ""),
-                    "source": "statute",
-                    "metadata": {
-                        "title": item.get("document_title"),
-                        "uri": item.get("document_uri"),
-                        "section": item.get("section_number"),
-                        "raw_metadata": item.get("metadata"),
-                    },
-                    "score": item.get("rrf_score", 0),
-                }
-            )
-
-        # Merge case law results + metadata results + fallback results (dedup by section id)
+        # Deduplicate: RRF merged first, then case-ID fallback
         seen_ids: set[str] = set()
-        merged_case_law: list[dict] = []
-        for chunk in case_results:
+        combined_results: list[dict] = []
+
+        for chunk in rrf_merged:
             cid = chunk["id"]
             if cid not in seen_ids:
                 seen_ids.add(cid)
-                merged_case_law.append(chunk)
-        for chunk in meta_results:
-            cid = chunk["id"]
-            if cid not in seen_ids:
-                seen_ids.add(cid)
-                merged_case_law.append(chunk)
+                combined_results.append(chunk)
+
         for chunk in fallback_results:
             cid = chunk["id"]
             if cid not in seen_ids:
                 seen_ids.add(cid)
-                merged_case_law.append(chunk)
-
-        # Combine all results — reranker will sort them out
-        combined_results = normalized_statutes + merged_case_law
+                combined_results.append(chunk)
 
         return combined_results
 

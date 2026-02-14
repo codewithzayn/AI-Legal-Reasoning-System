@@ -37,7 +37,7 @@ class Config:
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "10"))
     # How many candidates to fetch before rerank; then how many to send to the LLM.
     # Lower candidates = faster. 20 is a good balance for production.
-    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "20"))
+    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "30"))
     CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "8"))
     # Max documents sent to Cohere (fewer = faster). Default 15 for production latency.
     RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "15"))

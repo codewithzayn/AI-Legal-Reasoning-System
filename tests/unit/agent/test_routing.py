@@ -61,13 +61,14 @@ class TestRouteSearchResult:
         assert route_search_result(state) == "reformulate"
 
     def test_no_results_max_attempts_routes_to_reason(self) -> None:
-        """After 3 failed attempts, give up and route to reason (apology)."""
-        state = {"search_results": [], "search_attempts": 3}
+        """After 2 failed attempts (max), give up and route to reason (apology)."""
+        state = {"search_results": [], "search_attempts": 2}
         assert route_search_result(state) == "reason"
 
-    def test_no_results_second_attempt_routes_to_reformulate(self) -> None:
-        state = {"search_results": [], "search_attempts": 2}
-        assert route_search_result(state) == "reformulate"
+    def test_no_results_third_attempt_still_routes_to_reason(self) -> None:
+        """Anything above max attempts still routes to reason."""
+        state = {"search_results": [], "search_attempts": 3}
+        assert route_search_result(state) == "reason"
 
     def test_missing_results_key_defaults_to_reformulate(self) -> None:
         state = {"search_attempts": 1}
