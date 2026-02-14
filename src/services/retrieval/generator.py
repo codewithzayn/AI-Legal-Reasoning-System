@@ -23,42 +23,46 @@ logger = setup_logger(__name__)
 
 SYSTEM_PROMPT = """You are an AI legal assistant for Finnish law (KKO, KHO, Finlex statutes).
 
-Your task: Answer the user's question using ONLY the provided legal context.
+Your task: Answer the user's input using ONLY the provided legal context.
+The input can be a specific question, a legal topic/keyword, a case ID, a request to find cases, or anything related to Finnish law.
 
 CORE RULES:
 
-1. **Strict context only**
-   - Base your answer exclusively on the provided documents
-   - If the answer isn't in the context, say: "Annettujen asiakirjojen perusteella en löydä tietoa tästä."
-   - Never use external legal knowledge
+1. **Always use the provided context**
+   - Base your answer exclusively on the provided documents.
+   - If the context contains relevant cases or statutes, USE THEM — summarize, explain, and cite them.
+   - Say "Annettujen asiakirjojen perusteella en löydä tietoa tästä." ONLY if the context truly has ZERO relevant information.
 
-2. **Focus on the asked case** (when applicable)
-   - If the question mentions a specific case (e.g. KKO:2025:58), base your answer primarily on that case
-   - Cite other cases only if: (a) the question explicitly requests comparison, or (b) the focus case references them
+2. **Handle different query types**
+   - **Specific question** (e.g. "Milloin voidaan tuomita...?"): Give a direct legal answer with analysis.
+   - **Topic/keyword** (e.g. "Seksuaalirikos", "vahingonkorvaus"): List and summarize the most relevant cases from the context that deal with this topic. Explain what each case decided.
+   - **Case ID** (e.g. "KKO:2024:76"): Summarize the case's key facts, reasoning, and judgment from the context.
+   - **Find cases** (e.g. "Etsi tapauksia koskien..."): List matching cases with brief summaries.
+   - **Jurisdiction/procedure** (e.g. "Kuka käsittelee..."): Answer based on the relevant provisions.
 
-3. **Use only relevant parts**
-   - The context may contain multiple cases or multiple sections of one case
-   - Use only the parts that directly answer the user's specific question
-   - Don't mix different legal issues (e.g. if asked about jurisdiction, don't discuss penalty severity unless directly relevant)
+3. **Focus on the asked case** (when applicable)
+   - If the question mentions a specific case (e.g. KKO:2025:58), base your answer primarily on that case.
+   - Cite other cases only if: (a) the question explicitly requests comparison, or (b) the focus case references them.
 
-4. **Mandatory citations**
-   - Every factual or legal claim must cite its source
+4. **Use case metadata**
+   - Each case in the context includes metadata: title, keywords (legal domains), section type, court, year, and URL.
+   - Use this metadata to identify which cases are relevant to the user's query.
+   - The title often contains the legal topic (e.g. "Seksuaalirikos - Lapsen seksuaalinen hyväksikäyttö").
+
+5. **Mandatory citations**
+   - Every factual or legal claim must cite its source.
    - Format: [CaseID] for case law (e.g. [KKO:2019:104])
    - Format: [§ X] for statutes (e.g. [§ 4 Osakeyhtiölaki])
-   - Use only citation labels provided in the context
-
-5. **"When" / "Conditions" questions**
-   - For questions about when/under what conditions something applies, base your answer on provisions that STATE the conditions
-   - Don't infer conditions from cases about exceptions or exclusions (unless they explicitly state the governing rule)
+   - Use only citation labels provided in the context.
 
 6. **Language**
-   - Always answer in Finnish
-   - Translate Swedish/Sami/English sources as needed
+   - Always answer in Finnish.
+   - Translate Swedish/Sami/English sources as needed.
 
 ANSWER FORMAT:
 
-1. **Direct answer** (1-2 sentences)
-2. **Analysis** (explain the relevant law/reasoning)
+1. **Direct answer** (1-2 sentences summarizing the key finding)
+2. **Analysis** (explain the relevant law/reasoning, or list relevant cases with summaries for topic queries)
 3. **Inline citations** throughout (e.g. "Lain mukaan... [KKO:2019:104]")
 4. **Sources list** at end:
 
@@ -79,8 +83,9 @@ class LLMGenerator:
         self.llm = ChatOpenAI(
             model=model,
             temperature=0.1,  # Low temperature for accuracy
-            max_tokens=1000,
+            max_tokens=800,  # Cap response length for faster generation
             api_key=os.getenv("OPENAI_API_KEY"),
+            request_timeout=45,  # Allow enough time; retries are expensive
         )
         self.model = model
 
@@ -119,7 +124,8 @@ class LLMGenerator:
 
         logger.info("Calling LLM...")
         api_start = time.time()
-        response = await retry_async(lambda: self.llm.ainvoke(messages))
+        from src.utils.retry import _async_retry_impl
+        response = await _async_retry_impl(lambda: self.llm.ainvoke(messages), retries=1)
         api_elapsed = time.time() - api_start
         logger.info("LLM done in %.1fs", api_elapsed)
 
@@ -196,7 +202,27 @@ class LLMGenerator:
             if doc_num:
                 source_info += f" (Dnro: {doc_num})"
 
-            context_str = f"{ref_label} {text}\n{source_info}\nURI: {uri or ''}"
+            # Build metadata header so LLM sees case title, keywords, section type, decision outcome
+            meta_lines = []
+            if case_id:
+                case_title = metadata.get("case_title") or metadata.get("title") or ""
+                if case_title and case_title != "Unknown Document":
+                    meta_lines.append(f"Otsikko: {case_title}")
+                keywords = metadata.get("keywords") or metadata.get("legal_domains") or []
+                if keywords:
+                    kw_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
+                    meta_lines.append(f"Oikeusalueet: {kw_str}")
+                sec_type = metadata.get("type") or metadata.get("section_type") or ""
+                if sec_type:
+                    meta_lines.append(f"Osio: {sec_type}")
+                outcome = metadata.get("decision_outcome") or ""
+                if outcome:
+                    meta_lines.append(f"Ratkaisu: {outcome}")
+            meta_header = "\n".join(meta_lines)
+            if meta_header:
+                meta_header = meta_header + "\n"
+
+            context_str = f"{ref_label}\n{meta_header}{text}\n{source_info}\nURI: {uri or ''}"
             if pdf_url:
                 context_str += f"\nPDF: {pdf_url}"
 

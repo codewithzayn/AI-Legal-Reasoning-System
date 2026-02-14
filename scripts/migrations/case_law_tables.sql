@@ -132,8 +132,47 @@ CREATE INDEX IF NOT EXISTS idx_case_law_cited_laws ON case_law USING GIN(cited_l
 CREATE INDEX IF NOT EXISTS idx_case_law_cited_regulations ON case_law USING GIN(cited_regulations);
 CREATE INDEX IF NOT EXISTS idx_case_law_is_precedent ON case_law(is_precedent);
 
--- Full-text search
+-- Full-text search on title
 CREATE INDEX IF NOT EXISTS idx_case_law_title_fts ON case_law USING GIN(to_tsvector('finnish', COALESCE(title, '')));
+
+-- IMMUTABLE wrapper for metadata FTS (required for GIN index expression)
+CREATE OR REPLACE FUNCTION case_law_metadata_tsvector(
+    p_title TEXT,
+    p_judgment TEXT,
+    p_background TEXT,
+    p_outcome TEXT,
+    p_domains TEXT[],
+    p_cases TEXT[],
+    p_laws TEXT[],
+    p_eu_cases TEXT[],
+    p_regulations TEXT[]
+) RETURNS tsvector
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT to_tsvector('finnish',
+        COALESCE(p_title, '') || ' ' ||
+        COALESCE(p_judgment, '') || ' ' ||
+        COALESCE(p_background, '') || ' ' ||
+        COALESCE(p_outcome, '') || ' ' ||
+        COALESCE(array_to_string(p_domains, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_cases, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_laws, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_eu_cases, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_regulations, ' '), '')
+    );
+$$;
+
+-- Full-text search on combined metadata (title + judgment + background_summary + decision_outcome + cited_cases + cited_laws + legal_domains)
+-- This allows keyword searches to hit metadata columns that are NOT embedded in section chunks.
+CREATE INDEX IF NOT EXISTS idx_case_law_metadata_fts ON case_law USING GIN(
+    case_law_metadata_tsvector(
+        title, judgment, background_summary, decision_outcome,
+        legal_domains, cited_cases, cited_laws, cited_eu_cases, cited_regulations
+    )
+);
+
+-- Composite indexes for ingestion and status queries (reduces Disk IO on filter)
+CREATE INDEX IF NOT EXISTS idx_case_law_court_year ON case_law(court_type, case_year);
+CREATE INDEX IF NOT EXISTS idx_case_law_court_type_year ON case_law(court_type, decision_type, case_year);
 
 
 -- ============================================
@@ -315,6 +354,69 @@ BEGIN
         (legal_domain_filter IS NULL OR legal_domain_filter = ANY(c.legal_domains)) AND
         (NOT precedents_only OR c.is_precedent = TRUE)
     ORDER BY combined_score DESC
+    LIMIT match_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ============================================
+-- 6b. METADATA KEYWORD SEARCH (searches case_law metadata columns, returns sections)
+-- Finds cases whose metadata (title, judgment, background, legal_domains, cited_cases,
+-- cited_laws, decision_outcome, cited_eu_cases, cited_regulations) match the query,
+-- then returns their sections so they can be fed to the LLM.
+-- This closes the gap where keywords live in metadata but NOT in section embeddings.
+-- ============================================
+CREATE OR REPLACE FUNCTION search_case_law_metadata(
+    query_text TEXT,
+    match_count INT DEFAULT 10
+)
+RETURNS TABLE (
+    section_id UUID,
+    case_id TEXT,
+    court_type TEXT,
+    court_code TEXT,
+    decision_type TEXT,
+    case_year INTEGER,
+    decision_date DATE,
+    section_type TEXT,
+    content TEXT,
+    title TEXT,
+    legal_domains TEXT[],
+    ecli TEXT,
+    url TEXT,
+    meta_score FLOAT
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        s.id AS section_id,
+        c.case_id,
+        c.court_type,
+        c.court_code,
+        c.decision_type,
+        c.case_year,
+        c.decision_date,
+        s.section_type,
+        s.content,
+        c.title,
+        c.legal_domains,
+        c.ecli,
+        c.url,
+        ts_rank(
+            case_law_metadata_tsvector(
+                c.title, c.judgment, c.background_summary, c.decision_outcome,
+                c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
+            ),
+            plainto_tsquery('finnish', query_text)
+        )::float8 AS meta_score
+    FROM case_law c
+    JOIN case_law_sections s ON s.case_law_id = c.id
+    WHERE
+        case_law_metadata_tsvector(
+            c.title, c.judgment, c.background_summary, c.decision_outcome,
+            c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
+        ) @@ plainto_tsquery('finnish', query_text)
+    ORDER BY meta_score DESC
     LIMIT match_count;
 END;
 $$ LANGUAGE plpgsql;

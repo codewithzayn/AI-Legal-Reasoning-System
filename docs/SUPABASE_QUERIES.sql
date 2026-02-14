@@ -19,6 +19,101 @@ ALTER ROLE authenticator SET statement_timeout = '60s';
 
 
 -- =============================================
+-- 1b. METADATA FTS INDEX + FUNCTION (run once — enables keyword search on case_law metadata)
+-- =============================================
+
+-- Step 1: IMMUTABLE wrapper (required because to_tsvector is only STABLE, not IMMUTABLE)
+CREATE OR REPLACE FUNCTION case_law_metadata_tsvector(
+    p_title TEXT,
+    p_judgment TEXT,
+    p_background TEXT,
+    p_outcome TEXT,
+    p_domains TEXT[],
+    p_cases TEXT[],
+    p_laws TEXT[],
+    p_eu_cases TEXT[],
+    p_regulations TEXT[]
+) RETURNS tsvector
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT to_tsvector('finnish',
+        COALESCE(p_title, '') || ' ' ||
+        COALESCE(p_judgment, '') || ' ' ||
+        COALESCE(p_background, '') || ' ' ||
+        COALESCE(p_outcome, '') || ' ' ||
+        COALESCE(array_to_string(p_domains, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_cases, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_laws, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_eu_cases, ' '), '') || ' ' ||
+        COALESCE(array_to_string(p_regulations, ' '), '')
+    );
+$$;
+
+-- Step 2: GIN index using the immutable wrapper
+CREATE INDEX IF NOT EXISTS idx_case_law_metadata_fts ON case_law USING GIN(
+    case_law_metadata_tsvector(
+        title, judgment, background_summary, decision_outcome,
+        legal_domains, cited_cases, cited_laws, cited_eu_cases, cited_regulations
+    )
+);
+
+-- RPC function: search case_law metadata → return matching sections
+CREATE OR REPLACE FUNCTION search_case_law_metadata(
+    query_text TEXT,
+    match_count INT DEFAULT 10
+)
+RETURNS TABLE (
+    section_id UUID,
+    case_id TEXT,
+    court_type TEXT,
+    court_code TEXT,
+    decision_type TEXT,
+    case_year INTEGER,
+    decision_date DATE,
+    section_type TEXT,
+    content TEXT,
+    title TEXT,
+    legal_domains TEXT[],
+    ecli TEXT,
+    url TEXT,
+    meta_score FLOAT
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        s.id AS section_id,
+        c.case_id,
+        c.court_type,
+        c.court_code,
+        c.decision_type,
+        c.case_year,
+        c.decision_date,
+        s.section_type,
+        s.content,
+        c.title,
+        c.legal_domains,
+        c.ecli,
+        c.url,
+        ts_rank(
+            case_law_metadata_tsvector(
+                c.title, c.judgment, c.background_summary, c.decision_outcome,
+                c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
+            ),
+            plainto_tsquery('finnish', query_text)
+        )::float8 AS meta_score
+    FROM case_law c
+    JOIN case_law_sections s ON s.case_law_id = c.id
+    WHERE
+        case_law_metadata_tsvector(
+            c.title, c.judgment, c.background_summary, c.decision_outcome,
+            c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
+        ) @@ plainto_tsquery('finnish', query_text)
+    ORDER BY meta_score DESC
+    LIMIT match_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- =============================================
 -- 2. VIEW / INSPECT
 -- =============================================
 
@@ -335,3 +430,92 @@ SELECT cs.id, cs.case_law_id
 FROM case_law_sections cs
 LEFT JOIN case_law cl ON cl.id = cs.case_law_id
 WHERE cl.id IS NULL;
+
+-- ==========================================================================
+-- Backfill empty legal_domains from title (no re-ingestion needed)
+-- ==========================================================================
+-- Preview: see which cases have empty legal_domains but a non-empty title
+SELECT case_id, title, legal_domains
+FROM case_law
+WHERE (legal_domains IS NULL OR legal_domains = '{}')
+  AND title IS NOT NULL AND title != ''
+ORDER BY case_year DESC
+LIMIT 50;
+
+-- Count of affected cases
+SELECT COUNT(*) AS cases_with_empty_keywords
+FROM case_law
+WHERE (legal_domains IS NULL OR legal_domains = '{}')
+  AND title IS NOT NULL AND title != '';
+
+-- ==========================================================================
+-- BACKFILL ALL METADATA (run these in order — no re-ingestion needed!)
+-- ==========================================================================
+
+-- Step A: Backfill judgment from case_law_sections (section_type = 'judgment')
+-- Preview first:
+SELECT c.case_id, LEFT(s.content, 100) AS judgment_preview
+FROM case_law c
+JOIN case_law_sections s ON s.case_law_id = c.id AND s.section_type = 'judgment'
+WHERE (c.judgment IS NULL OR c.judgment = '')
+LIMIT 10;
+
+-- Execute:
+UPDATE case_law c
+SET judgment = sub.content
+FROM (
+    SELECT DISTINCT ON (case_law_id) case_law_id, LEFT(content, 2000) AS content
+    FROM case_law_sections
+    WHERE section_type = 'judgment' AND content IS NOT NULL AND content != ''
+    ORDER BY case_law_id, id
+) sub
+WHERE c.id = sub.case_law_id
+  AND (c.judgment IS NULL OR c.judgment = '');
+
+-- Step B: Backfill background_summary from case_law_sections (section_type = 'background' or 'summary')
+UPDATE case_law c
+SET background_summary = sub.content
+FROM (
+    SELECT DISTINCT ON (case_law_id) case_law_id, LEFT(content, 2000) AS content
+    FROM case_law_sections
+    WHERE section_type IN ('background', 'summary') AND content IS NOT NULL AND content != ''
+    ORDER BY case_law_id, id
+) sub
+WHERE c.id = sub.case_law_id
+  AND (c.background_summary IS NULL OR c.background_summary = '');
+
+-- Step C: Backfill descriptive title from the first section's content (first line)
+-- Only for cases with generic titles like "KKO 2024:76"
+UPDATE case_law c
+SET title = sub.first_line
+FROM (
+    SELECT DISTINCT ON (s.case_law_id)
+        s.case_law_id,
+        LEFT(split_part(s.content, E'\n', 1), 300) AS first_line
+    FROM case_law_sections s
+    JOIN case_law cl ON cl.id = s.case_law_id
+    WHERE s.section_type IN ('background', 'summary', 'other')
+      AND s.content IS NOT NULL AND s.content != ''
+      AND s.content LIKE '% - %'
+      AND (cl.title ~ '^[A-Z]{2,4}\s?\d{4}:\d+' OR cl.title IS NULL OR cl.title = '')
+    ORDER BY s.case_law_id, s.id
+) sub
+WHERE c.id = sub.case_law_id
+  AND LENGTH(sub.first_line) > 10
+  AND sub.first_line LIKE '% - %';
+
+-- Step D: Backfill legal_domains from title (for cases with descriptive titles)
+UPDATE case_law
+SET legal_domains = string_to_array(title, ' - ')
+WHERE (legal_domains IS NULL OR legal_domains = '{}')
+  AND title IS NOT NULL AND title != ''
+  AND title LIKE '% - %';
+
+-- Step E: Verify results
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE judgment IS NOT NULL AND judgment != '') AS has_judgment,
+    COUNT(*) FILTER (WHERE background_summary IS NOT NULL AND background_summary != '') AS has_background,
+    COUNT(*) FILTER (WHERE legal_domains IS NOT NULL AND legal_domains != '{}') AS has_keywords,
+    COUNT(*) FILTER (WHERE title LIKE '% - %') AS has_descriptive_title
+FROM case_law;

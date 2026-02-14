@@ -19,10 +19,11 @@ from .state import AgentState
 
 logger = setup_logger(__name__)
 
-# Reusable LLM instances to prevent excessive background task creation
-# and resolve "Task destroyed but pending" warnings.
+# Reusable singletons to prevent excessive background task creation,
+# avoid re-creating clients/connections on every search, and reduce latency.
 _llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 _generator = LLMGenerator()  # model from config.OPENAI_CHAT_MODEL (e.g. gpt-4o for deeper legal analysis)
+_retrieval = HybridRetrieval()  # singleton: reuses Supabase client, embedder, reranker across searches
 
 
 def _is_obvious_legal_query(query: str) -> bool:
@@ -199,9 +200,8 @@ async def search_knowledge(state: AgentState) -> AgentState:
     start_time = time.time()
     logger.info("Hybrid search → fetching candidates...")
     try:
-        retrieval = HybridRetrieval()
         query = state["query"]
-        results = await retrieval.hybrid_search_with_rerank(
+        results = await _retrieval.hybrid_search_with_rerank(
             query,
             initial_limit=config.SEARCH_CANDIDATES_FOR_RERANK,
             final_limit=config.CHUNKS_TO_LLM,

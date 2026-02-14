@@ -7,7 +7,8 @@
 	ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
 	scrape-json-pdf-drive scrape-json-pdf-drive-range \
 	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
-	ingest-finlex
+	ingest-finlex \
+	verify-ingestion reingest-cases
 
 # Default: list all commands with short descriptions
 help:
@@ -41,10 +42,13 @@ help:
 	@echo "  make verify-json-full-text  Scan precedent JSON for empty full_text; print fix commands."
 	@echo "  make check-ingestion-status  Show Supabase ingestion status (per year). Optional: YEAR=..."
 	@echo "  make sync-ingestion-status   Update tracking.processed_cases from case_law (sync DB). Optional: YEAR=..."
+	@echo "  make verify-ingestion     Find cases with 0 sections or 0 references. Optional: YEAR=... START=... END=..."
+	@echo "  make verify-ingestion YEAR=1983 FIX=1   Re-ingest all 0-section cases for that year"
+	@echo "  make reingest-cases YEAR=1983 CASE_IDS='KKO:1983-II-124 KKO:1983-II-125'   Re-ingest specific case IDs"
 	@echo "  make ingest-rulings       Ingest KKO other rulings (Muut päätökset). Optional: YEAR=2026"
 	@echo "  make ingest-leaves        Ingest KKO leaves to appeal (Valitusluvat). Optional: YEAR=2026"
 	@echo "  make ingest-kko           Ingest KKO all subtypes (precedent + ruling + leave) for one year. Optional: YEAR=2026"
-	@echo "  make ingest-history       Ingest case law for a year range. Optional: START=1926 END=2026 COURT=supreme_court"
+	@echo "  make ingest-history       Ingest case law for a year range. Optional: START=1926 END=2000 COURT=... SUBTYPE=... MAX_YEARS=10 YEAR_DELAY=5"
 	@echo ""
 	@echo "--- Case law: Scrape → JSON + PDF (ditto) → Drive (one command) ---"
 	@echo "  make scrape-json-pdf-drive  Scrape year → save JSON → PDF (same as website) → Drive. YEAR=2025"
@@ -63,7 +67,8 @@ help:
 	@echo "Examples:"
 	@echo "  make run"
 	@echo "  make ingest-precedents YEAR=2025"
-	@echo "  make ingest-history COURT=supreme_court START=2020 END=2026"
+	@echo "  make ingest-history COURT=supreme_court START=1926 END=2000 SUBTYPE=precedent"
+	@echo "  make ingest-history START=1926 END=2000 COURT=supreme_court SUBTYPE=precedent MAX_YEARS=10 YEAR_DELAY=8"
 
 # ------------------------------------------------------------------------------
 # Install
@@ -157,8 +162,10 @@ START ?= 1926
 END ?= 2026
 COURT ?= supreme_court
 SUBTYPE ?=
+MAX_YEARS ?=
+YEAR_DELAY ?= 5
 ingest-history:
-	python3 scripts/case_law/core/ingest_history.py --start $(START) --end $(END) --court $(COURT) $(if $(SUBTYPE),--subtype $(SUBTYPE),)
+	python3 scripts/case_law/core/ingest_history.py --start $(START) --end $(END) --court $(COURT) $(if $(SUBTYPE),--subtype $(SUBTYPE),) $(if $(MAX_YEARS),--max-years $(MAX_YEARS),) --year-delay $(YEAR_DELAY)
 
 # ------------------------------------------------------------------------------
 # Case law: Supreme Administrative Court (KHO)
@@ -191,6 +198,19 @@ export-pdf-drive-range:
 TYPE ?= precedent
 export-pdf-drive-type:
 	python3 scripts/case_law/core/export_pdf_to_drive.py --type $(TYPE) --year $(YEAR)
+
+# ------------------------------------------------------------------------------
+# Case law: Verify ingestion completeness
+# ------------------------------------------------------------------------------
+# Find cases with 0 sections or 0 references (incomplete ingestion).
+# FIX=1 re-ingests all 0-section cases for that year.
+FIX ?=
+CASE_IDS ?=
+verify-ingestion:
+	python3 scripts/case_law/core/verify_ingestion.py $(if $(YEAR),--year $(YEAR),--start $(START) --end $(END)) --court $(COURT) $(if $(SUBTYPE),--subtype $(SUBTYPE),--subtype precedent) $(if $(FIX),--fix,)
+
+reingest-cases:
+	python3 scripts/case_law/core/verify_ingestion.py --year $(YEAR) --court $(COURT) $(if $(SUBTYPE),--subtype $(SUBTYPE),--subtype precedent) --fix --case-ids $(CASE_IDS)
 
 # ------------------------------------------------------------------------------
 # Finlex (statutes)

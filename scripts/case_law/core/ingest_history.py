@@ -24,17 +24,37 @@ COURT_SUBTYPES = {
 }
 
 
-async def ingest_history(start_year: int, end_year: int, court: str, subtype: str | None = None):
+async def ingest_history(
+    start_year: int,
+    end_year: int,
+    court: str,
+    subtype: str | None = None,
+    max_years: int | None = None,
+    year_delay: float = 5.0,
+):
     """
     Ingest case law for a range of years.
     If subtype is specified, only that subtype is processed.
+    max_years: process at most this many years per run (for batching; avoids Supabase Disk IO exhaustion).
+    year_delay: seconds to sleep between years (default 5 to reduce Disk IO pressure).
     """
     subtypes = [subtype] if subtype else COURT_SUBTYPES.get(court, [None])
     subtype_label = subtype or "ALL"
-    logger.info("STARTING HISTORICAL INGESTION: %s %s-%s (%s)", court.upper(), start_year, end_year, subtype_label)
+    logger.info(
+        "STARTING HISTORICAL INGESTION: %s %s-%s (%s) max_years=%s year_delay=%.1fs",
+        court.upper(),
+        start_year,
+        end_year,
+        subtype_label,
+        max_years or "all",
+        year_delay,
+    )
 
     start_time = datetime.now()
-    years = range(end_year, start_year - 1, -1)
+    years = list(range(end_year, start_year - 1, -1))
+    if max_years:
+        years = years[:max_years]
+        logger.info("BATCH MODE: processing %s years this run (%s through %s)", len(years), years[0], years[-1])
     total_years = len(years)
 
     manager = IngestionManager(court)
@@ -47,7 +67,8 @@ async def ingest_history(start_year: int, end_year: int, court: str, subtype: st
                 failed = await manager.ingest_year(year, force_scrape=False, subtype=st)
                 if failed:
                     all_failed.extend(f"[{year}] {fid}" for fid in failed)
-            await asyncio.sleep(2)
+            if year_delay > 0:
+                await asyncio.sleep(year_delay)
         except Exception as e:
             logger.error("Failed processing year %s: %s", year, e)
             all_failed.append(f"[{year}] YEAR FAILED: {e}")
@@ -83,6 +104,29 @@ if __name__ == "__main__":
         choices=["precedent", "ruling", "leave_to_appeal", "other", "brief"],
         help="Process only this subtype (default: all subtypes for the court)",
     )
+    parser.add_argument(
+        "--max-years",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Process at most N years per run (batch mode; reduces Supabase Disk IO). Example: 10",
+    )
+    parser.add_argument(
+        "--year-delay",
+        type=float,
+        default=5.0,
+        metavar="SECS",
+        help="Seconds to sleep between years (default 5; increase if hitting Disk IO limits)",
+    )
 
     args = parser.parse_args()
-    asyncio.run(ingest_history(args.start, args.end, args.court, args.subtype))
+    asyncio.run(
+        ingest_history(
+            args.start,
+            args.end,
+            args.court,
+            args.subtype,
+            max_years=args.max_years,
+            year_delay=args.year_delay,
+        )
+    )

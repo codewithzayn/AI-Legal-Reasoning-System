@@ -174,9 +174,17 @@ class IngestionManager:
 
         if not documents:
             logger.warning("No documents fetched for case_ids=%s", case_ids)
-            if not json_only:
+            if not json_only and tracking_id:
+                for cid in case_ids:
+                    self._track_error(
+                        tracking_id=tracking_id,
+                        case_id=cid,
+                        url=None,
+                        error_type="fetch_failed",
+                        error_msg="No document fetched for this case_id (scraper returned empty).",
+                    )
                 self._track_status(
-                    year, "completed", total=0, processed=0, failed=0, tracking_id=tracking_id, subtype=subtype
+                    year, "completed", total=0, processed=0, failed=len(case_ids), tracking_id=tracking_id, subtype=subtype
                 )
             return list(case_ids)
 
@@ -363,7 +371,11 @@ class IngestionManager:
 
         stored_count = 0
         failed_ids: list[str] = []
+        doc_delay_every = int(os.getenv("INGESTION_DOC_DELAY_EVERY", "0") or "0")
+        doc_delay_secs = float(os.getenv("INGESTION_DOC_DELAY_SECONDS", "0") or "0")
         for i, doc in enumerate(documents, 1):
+            if doc_delay_every and doc_delay_secs and i > 1 and (i - 1) % doc_delay_every == 0:
+                time.sleep(doc_delay_secs)
             full_text = (getattr(doc, "full_text", None) or "").strip()
             if not full_text:
                 logger.warning(
@@ -433,8 +445,17 @@ class IngestionManager:
         doc.ecli = ai_data.metadata.ecli
         doc.diary_number = ai_data.metadata.diary_number
 
-        # Keywords
-        doc.legal_domains = ai_data.metadata.keywords
+        # Keywords — only overwrite if extractor actually found keywords;
+        # otherwise keep the scraper's value (which handles Finnish "Asiasanat")
+        if ai_data.metadata.keywords:
+            doc.legal_domains = ai_data.metadata.keywords
+
+        # Fallback: if still no keywords, extract from title (e.g. "Seksuaalirikos - Lapsen seksuaalinen hyväksikäyttö")
+        if not doc.legal_domains and doc.title:
+            title_keywords = [kw.strip() for kw in doc.title.split(" - ") if kw.strip() and len(kw.strip()) > 2]
+            if title_keywords:
+                doc.legal_domains = title_keywords
+                logger.debug("%s | keywords from title: %s", doc.case_id, title_keywords)
 
         # Courts
         if ai_data.lower_courts.district_court:
@@ -459,6 +480,23 @@ class IngestionManager:
         # Sections (We need a way to pass these to storage)
         doc.ai_sections = [{"type": s.type, "title": s.title, "content": s.content} for s in ai_data.sections]
 
+        # Populate judgment & background_summary from extracted sections (they were
+        # only stored in case_law_sections before, never in the case_law metadata row).
+        for sec in ai_data.sections:
+            sec_type = (sec.type or "").lower()
+            content = (sec.content or "").strip()
+            if not content:
+                continue
+            if sec_type == "judgment" and not doc.judgment:
+                doc.judgment = content[:2000]  # cap length for metadata column
+            elif sec_type in ("background", "summary") and not doc.background_summary:
+                doc.background_summary = content[:2000]
+
+        # Populate descriptive title from the first line of full_text if it looks like
+        # a structured title (e.g. "Seksuaalirikos - Lapsen seksuaalinen hyväksikäyttö")
+        if not doc.title or doc.title == f"{doc.court_code} {doc.case_year}:{doc.case_id.split(':')[-1]}":
+            self._extract_descriptive_title(doc)
+
         # Also create references for storage
 
         new_refs = []
@@ -475,6 +513,41 @@ class IngestionManager:
             new_refs.append(Reference(ref_id=ref_id, ref_type="regulation"))
 
         doc.references = new_refs
+
+    @staticmethod
+    def _extract_descriptive_title(doc) -> None:
+        """Extract a descriptive title from the first non-header line of full_text.
+
+        Finlex precedents often start with a descriptive title like:
+          "Seksuaalirikos - Lapsen seksuaalinen hyväksikäyttö - Törkeä lapsen seksuaalinen hyväksikäyttö"
+        This appears in the full_text as one of the first lines after the case ID line.
+        """
+        if not doc.full_text:
+            return
+        for line in doc.full_text.split("\n")[:20]:
+            line = line.strip()
+            if not line or len(line) < 5:
+                continue
+            # Skip lines that are just the case ID (e.g. "KKO:2024:76" or "KKO 2024:76")
+            if line.replace(" ", "").replace(":", "").replace("-", "").replace("II", "").isalnum() and len(line) < 20:
+                continue
+            # Skip header labels (Asiasanat, Keywords, Tapausvuosi, etc.)
+            if line in ("Asiasanat", "Keywords", "Tapausvuosi", "Case year", "Antopäivä",
+                        "Date of issue", "Kieliversiot", "Language versions", "Suomi",
+                        "Finnish", "Swedish", "Ruotsi", "ECLI-tunnus", "ECLI code",
+                        "Diaarinumero", "Diary number", "Taltio", "Volume",
+                        "Kopioi ECLI-linkki", "Copy ECLI link"):
+                continue
+            # Skip ECLI lines
+            if line.startswith("ECLI:"):
+                continue
+            # Skip date-like, number-only, and short generic lines
+            if len(line) < 10:
+                continue
+            # A good descriptive title contains " - " or is a long phrase
+            if " - " in line or len(line) > 20:
+                doc.title = line[:300]
+                return
 
     def _fetch_existing_content_hashes(self, year: int) -> dict[str, str]:
         """Query Supabase for case_id -> content_hash mapping for this court + year.

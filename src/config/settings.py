@@ -27,16 +27,16 @@ class Config:
 
     # Retrieval Settings
     MATCH_THRESHOLD: float = float(os.getenv("MATCH_THRESHOLD", "0.3"))
-    # Lower = faster search. 30 is a good balance for production (was 50).
-    VECTOR_SEARCH_TOP_K: int = int(os.getenv("VECTOR_SEARCH_TOP_K", "30"))
-    FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "30"))
+    # Lower = faster search. 15 is a good balance for production (was 30).
+    VECTOR_SEARCH_TOP_K: int = int(os.getenv("VECTOR_SEARCH_TOP_K", "15"))
+    FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "15"))
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "10"))
     # How many candidates to fetch before rerank; then how many to send to the LLM.
-    # Lower candidates = faster (especially Cohere rerank). 30 is a good balance for production.
-    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "30"))
-    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "10"))
-    # Max documents sent to Cohere (fewer = faster). Default 20 for production latency.
-    RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "20"))
+    # Lower candidates = faster. 20 is a good balance for production.
+    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "20"))
+    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "8"))
+    # Max documents sent to Cohere (fewer = faster). Default 15 for production latency.
+    RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "15"))
     # Set to false to skip Cohere rerank (use hybrid + RRF + exact-match only). Saves ~15-25s.
     RERANK_ENABLED: bool = (os.getenv("RERANK_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
     # Set to false to skip relevancy check (saves ~2-5s, no score shown).

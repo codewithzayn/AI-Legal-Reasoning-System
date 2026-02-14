@@ -47,7 +47,13 @@ class CaseLawStorage:
         self.embedder = DocumentEmbedder()
 
     def store_case(self, doc: CaseLawDocument) -> str | None:
-        """Store a single case law document with all its sections"""
+        """Store a single case law document with all its sections.
+
+        Returns case UUID on success, None on failure.
+        A document is considered FAILED if it has content that should produce
+        sections but 0 sections were stored (e.g. due to timeout).  This ensures
+        the ingestion manager marks it as failed so it gets retried.
+        """
         try:
             # 1. Insert parent case_law record
             case_id = self._insert_case_metadata(doc)
@@ -57,8 +63,18 @@ class CaseLawStorage:
             # 2. Extract and store sections with embeddings
             sections_stored = self._store_sections(case_id, doc)
 
-            # 3. Store references (now populated by AI)
+            # 3. Store references
             references_stored = self._store_references(case_id, doc)
+
+            # 4. Verify: if the document has content but 0 sections stored, treat as failure.
+            #    This ensures sections are never silently skipped — critical for legal search.
+            has_content = bool((getattr(doc, "full_text", None) or "").strip())
+            if has_content and sections_stored == 0:
+                logger.error(
+                    "%s | INCOMPLETE: metadata stored but 0 sections (will be marked as failed for retry)",
+                    doc.case_id,
+                )
+                return None
 
             logger.info(
                 "%s | stored (%s sections, %s refs)",
@@ -343,18 +359,46 @@ class CaseLawStorage:
         for i, embedding in enumerate(embeddings):
             sections[i]["embedding"] = embedding
 
-        # Insert
+        # Insert sections one-by-one to avoid bulk-insert timeouts on Supabase free tier.
+        import time as _time
+
         try:
-            # First, delete existing sections for this case to avoid duplicates
             self.client.table("case_law_sections").delete().eq("case_law_id", case_law_id).execute()
-
-            # Then insert new sections
-            response = self.client.table("case_law_sections").insert(sections).execute()
-
-            return len(response.data) if response.data else 0
         except Exception as e:
-            logger.error("%s | store sections error: %s", doc.case_id, e)
-            return 0
+            logger.error("%s | delete old sections error: %s", doc.case_id, e)
+
+        max_attempts = 5
+        stored = 0
+        for idx, section in enumerate(sections):
+            for attempt in range(max_attempts):
+                try:
+                    self.client.table("case_law_sections").insert(section).execute()
+                    stored += 1
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    # Supabase/Cloudflare 520 = origin server unreachable; use longer backoff
+                    is_5xx = "520" in err_str or "'code': 520" in err_str or "unknown error" in err_str.lower()
+                    if is_5xx:
+                        wait = 8 * (attempt + 1)  # 8, 16, 24, 32, 40s
+                    else:
+                        wait = 2 * (attempt + 1)  # 2, 4, 6, 8, 10s
+                    if attempt < max_attempts - 1:
+                        logger.warning(
+                            "%s | section %s/%s insert failed (attempt %s/%s), retry in %ss: %s",
+                            doc.case_id, idx + 1, len(sections), attempt + 1, max_attempts, wait, e,
+                        )
+                        _time.sleep(wait)
+                    else:
+                        logger.error(
+                            "%s | section %s/%s insert FAILED after %s attempts: %s",
+                            doc.case_id, idx + 1, len(sections), max_attempts, e,
+                        )
+            # Pause between sections to reduce Supabase/Cloudflare load
+            if idx < len(sections) - 1:
+                _time.sleep(0.3)
+
+        return stored
 
     def _generate_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings via OpenAI"""

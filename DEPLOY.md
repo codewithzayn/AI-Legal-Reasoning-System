@@ -129,6 +129,16 @@ make ingest-history START=1926 END=2015 COURT=supreme_court SUBTYPE=precedent
 - Set `USE_AI_EXTRACTION=false` in `.env` for regex-only extraction (no LLM cost, faster).
 - Precedent JSON files must exist for 1926–2015 (e.g. `data/case_law/supreme_court/precedents/2015.json`, …, `1926.json`). If some are missing, run a scrape or single-year ingest for those years first.
 
+**If Supabase reports Disk IO budget / too many read-write operations:** run ingestion in **batches** and add throttling:
+
+- **Batch by years:** process at most 10 years per run, with 8 seconds pause between years:
+  ```bash
+  make ingest-history START=1926 END=2000 COURT=supreme_court SUBTYPE=precedent MAX_YEARS=10 YEAR_DELAY=8
+  ```
+  Each run processes the **newest** `MAX_YEARS` years in [START, END]. Example: first run processes 2000 down to 1991; next run use `END=1990` to process 1990 down to 1981, and so on until you reach 1926.
+- **Optional:** in `.env` set `INGESTION_DOC_DELAY_EVERY=25` and `INGESTION_DOC_DELAY_SECONDS=0.5` to pause every 25 documents and spread Disk IO.
+- Keep `INGESTION_SKIP_UNCHANGED=true` so already-ingested documents are skipped (fewer writes).
+
 ### Step 2 (optional): PDF + Drive for same range
 
 If PDFs are not yet uploaded for 2015→1926 and you use existing JSON only (no scrape):

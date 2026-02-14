@@ -46,10 +46,10 @@ PATTERN_CASE_YEAR = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Keywords: lines after "Keywords" until next known key (Case year, Date of issue, etc.)
-KEYWORDS_START = re.compile(r"^\s*Keywords\s*$", re.IGNORECASE | re.MULTILINE)
+# Keywords: lines after "Keywords" or "Asiasanat" until next known key
+KEYWORDS_START = re.compile(r"^\s*(?:Keywords|Asiasanat)\s*$", re.IGNORECASE | re.MULTILINE)
 KEYWORDS_END = re.compile(
-    r"^\s*(?:Case year|Date of issue|Language versions|Kausi|Antopäivä|Päiväkirjanumero)\s*$",
+    r"^\s*(?:Case year|Tapausvuosi|Date of issue|Antopäivä|Language versions|Kieliversiot|Kausi|Päiväkirjanumero)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 

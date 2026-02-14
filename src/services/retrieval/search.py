@@ -25,9 +25,13 @@ load_dotenv()
 logger = setup_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Regex to detect case IDs like KKO:2022:18, KHO:2023:5, etc. in user query
+# Regex to detect case IDs like KKO:2022:18, KHO:2023:5, KKO 2024:76, etc.
+# Supports: KKO:2024:76, KKO 2024:76, KKO:2024-II-76 (old format)
 # ---------------------------------------------------------------------------
-_CASE_ID_RE = re.compile(r"\b(KKO|KHO)\s*:\s*(\d{4})\s*:\s*(\d+)\b", re.IGNORECASE)
+_CASE_ID_RE = re.compile(
+    r"\b(KKO|KHO)\s*[:\s]\s*(\d{4})\s*[:\-]\s*(?:(?:II|I)\s*[:\-]\s*)?(\d+)\b",
+    re.IGNORECASE,
+)
 
 _expansion_llm_holder: list = []  # lazy singleton; list avoids global statement
 
@@ -262,10 +266,16 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     # ------------------------------------------------------------------
     @staticmethod
     def extract_case_ids(query: str) -> list[str]:
-        """Extract case IDs (e.g. KKO:2022:18) mentioned in the query."""
-        matches = _CASE_ID_RE.findall(query)
-        # Each match is (court, year, number) — normalize to uppercase
-        return [f"{court.upper()}:{year}:{number}" for court, year, number in matches]
+        """Extract case IDs (e.g. KKO:2022:18, KKO:1983-II-124) mentioned in the query."""
+        ids: list[str] = []
+        # Modern format: KKO:2024:76 or KKO 2024:76
+        for court, year, number in _CASE_ID_RE.findall(query):
+            ids.append(f"{court.upper()}:{year}:{number}")
+        # Old format: KKO:1983-II-124 (with Roman numeral volume)
+        old_fmt = re.findall(r"\b(KKO|KHO)\s*[:\s]\s*(\d{4})\s*-\s*(I{1,2})\s*-\s*(\d+)\b", query, re.IGNORECASE)
+        for court, year, vol, number in old_fmt:
+            ids.append(f"{court.upper()}:{year}-{vol.upper()}-{number}")
+        return list(dict.fromkeys(ids))  # deduplicate, preserve order
 
     async def fetch_case_chunks(self, case_id: str) -> list[dict]:
         """Fetch ALL chunks for a specific case_id directly from Supabase.
@@ -289,7 +299,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             # Also get case metadata for the normalized format
             case_meta = (
                 await client.table("case_law")
-                .select("case_id, court_type, case_year, legal_domains, url")
+                .select("case_id, court_type, case_year, legal_domains, title, decision_outcome, url")
                 .eq("case_id", case_id)
                 .limit(1)
                 .execute()
@@ -305,10 +315,12 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                         "source": "case_law",
                         "metadata": {
                             "case_id": meta_row.get("case_id", case_id),
+                            "case_title": meta_row.get("title", ""),
                             "court": meta_row.get("court_type"),
                             "year": meta_row.get("case_year"),
                             "type": item.get("section_type"),
                             "keywords": meta_row.get("legal_domains", []),
+                            "decision_outcome": meta_row.get("decision_outcome", ""),
                             "url": meta_row.get("url"),
                         },
                         "score": 1.0,  # max score for direct lookup
@@ -466,10 +478,12 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                         "source": "case_law",
                         "metadata": {
                             "case_id": item.get("case_id"),
+                            "case_title": item.get("title", ""),
                             "court": item.get("court_type") or item.get("court"),
                             "year": item.get("case_year") or item.get("year"),
                             "type": item.get("section_type"),
                             "keywords": item.get("legal_domains", []),
+                            "decision_outcome": item.get("decision_outcome", ""),
                             "url": item.get("url"),
                         },
                         "score": item.get("combined_score", 0),
@@ -480,23 +494,111 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.error("Case law search error: %s", e)
             return []
 
+    async def search_case_law_metadata(self, query_text: str, limit: int = 10) -> list[dict]:
+        """Search case_law metadata columns (title, judgment, background_summary,
+        decision_outcome, legal_domains, cited_cases, cited_laws, etc.) via FTS.
+
+        Returns sections from cases whose *metadata* matches the query keywords.
+        This closes the gap where a keyword lives in metadata but NOT in section embeddings.
+        """
+        try:
+            sanitized_query = self._sanitize_fts_query(query_text)
+            if not sanitized_query.strip():
+                return []
+
+            client = await self._get_client()
+            # Request more rows from DB to cover dedup (many sections per case);
+            # Python-side dedup keeps only 1 section per case_id.
+            response = await client.rpc(
+                "search_case_law_metadata",
+                {
+                    "query_text": sanitized_query,
+                    "match_count": limit * 5,
+                },
+            ).execute()
+
+            # Deduplicate: keep only the best (first) section per case_id
+            # so one case with many sections doesn't crowd out other cases.
+            seen_cases: set[str] = set()
+            results = []
+            for item in response.data or []:
+                cid = item.get("case_id", "")
+                if cid in seen_cases:
+                    continue
+                seen_cases.add(cid)
+                results.append(
+                    {
+                        "id": item.get("section_id"),
+                        "text": item.get("content", ""),
+                        "source": "case_law",
+                        "metadata": {
+                            "case_id": cid,
+                            "case_title": item.get("title", ""),
+                            "court": item.get("court_type") or item.get("court"),
+                            "year": item.get("case_year") or item.get("year"),
+                            "type": item.get("section_type"),
+                            "keywords": item.get("legal_domains", []),
+                            "decision_outcome": item.get("decision_outcome", ""),
+                            "url": item.get("url"),
+                        },
+                        "score": item.get("meta_score", 0),
+                    }
+                )
+            if results:
+                logger.info("Metadata FTS → %s unique case(s)", len(results))
+            return results
+        except Exception as e:
+            logger.warning("Metadata FTS search failed (non-critical): %s", e)
+            return []
+
     async def hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:
         """
-        Global Hybrid Search: (Statutes Hybrid) + (Case Law Hybrid)
+        Global Hybrid Search: (Statutes Hybrid) + (Case Law Hybrid) + (Metadata FTS)
+        Each sub-query is capped at 10s to prevent a single slow RPC from blocking all results.
+
+        Optimization: FTS (text-only) searches start immediately while embedding
+        is generated in a thread pool, saving 1-2s.
         """
-        # Generate query embedding
-        query_embedding = self.embedder.embed_query(query_text)
+        t0 = time.time()
 
-        # 1. Statutes Search (Vector + FTS via RRF)
-        # We start independent tasks
-        statute_vector_task = self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K)
-        statute_fts_task = self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K)
+        # Helper: run a search task with a timeout
+        async def _timed(coro, label: str, timeout: float = 12.0):
+            try:
+                return await asyncio.wait_for(coro, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning("  %s timed out after %.0fs", label, timeout)
+                return []
 
-        # 2. Case Law Search (Hybrid internally)
-        case_law_task = self.search_case_law(query_embedding, query_text, limit=limit)
+        # Generate embedding in thread pool (non-blocking)
+        async def _get_embedding():
+            loop = asyncio.get_event_loop()
+            emb = await loop.run_in_executor(None, self.embedder.embed_query, query_text)
+            logger.info("  embed: %.1fs", time.time() - t0)
+            return emb
 
-        # Run all concurrently
-        stat_vec, stat_fts, case_results = await asyncio.gather(statute_vector_task, statute_fts_task, case_law_task)
+        # Phase 1: Start ALL non-embedding searches + embedding generation concurrently.
+        # FTS + metadata FTS don't need embedding and often finish in <2s.
+        # Embedding takes ~1-2s. Vector searches depend on the embedding.
+        embedding_task = asyncio.create_task(_get_embedding())
+        fts_task = asyncio.create_task(_timed(self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts"))
+        meta_task = asyncio.create_task(_timed(self.search_case_law_metadata(query_text, limit=limit), "meta_fts"))
+
+        # Wait for embedding, then launch vector-dependent searches
+        query_embedding = await embedding_task
+        vec_task = asyncio.create_task(_timed(
+            self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K), "vec"))
+        case_task = asyncio.create_task(_timed(
+            self.search_case_law(query_embedding, query_text, limit=limit), "case_law"))
+
+        # Wait for everything
+        stat_vec, case_results, stat_fts, meta_results = await asyncio.gather(
+            vec_task, case_task, fts_task, meta_task
+        )
+        t_search = time.time()
+        logger.info(
+            "  search: %.1fs (vec=%s, fts=%s, case=%s, meta=%s)",
+            t_search - t0, len(stat_vec), len(stat_fts), len(case_results), len(meta_results),
+        )
 
         # Process Statute Results (Merge Vector + FTS)
         statute_results = self.rrf_merge(stat_vec, stat_fts)
@@ -519,10 +621,22 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 }
             )
 
-        # Combine all results
-        # We assume Case Law results are already "good" candidates.
-        # We combine them and let the Re-ranker sort it out.
-        combined_results = normalized_statutes + case_results
+        # Merge case law results + metadata results (dedup by section id)
+        seen_ids: set[str] = set()
+        merged_case_law: list[dict] = []
+        for chunk in case_results:
+            cid = chunk["id"]
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                merged_case_law.append(chunk)
+        for chunk in meta_results:
+            cid = chunk["id"]
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                merged_case_law.append(chunk)
+
+        # Combine all results — reranker will sort them out
+        combined_results = normalized_statutes + merged_case_law
 
         return combined_results
 
@@ -585,6 +699,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         4. Rerank with Cohere
         5. Return top final_limit chunks to LLM
         """
+        pipeline_start = time.time()
         # --- Step 1 & 2: Direct lookup + Search in parallel (when both apply) ---
         mentioned_ids = self.extract_case_ids(query_text)
         direct_chunks: list[dict] = []
@@ -689,7 +804,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                     logger.info("Focus case %s final rank: %s", focus, i + 1)
                     break
 
-        logger.info("Final results sent to LLM:")
+        pipeline_elapsed = time.time() - pipeline_start
+        logger.info("Pipeline total: %.1fs → %s chunks to LLM:", pipeline_elapsed, len(reranked))
         for i, r in enumerate(reranked):
             meta = r.get("metadata", {})
             label = meta.get("case_id") or meta.get("title") or meta.get("uri") or "?"
