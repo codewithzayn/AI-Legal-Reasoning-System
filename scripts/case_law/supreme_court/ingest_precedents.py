@@ -11,8 +11,8 @@ from pathlib import Path
 # Simple log format (case_id + message only, no time/level/name) when running ingestion
 os.environ.setdefault("LOG_FORMAT", "simple")
 
-# Add project root to path
-sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.case_law.core.ingestion_manager import IngestionManager
 from src.config.logging_config import setup_logger

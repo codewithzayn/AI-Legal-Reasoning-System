@@ -136,7 +136,9 @@ CREATE INDEX IF NOT EXISTS idx_case_law_is_precedent ON case_law(is_precedent);
 CREATE INDEX IF NOT EXISTS idx_case_law_title_fts ON case_law USING GIN(to_tsvector('finnish', COALESCE(title, '')));
 
 -- IMMUTABLE wrapper for metadata FTS (required for GIN index expression)
+-- Includes case_id so searches like "KKO:2023:12" hit metadata FTS.
 CREATE OR REPLACE FUNCTION case_law_metadata_tsvector(
+    p_case_id TEXT,
     p_title TEXT,
     p_judgment TEXT,
     p_background TEXT,
@@ -149,6 +151,7 @@ CREATE OR REPLACE FUNCTION case_law_metadata_tsvector(
 ) RETURNS tsvector
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT to_tsvector('finnish',
+        COALESCE(p_case_id, '') || ' ' ||
         COALESCE(p_title, '') || ' ' ||
         COALESCE(p_judgment, '') || ' ' ||
         COALESCE(p_background, '') || ' ' ||
@@ -161,11 +164,13 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     );
 $$;
 
--- Full-text search on combined metadata (title + judgment + background_summary + decision_outcome + cited_cases + cited_laws + legal_domains)
+-- Full-text search on combined metadata (case_id + title + judgment + background_summary + decision_outcome + cited_cases + cited_laws + legal_domains)
 -- This allows keyword searches to hit metadata columns that are NOT embedded in section chunks.
+-- Rebuild index after adding case_id: DROP INDEX IF EXISTS idx_case_law_metadata_fts; then re-create.
+DROP INDEX IF EXISTS idx_case_law_metadata_fts;
 CREATE INDEX IF NOT EXISTS idx_case_law_metadata_fts ON case_law USING GIN(
     case_law_metadata_tsvector(
-        title, judgment, background_summary, decision_outcome,
+        case_id, title, judgment, background_summary, decision_outcome,
         legal_domains, cited_cases, cited_laws, cited_eu_cases, cited_regulations
     )
 );
@@ -404,7 +409,7 @@ BEGIN
         c.url,
         ts_rank(
             case_law_metadata_tsvector(
-                c.title, c.judgment, c.background_summary, c.decision_outcome,
+                c.case_id, c.title, c.judgment, c.background_summary, c.decision_outcome,
                 c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
             ),
             plainto_tsquery('finnish', query_text)
@@ -413,7 +418,7 @@ BEGIN
     JOIN case_law_sections s ON s.case_law_id = c.id
     WHERE
         case_law_metadata_tsvector(
-            c.title, c.judgment, c.background_summary, c.decision_outcome,
+            c.case_id, c.title, c.judgment, c.background_summary, c.decision_outcome,
             c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
         ) @@ plainto_tsquery('finnish', query_text)
     ORDER BY meta_score DESC

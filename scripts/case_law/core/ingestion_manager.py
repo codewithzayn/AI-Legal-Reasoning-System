@@ -9,9 +9,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-from supabase import create_client
-
+from scripts.case_law.core.shared import (
+    SUBTYPE_DIR_MAP,
+    get_supabase_client,
+    load_documents_from_json,
+    save_documents_to_json,
+)
 from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.case_law.hybrid_extractor import HybridPrecedentExtractor
@@ -32,12 +35,9 @@ class IngestionManager:
         self.storage = CaseLawStorage()
 
         # Setup Supabase tracking client
-        load_dotenv()
-        sb_url = os.getenv("SUPABASE_URL")
-        sb_key = os.getenv("SUPABASE_KEY")
-        if sb_url and sb_key:
-            self.sb_client = create_client(sb_url, sb_key)
-        else:
+        try:
+            self.sb_client = get_supabase_client()
+        except ValueError:
             self.sb_client = None
             logger.warning("Supabase credentials missing, tracking disabled.")
 
@@ -184,7 +184,13 @@ class IngestionManager:
                         error_msg="No document fetched for this case_id (scraper returned empty).",
                     )
                 self._track_status(
-                    year, "completed", total=0, processed=0, failed=len(case_ids), tracking_id=tracking_id, subtype=subtype
+                    year,
+                    "completed",
+                    total=0,
+                    processed=0,
+                    failed=len(case_ids),
+                    tracking_id=tracking_id,
+                    subtype=subtype,
                 )
             return list(case_ids)
 
@@ -277,14 +283,7 @@ class IngestionManager:
     @staticmethod
     def _resolve_json_path(year: int, subtype: str | None) -> tuple[Path, bool]:
         """Return (json_file, no_json_cache) for a given year/subtype."""
-        subtype_dir_map = {
-            "precedent": "precedents",
-            "ruling": "rulings",
-            "leave_to_appeal": "leaves_to_appeal",
-            "decision": "decisions",
-            None: "other",
-        }
-        subdir = subtype_dir_map.get(subtype, "other")
+        subdir = SUBTYPE_DIR_MAP.get(subtype, "other")
         json_dir = Path(f"data/case_law/supreme_court/{subdir}")
         no_json_cache = os.getenv("CASE_LAW_NO_JSON_CACHE", "").lower() in ("1", "true", "yes")
         return json_dir / f"{year}.json", no_json_cache
@@ -302,7 +301,7 @@ class IngestionManager:
         documents: list[CaseLawDocument] = []
 
         if not no_json_cache and json_file.exists() and not force_scrape:
-            documents = self._load_from_json(json_file)
+            documents = load_documents_from_json(json_file)
             if tracking_id and documents:
                 self._update_tracking_total(tracking_id, len(documents))
         else:
@@ -313,7 +312,7 @@ class IngestionManager:
                 self._update_tracking_total(tracking_id, len(documents))
             if documents and not no_json_cache:
                 json_file.parent.mkdir(parents=True, exist_ok=True)
-                self._save_to_json(documents, json_file)
+                save_documents_to_json(documents, json_file)
 
         return documents
 
@@ -430,7 +429,7 @@ class IngestionManager:
                     )
         return stored_count, failed_ids
 
-    def _merge_ai_data(self, doc: CaseLawDocument, ai_data):
+    def _merge_ai_data(self, doc: CaseLawDocument, ai_data):  # noqa: C901
         """
         Map the Pydantic model results back to the CaseLawDocument
         """
@@ -524,19 +523,36 @@ class IngestionManager:
         """
         if not doc.full_text:
             return
-        for line in doc.full_text.split("\n")[:20]:
-            line = line.strip()
+        for raw_line in doc.full_text.split("\n")[:20]:
+            line = raw_line.strip()
             if not line or len(line) < 5:
                 continue
             # Skip lines that are just the case ID (e.g. "KKO:2024:76" or "KKO 2024:76")
             if line.replace(" ", "").replace(":", "").replace("-", "").replace("II", "").isalnum() and len(line) < 20:
                 continue
             # Skip header labels (Asiasanat, Keywords, Tapausvuosi, etc.)
-            if line in ("Asiasanat", "Keywords", "Tapausvuosi", "Case year", "Antopäivä",
-                        "Date of issue", "Kieliversiot", "Language versions", "Suomi",
-                        "Finnish", "Swedish", "Ruotsi", "ECLI-tunnus", "ECLI code",
-                        "Diaarinumero", "Diary number", "Taltio", "Volume",
-                        "Kopioi ECLI-linkki", "Copy ECLI link"):
+            if line in (
+                "Asiasanat",
+                "Keywords",
+                "Tapausvuosi",
+                "Case year",
+                "Antopäivä",
+                "Date of issue",
+                "Kieliversiot",
+                "Language versions",
+                "Suomi",
+                "Finnish",
+                "Swedish",
+                "Ruotsi",
+                "ECLI-tunnus",
+                "ECLI code",
+                "Diaarinumero",
+                "Diary number",
+                "Taltio",
+                "Volume",
+                "Kopioi ECLI-linkki",
+                "Copy ECLI link",
+            ):
                 continue
             # Skip ECLI lines
             if line.startswith("ECLI:"):
@@ -570,52 +586,11 @@ class IngestionManager:
             logger.warning("Could not check existing documents in Supabase: %s", e)
             return {}
 
-    def _load_from_json(self, path: Path) -> list[CaseLawDocument]:
-        """Load documents from cached JSON"""
-        logger.info("📂 Loading existing data from %s...", path)
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-
-            docs = []
-            for d in data:
-                # Reconstruct objects (handling references specifically)
-                refs = [Reference(**r) for r in d.get("references", [])] if d.get("references") else []
-                # Remove ref dicts from d before unpacking to avoid double arg
-                d_copy = d.copy()
-                if "references" in d_copy:
-                    del d_copy["references"]
-
-                doc = CaseLawDocument(**d_copy)
-                doc.references = refs
-                docs.append(doc)
-
-            logger.info("   Loaded %s cases", len(docs))
-            return docs
-        except Exception as e:
-            logger.error("Failed to load JSON: %s", e)
-            return []
-
     async def _scrape_fresh(self, year: int, subtype: str = None) -> list[CaseLawDocument]:
         """Scrape fresh data using Playwright"""
         logger.info("📡 Scraping fresh data from Finlex (Court: %s, Subtype: %s)...", self.court, subtype)
         async with CaseLawScraper() as scraper:
             return await scraper.fetch_year(self.court, year, subtype=subtype)
-
-    def _save_to_json(self, documents: list[CaseLawDocument], path: Path):
-        """Save documents to JSON cache"""
-        try:
-            output = []
-            for doc in documents:
-                d = doc.to_dict()
-                d["references"] = [vars(r) for r in doc.references]
-                output.append(d)
-
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(output, f, ensure_ascii=False, indent=2)
-            logger.info("   Saved backup to %s", path)
-        except Exception as e:
-            logger.error("Failed to save JSON: %s", e)
 
     def _init_tracking(self, year: int, subtype: str) -> str | None:
         """Initialize tracking entry and return ID"""

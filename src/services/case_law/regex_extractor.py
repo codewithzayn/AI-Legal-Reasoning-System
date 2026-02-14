@@ -487,13 +487,3 @@ def extract_precedent(full_text: str, case_id: str) -> CaseExtractionResult | No
     except Exception as e:
         logger.exception("Regex extraction failed for %s: %s", case_id, e)
         return None
-
-
-class PrecedentRegexExtractor:
-    """
-    Regex-based extractor for Supreme Court precedents.
-    Use extract_data(full_text, case_id) to get a CaseExtractionResult.
-    """
-
-    def extract_data(self, full_text: str, case_id: str) -> CaseExtractionResult | None:
-        return extract_precedent(full_text, case_id)

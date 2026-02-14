@@ -19,98 +19,11 @@ ALTER ROLE authenticator SET statement_timeout = '60s';
 
 
 -- =============================================
--- 1b. METADATA FTS INDEX + FUNCTION (run once — enables keyword search on case_law metadata)
+-- 1b. METADATA FTS INDEX + FUNCTION
 -- =============================================
-
--- Step 1: IMMUTABLE wrapper (required because to_tsvector is only STABLE, not IMMUTABLE)
-CREATE OR REPLACE FUNCTION case_law_metadata_tsvector(
-    p_title TEXT,
-    p_judgment TEXT,
-    p_background TEXT,
-    p_outcome TEXT,
-    p_domains TEXT[],
-    p_cases TEXT[],
-    p_laws TEXT[],
-    p_eu_cases TEXT[],
-    p_regulations TEXT[]
-) RETURNS tsvector
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    SELECT to_tsvector('finnish',
-        COALESCE(p_title, '') || ' ' ||
-        COALESCE(p_judgment, '') || ' ' ||
-        COALESCE(p_background, '') || ' ' ||
-        COALESCE(p_outcome, '') || ' ' ||
-        COALESCE(array_to_string(p_domains, ' '), '') || ' ' ||
-        COALESCE(array_to_string(p_cases, ' '), '') || ' ' ||
-        COALESCE(array_to_string(p_laws, ' '), '') || ' ' ||
-        COALESCE(array_to_string(p_eu_cases, ' '), '') || ' ' ||
-        COALESCE(array_to_string(p_regulations, ' '), '')
-    );
-$$;
-
--- Step 2: GIN index using the immutable wrapper
-CREATE INDEX IF NOT EXISTS idx_case_law_metadata_fts ON case_law USING GIN(
-    case_law_metadata_tsvector(
-        title, judgment, background_summary, decision_outcome,
-        legal_domains, cited_cases, cited_laws, cited_eu_cases, cited_regulations
-    )
-);
-
--- RPC function: search case_law metadata → return matching sections
-CREATE OR REPLACE FUNCTION search_case_law_metadata(
-    query_text TEXT,
-    match_count INT DEFAULT 10
-)
-RETURNS TABLE (
-    section_id UUID,
-    case_id TEXT,
-    court_type TEXT,
-    court_code TEXT,
-    decision_type TEXT,
-    case_year INTEGER,
-    decision_date DATE,
-    section_type TEXT,
-    content TEXT,
-    title TEXT,
-    legal_domains TEXT[],
-    ecli TEXT,
-    url TEXT,
-    meta_score FLOAT
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT
-        s.id AS section_id,
-        c.case_id,
-        c.court_type,
-        c.court_code,
-        c.decision_type,
-        c.case_year,
-        c.decision_date,
-        s.section_type,
-        s.content,
-        c.title,
-        c.legal_domains,
-        c.ecli,
-        c.url,
-        ts_rank(
-            case_law_metadata_tsvector(
-                c.title, c.judgment, c.background_summary, c.decision_outcome,
-                c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
-            ),
-            plainto_tsquery('finnish', query_text)
-        )::float8 AS meta_score
-    FROM case_law c
-    JOIN case_law_sections s ON s.case_law_id = c.id
-    WHERE
-        case_law_metadata_tsvector(
-            c.title, c.judgment, c.background_summary, c.decision_outcome,
-            c.legal_domains, c.cited_cases, c.cited_laws, c.cited_eu_cases, c.cited_regulations
-        ) @@ plainto_tsquery('finnish', query_text)
-    ORDER BY meta_score DESC
-    LIMIT match_count;
-END;
-$$ LANGUAGE plpgsql;
+-- NOTE: case_law_metadata_tsvector(), GIN index, and search_case_law_metadata()
+-- are defined in the canonical migration: scripts/migrations/case_law_tables.sql
+-- Run that migration first; do NOT duplicate them here.
 
 
 -- =============================================
@@ -511,11 +424,237 @@ WHERE (legal_domains IS NULL OR legal_domains = '{}')
   AND title IS NOT NULL AND title != ''
   AND title LIKE '% - %';
 
--- Step E: Verify results
+-- Step E: Verify results (basic)
 SELECT
     COUNT(*) AS total,
     COUNT(*) FILTER (WHERE judgment IS NOT NULL AND judgment != '') AS has_judgment,
     COUNT(*) FILTER (WHERE background_summary IS NOT NULL AND background_summary != '') AS has_background,
     COUNT(*) FILTER (WHERE legal_domains IS NOT NULL AND legal_domains != '{}') AS has_keywords,
     COUNT(*) FILTER (WHERE title LIKE '% - %') AS has_descriptive_title
+FROM case_law;
+
+
+-- ==========================================================================
+-- BACKFILL METADATA FROM full_text (no re-ingestion needed!)
+-- ==========================================================================
+-- These queries extract structured data from the full_text column already
+-- stored in Supabase. Run in Supabase SQL Editor in batches (LIMIT).
+-- Repeat each batch until the count stops increasing.
+--
+-- IMPORTANT: All queries use POSITION/SUBSTRING (fast string ops) instead
+-- of complex regex to avoid Supabase SQL Editor timeout (60s limit).
+-- Queries with LIMIT should be run REPEATEDLY until no more rows change.
+
+-- -------------------------------------------------------------------------
+-- Step F: decision_outcome — from Tuomiolauselma/Päätöslauselma section
+-- -------------------------------------------------------------------------
+-- CRITICAL: Only classifies from the ACTUAL judgment section header,
+-- NOT the entire full_text. Phrases like "valitus hylätään" appear in
+-- party demands and lower court summaries and would misclassify if
+-- searched across the full text.
+--
+-- Coverage: ~5,153 cases have Tuomiolauselma/Päätöslauselma (mostly 1985+)
+-- Verified results across 13,222 cases:
+--   not_changed:             2,147  "ei muuteta" / "jää pysyväksi"
+--   overturned:              1,192  "kumotaan" (without remand)
+--   modified:                  685  "muutetaan"
+--   overturned_and_remanded:   564  "kumotaan" + "palautetaan"
+--   dismissed:                 110  "hylätään"
+--   remanded:                   39  "palautetaan" (without overturn)
+--   not_examined:               33  "jätetään tutkimatta"
+--   NULL:                    8,452  no section found or unclassifiable (safe)
+
+-- Run repeatedly until count stops growing (batches of 500):
+UPDATE case_law c
+SET decision_outcome = t.new_outcome
+FROM (
+    SELECT
+        cl.id,
+        CASE
+            WHEN outcome_text ~* 'ei muuteta|ei muutettu|jää pysyväksi'
+                THEN 'not_changed'
+            WHEN outcome_text ~* 'kumotaan|kumottiin' AND outcome_text ~* 'palautetaan|palauttaa'
+                THEN 'overturned_and_remanded'
+            WHEN outcome_text ~* 'kumotaan|kumottiin'
+                THEN 'overturned'
+            WHEN outcome_text ~* 'muutetaan|muutettu|muutos'
+                THEN 'modified'
+            WHEN outcome_text ~* 'hylätään|hylättiin'
+                THEN 'dismissed'
+            WHEN outcome_text ~* 'jätetään tutkimatta'
+                THEN 'not_examined'
+            WHEN outcome_text ~* 'palautetaan|palautettiin|palauttaa'
+                THEN 'remanded'
+            ELSE NULL
+        END AS new_outcome
+    FROM case_law cl
+    CROSS JOIN LATERAL (
+        SELECT SUBSTRING(
+            cl.full_text
+            FROM CASE
+                WHEN cl.full_text LIKE '%Tuomiolauselma%'
+                THEN POSITION('Tuomiolauselma' IN cl.full_text) + 15
+                ELSE POSITION('Päätöslauselma' IN cl.full_text) + 15
+            END
+            FOR 500
+        ) AS outcome_text
+    ) sub
+    WHERE (cl.full_text LIKE '%Tuomiolauselma%' OR cl.full_text LIKE '%Päätöslauselma%')
+      AND (cl.decision_outcome IS NULL OR cl.decision_outcome = '')
+    LIMIT 500
+) t
+WHERE c.id = t.id
+  AND t.new_outcome IS NOT NULL;
+
+-- -------------------------------------------------------------------------
+-- Step G: dissenting_opinion + dissenting_text — from "Eri mieltä" section
+-- -------------------------------------------------------------------------
+-- Two-step process:
+-- 1) Set flag + extract text for cases with "Eri mieltä" section
+-- 2) Set flag only for cases with "(Ään.)" marker but no text section
+
+-- Step G1: Flag + text (run repeatedly until count stops):
+UPDATE case_law
+SET
+    dissenting_opinion = TRUE,
+    dissenting_text = LEFT(
+        SUBSTRING(full_text FROM POSITION('Eri mieltä' IN full_text) FOR 2000),
+        2000
+    )
+WHERE (dissenting_opinion IS NULL OR dissenting_opinion = FALSE)
+  AND full_text LIKE '%Eri mieltä%'
+  AND id IN (
+      SELECT id FROM case_law
+      WHERE (dissenting_opinion IS NULL OR dissenting_opinion = FALSE)
+        AND full_text LIKE '%Eri mieltä%'
+      LIMIT 500
+  );
+
+-- Step G2: Flag only for (Ään.) cases without "Eri mieltä" section:
+UPDATE case_law
+SET dissenting_opinion = TRUE
+WHERE (dissenting_opinion IS NULL OR dissenting_opinion = FALSE)
+  AND (full_text LIKE '%(Ään.)%' OR full_text LIKE '%(Ään)%');
+
+-- Step G3: Fill missing dissent text for already-flagged cases:
+UPDATE case_law
+SET dissenting_text = LEFT(
+    SUBSTRING(full_text FROM POSITION('Eri mieltä' IN full_text) FOR 2000),
+    2000
+)
+WHERE dissenting_opinion = TRUE
+  AND (dissenting_text IS NULL OR dissenting_text = '')
+  AND full_text LIKE '%Eri mieltä%'
+  AND id IN (
+      SELECT id FROM case_law
+      WHERE dissenting_opinion = TRUE
+        AND (dissenting_text IS NULL OR dissenting_text = '')
+        AND full_text LIKE '%Eri mieltä%'
+      LIMIT 500
+  );
+
+-- -------------------------------------------------------------------------
+-- Step H: background_summary — from "Asian tausta" section
+-- -------------------------------------------------------------------------
+-- Uses POSITION/SUBSTRING (fast, no regex). Run repeatedly until done:
+UPDATE case_law c
+SET background_summary = LEFT(
+    SUBSTRING(
+        c.full_text
+        FROM CASE
+            WHEN c.full_text LIKE '%Asian tausta ja kysymyksenasettelu%'
+            THEN POSITION('Asian tausta ja kysymyksenasettelu' IN c.full_text) + 34
+            WHEN c.full_text LIKE '%Asian tausta%'
+            THEN POSITION('Asian tausta' IN c.full_text) + 12
+            ELSE POSITION('Asian käsittely alemmissa oikeuksissa' IN c.full_text) + 37
+        END
+        FOR 2000
+    ),
+    2000
+)
+WHERE (c.background_summary IS NULL OR c.background_summary = '')
+  AND (c.full_text LIKE '%Asian tausta%' OR c.full_text LIKE '%Asian käsittely alemmissa%')
+  AND c.id IN (
+      SELECT id FROM case_law
+      WHERE (background_summary IS NULL OR background_summary = '')
+        AND (full_text LIKE '%Asian tausta%' OR full_text LIKE '%Asian käsittely alemmissa%')
+      LIMIT 500
+  );
+
+-- -------------------------------------------------------------------------
+-- Step I: cited_laws — standalone header lines with § symbol
+-- -------------------------------------------------------------------------
+-- Extracts law citation lines (e.g. "RL 41 luku 2 §") from the header
+-- section (before "Asian käsittely" or first 2000 chars).
+-- Uses positive regex matching only law abbreviation patterns.
+-- Run in year-range batches to avoid timeout:
+
+-- Batch 1: years 2000+
+UPDATE case_law c
+SET cited_laws = sub.laws
+FROM (
+    SELECT
+        cl.id,
+        ARRAY(
+            SELECT DISTINCT TRIM(m[1])
+            FROM regexp_matches(
+                SUBSTRING(cl.full_text FROM 1 FOR LEAST(
+                    COALESCE(NULLIF(POSITION('Asian käsittely' IN cl.full_text), 0), 2000),
+                    2000
+                )),
+                '(?:^|\n)\s*([A-ZÄÖÅ][A-Za-zÄÖÅäöå\-]*L?\s+\d[^\n]*§[^\n]*)',
+                'g'
+            ) AS m
+        ) AS laws
+    FROM case_law cl
+    WHERE (cl.cited_laws IS NULL OR cl.cited_laws = '{}')
+      AND cl.case_year >= 2000
+) sub
+WHERE c.id = sub.id
+  AND array_length(sub.laws, 1) > 0;
+
+-- Batch 2: years 1980-1999
+-- (same query, change: AND cl.case_year BETWEEN 1980 AND 1999)
+
+-- Batch 3: years before 1980
+-- (same query, change: AND cl.case_year < 1980)
+
+-- -------------------------------------------------------------------------
+-- Step J: cited_cases — KKO/KHO cross-references
+-- -------------------------------------------------------------------------
+-- Extracts references to other Supreme Court decisions from full_text.
+-- Excludes self-references (the case's own case_id).
+UPDATE case_law c
+SET cited_cases = sub.refs
+FROM (
+    SELECT
+        cl.id,
+        ARRAY(
+            SELECT DISTINCT m[1]
+            FROM regexp_matches(cl.full_text, '((?:KKO|KHO)[: ]\d{4}[: ]\d+)', 'g') AS m
+            WHERE m[1] != cl.case_id
+        ) AS refs
+    FROM case_law cl
+    WHERE (cl.cited_cases IS NULL OR cl.cited_cases = '{}')
+      AND (cl.full_text LIKE '%KKO%' OR cl.full_text LIKE '%KHO%')
+    LIMIT 200
+) sub
+WHERE c.id = sub.id
+  AND array_length(sub.refs, 1) > 0;
+
+-- -------------------------------------------------------------------------
+-- Step K: Verify all columns after backfill
+-- -------------------------------------------------------------------------
+SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE judgment IS NOT NULL AND judgment != '') AS has_judgment,
+    COUNT(*) FILTER (WHERE background_summary IS NOT NULL AND background_summary != '') AS has_background,
+    COUNT(*) FILTER (WHERE legal_domains IS NOT NULL AND legal_domains != '{}') AS has_keywords,
+    COUNT(*) FILTER (WHERE title LIKE '% - %') AS has_descriptive_title,
+    COUNT(*) FILTER (WHERE decision_outcome IS NOT NULL AND decision_outcome != '') AS has_decision_outcome,
+    COUNT(*) FILTER (WHERE judges IS NOT NULL AND judges != '') AS has_judges,
+    COUNT(*) FILTER (WHERE dissenting_opinion = TRUE) AS has_dissent,
+    COUNT(*) FILTER (WHERE dissenting_text IS NOT NULL AND dissenting_text != '') AS has_dissent_text,
+    COUNT(*) FILTER (WHERE cited_laws IS NOT NULL AND cited_laws != '{}') AS has_cited_laws,
+    COUNT(*) FILTER (WHERE cited_cases IS NOT NULL AND cited_cases != '{}') AS has_cited_cases
 FROM case_law;

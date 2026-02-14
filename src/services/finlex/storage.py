@@ -5,12 +5,10 @@ Stores document chunks with embeddings in Supabase
 
 import os
 
-from dotenv import load_dotenv
 from supabase import Client, create_client
 
 from src.config.logging_config import setup_logger
 
-load_dotenv()
 logger = setup_logger(__name__)
 
 

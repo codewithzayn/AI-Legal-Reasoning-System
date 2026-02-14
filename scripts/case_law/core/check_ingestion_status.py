@@ -20,19 +20,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# scripts/case_law/core/check_ingestion_status.py -> project root = 4 levels up
-_root = Path(__file__).resolve().parent.parent.parent.parent
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
-
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("LOG_FORMAT", "simple")
 
-from dotenv import load_dotenv
-
-load_dotenv(_root / ".env")
-
-from supabase import create_client
-
+from scripts.case_law.core.shared import get_supabase_client
 from src.config.logging_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -76,13 +68,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     )
     args = parser.parse_args()
 
-    url = os.getenv("SUPABASE_URL", "").strip()
-    key = os.getenv("SUPABASE_KEY", "").strip()
-    if not url or not key:
-        logger.error("Set SUPABASE_URL and SUPABASE_KEY in .env")
+    try:
+        client = get_supabase_client()
+    except ValueError as exc:
+        logger.error("%s", exc)
         sys.exit(1)
-
-    client = create_client(url, key)
 
     if args.year is not None:
         logger.info("Ingestion status for year %s (Supabase)", args.year)

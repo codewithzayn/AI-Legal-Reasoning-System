@@ -8,14 +8,12 @@ import os
 import re
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
 from supabase import Client, create_client
 
 from src.config.logging_config import setup_logger
 from src.services.case_law.scraper import CaseLawDocument
 from src.services.common.embedder import DocumentEmbedder
 
-load_dotenv()
 logger = setup_logger(__name__)
 
 
@@ -194,6 +192,8 @@ class CaseLawStorage:
             "cited_regulations": doc.cited_regulations,
             "legal_domains": doc.legal_domains,
             "judges": doc.judges,
+            "dissenting_opinion": doc.dissenting_opinion,
+            "dissenting_text": doc.dissenting_text,
             # Extra metadata mapping
             "title": doc.title
             or f"{doc.court_code} {doc.case_year}:{doc.case_id.split(':')[-1] if ':' in doc.case_id else ''}",
@@ -264,7 +264,7 @@ class CaseLawStorage:
 
         return chunks
 
-    def _store_sections(self, case_law_id: str, doc: CaseLawDocument) -> int:  # noqa: C901, PLR0912
+    def _store_sections(self, case_law_id: str, doc: CaseLawDocument) -> int:  # noqa: C901, PLR0912, PLR0915
         """Extract sections, sub-chunk large ones, generate embeddings, and store in case_law_sections.
         Headers include headings, jurisdiction, and cited legislation so retrieval can answer by them.
         """
@@ -379,20 +379,27 @@ class CaseLawStorage:
                     err_str = str(e)
                     # Supabase/Cloudflare 520 = origin server unreachable; use longer backoff
                     is_5xx = "520" in err_str or "'code': 520" in err_str or "unknown error" in err_str.lower()
-                    if is_5xx:
-                        wait = 8 * (attempt + 1)  # 8, 16, 24, 32, 40s
-                    else:
-                        wait = 2 * (attempt + 1)  # 2, 4, 6, 8, 10s
+                    wait = 8 * (attempt + 1) if is_5xx else 2 * (attempt + 1)
                     if attempt < max_attempts - 1:
                         logger.warning(
                             "%s | section %s/%s insert failed (attempt %s/%s), retry in %ss: %s",
-                            doc.case_id, idx + 1, len(sections), attempt + 1, max_attempts, wait, e,
+                            doc.case_id,
+                            idx + 1,
+                            len(sections),
+                            attempt + 1,
+                            max_attempts,
+                            wait,
+                            e,
                         )
                         _time.sleep(wait)
                     else:
                         logger.error(
                             "%s | section %s/%s insert FAILED after %s attempts: %s",
-                            doc.case_id, idx + 1, len(sections), max_attempts, e,
+                            doc.case_id,
+                            idx + 1,
+                            len(sections),
+                            max_attempts,
+                            e,
                         )
             # Pause between sections to reduce Supabase/Cloudflare load
             if idx < len(sections) - 1:

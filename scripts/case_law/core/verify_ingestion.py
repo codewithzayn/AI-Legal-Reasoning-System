@@ -25,27 +25,25 @@ import argparse
 import asyncio
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, ".")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("LOG_FORMAT", "simple")
 
-from dotenv import load_dotenv
-from supabase import create_client
-
 from scripts.case_law.core.ingestion_manager import IngestionManager
+from scripts.case_law.core.shared import get_supabase_client
 from src.config.logging_config import setup_logger
 
-load_dotenv()
 logger = setup_logger(__name__)
 
 
 def get_client():
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
-    if not url or not key:
-        logger.error("SUPABASE_URL and SUPABASE_KEY required in .env")
+    try:
+        return get_supabase_client()
+    except ValueError as exc:
+        logger.error("%s", exc)
         sys.exit(1)
-    return create_client(url, key)
 
 
 def find_incomplete_cases(
@@ -84,7 +82,9 @@ def find_incomplete_cases(
         logger.info("No cases found for %s %s (%s-%s)", court_type, decision_type, start_year, end_year)
         return {}
 
-    logger.info("Found %s cases in case_law (%s-%s). Checking sections and references...", len(all_cases), start_year, end_year)
+    logger.info(
+        "Found %s cases in case_law (%s-%s). Checking sections and references...", len(all_cases), start_year, end_year
+    )
 
     # Get section counts per case_law_id
     case_ids_uuid = [c["id"] for c in all_cases]
@@ -96,22 +96,12 @@ def find_incomplete_cases(
     # Batch query sections (paginate)
     for i in range(0, len(case_ids_uuid), 200):
         batch = case_ids_uuid[i : i + 200]
-        sec_resp = (
-            client.table("case_law_sections")
-            .select("case_law_id")
-            .in_("case_law_id", batch)
-            .execute()
-        )
+        sec_resp = client.table("case_law_sections").select("case_law_id").in_("case_law_id", batch).execute()
         for row in sec_resp.data or []:
             cid = row["case_law_id"]
             section_counts[cid] = section_counts.get(cid, 0) + 1
 
-        ref_resp = (
-            client.table("case_law_references")
-            .select("source_case_id")
-            .in_("source_case_id", batch)
-            .execute()
-        )
+        ref_resp = client.table("case_law_references").select("source_case_id").in_("source_case_id", batch).execute()
         for row in ref_resp.data or []:
             cid = row["source_case_id"]
             ref_counts[cid] = ref_counts.get(cid, 0) + 1
@@ -126,12 +116,14 @@ def find_incomplete_cases(
             year = case["case_year"]
             if year not in incomplete:
                 incomplete[year] = []
-            incomplete[year].append({
-                "case_id": case["case_id"],
-                "title": case.get("title", ""),
-                "sections": secs,
-                "references": refs,
-            })
+            incomplete[year].append(
+                {
+                    "case_id": case["case_id"],
+                    "title": case.get("title", ""),
+                    "sections": secs,
+                    "references": refs,
+                }
+            )
 
     return incomplete
 
@@ -143,12 +135,8 @@ def print_report(incomplete: dict[int, list[dict]]) -> None:
         return
 
     total_incomplete = sum(len(cases) for cases in incomplete.values())
-    total_zero_sections = sum(
-        1 for cases in incomplete.values() for c in cases if c["sections"] == 0
-    )
-    total_zero_refs = sum(
-        1 for cases in incomplete.values() for c in cases if c["references"] == 0
-    )
+    total_zero_sections = sum(1 for cases in incomplete.values() for c in cases if c["sections"] == 0)
+    total_zero_refs = sum(1 for cases in incomplete.values() for c in cases if c["references"] == 0)
 
     logger.info("=" * 70)
     logger.info("INCOMPLETE CASES REPORT")
@@ -162,7 +150,13 @@ def print_report(incomplete: dict[int, list[dict]]) -> None:
         cases = incomplete[year]
         zero_sec = [c for c in cases if c["sections"] == 0]
         zero_ref = [c for c in cases if c["references"] == 0]
-        logger.info("Year %s: %s incomplete (%s with 0 sections, %s with 0 refs)", year, len(cases), len(zero_sec), len(zero_ref))
+        logger.info(
+            "Year %s: %s incomplete (%s with 0 sections, %s with 0 refs)",
+            year,
+            len(cases),
+            len(zero_sec),
+            len(zero_ref),
+        )
         for c in cases:
             marker = ""
             if c["sections"] == 0:
@@ -213,14 +207,18 @@ async def fix_cases(year: int, case_ids: list[str] | None, court: str = "supreme
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Verify ingestion completeness: find cases with 0 sections or 0 references")
+    parser = argparse.ArgumentParser(
+        description="Verify ingestion completeness: find cases with 0 sections or 0 references"
+    )
     parser.add_argument("--year", type=int, default=None, help="Check a specific year")
     parser.add_argument("--start", type=int, default=1926, help="Start year (default 1926)")
     parser.add_argument("--end", type=int, default=2026, help="End year (default 2026)")
     parser.add_argument("--court", type=str, default="supreme_court", help="Court type")
     parser.add_argument("--subtype", type=str, default="precedent", help="Decision type")
     parser.add_argument("--fix", action="store_true", help="Re-ingest cases with 0 sections for --year")
-    parser.add_argument("--case-ids", nargs="*", default=None, help="Specific case IDs to re-ingest (use with --fix --year)")
+    parser.add_argument(
+        "--case-ids", nargs="*", default=None, help="Specific case IDs to re-ingest (use with --fix --year)"
+    )
 
     args = parser.parse_args()
 

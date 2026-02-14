@@ -589,16 +589,3 @@ class CaseLawScraper:
         )
 
         return doc
-
-
-# Standalone function for simple usage
-async def scrape_supreme_court_year(year: int) -> list[CaseLawDocument]:
-    """Convenience function to scrape a full year of Supreme Court cases"""
-    async with CaseLawScraper() as scraper:
-        return await scraper.fetch_year("supreme_court", year)
-
-
-async def scrape_supreme_administrative_court_year(year: int) -> list[CaseLawDocument]:
-    """Convenience function to scrape a full year of Supreme Administrative Court cases"""
-    async with CaseLawScraper() as scraper:
-        return await scraper.fetch_year("supreme_administrative_court", year)

@@ -9,15 +9,12 @@ import os
 import time
 from collections.abc import AsyncIterator
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
-from src.config.settings import config
-from src.utils.retry import retry_async
+from src.config.settings import config  # load_dotenv() runs here
 
-load_dotenv()
 logger = setup_logger(__name__)
 
 
@@ -125,6 +122,7 @@ class LLMGenerator:
         logger.info("Calling LLM...")
         api_start = time.time()
         from src.utils.retry import _async_retry_impl
+
         response = await _async_retry_impl(lambda: self.llm.ainvoke(messages), retries=1)
         api_elapsed = time.time() - api_start
         logger.info("LLM done in %.1fs", api_elapsed)

@@ -13,7 +13,6 @@ Usage:
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 import warnings
@@ -25,97 +24,22 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("LOG_FORMAT", "simple")
 
-from dotenv import load_dotenv
-
-load_dotenv(PROJECT_ROOT / ".env")
-
+from scripts.case_law.core.shared import (
+    COURT,
+    SUBTYPE_DIR_MAP,
+    TYPE_LABEL_MAP,
+    init_drive_uploader,
+    save_documents_to_json,
+    upload_to_drive,
+    write_local_enabled,
+)
 from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.case_law.pdf_export import doc_to_pdf, doc_to_placeholder_pdf, get_pdf_filename
 from src.services.case_law.scraper import CaseLawDocument, CaseLawScraper
-from src.services.drive import credentials_file_exists
 from src.services.drive.uploader import GoogleDriveUploader
 
 logger = setup_logger(__name__)
-
-COURT = "supreme_court"
-SUBTYPE_DIR_MAP = {
-    "precedent": "precedents",
-    "ruling": "rulings",
-    "leave_to_appeal": "leaves_to_appeal",
-}
-TYPE_LABEL_MAP = {
-    "precedent": "Supreme Court Precedents",
-    "ruling": "Supreme Court Rulings",
-    "leave_to_appeal": "Supreme Court Leaves to Appeal",
-}
-
-
-def _write_local_enabled() -> bool:
-    raw = getattr(config, "CASE_LAW_EXPORT_LOCAL", "1") or "1"
-    return str(raw).strip().lower() in ("1", "true", "yes")
-
-
-def _save_to_json(documents: list[CaseLawDocument], path: Path) -> None:
-    """Save documents to JSON (same format as ingestion cache)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    output = []
-    for doc in documents:
-        d = doc.to_dict()
-        d["references"] = [vars(r) for r in doc.references]
-        output.append(d)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-    logger.info("Saved JSON: %s (%s documents)", path.name, len(documents))
-
-
-def _upload_to_drive(
-    drive_uploader,
-    pdf_bytes: bytes,
-    local_path: Path | None,
-    type_label: str,
-    year: int,
-    pdf_name: str,
-    content_hash: str | None = None,
-):
-    import contextlib
-    import tempfile
-
-    write_local = _write_local_enabled()
-    if write_local and local_path and local_path.exists():
-        upload_path = local_path
-        is_temp = False
-    else:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(pdf_bytes)
-        upload_path = Path(tmp.name)
-        is_temp = True
-    try:
-        fid = drive_uploader.upload_file(
-            upload_path, type_folder_name=type_label, year=str(year), drive_filename=pdf_name, content_hash=content_hash
-        )
-        return bool(fid)
-    finally:
-        if is_temp and upload_path.exists():
-            with contextlib.suppress(OSError):
-                upload_path.unlink(missing_ok=True)
-
-
-def _init_drive_uploader():
-    root_folder_id = (config.GOOGLE_DRIVE_ROOT_FOLDER_ID or os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID", "")).strip()
-    if not root_folder_id:
-        logger.info("GOOGLE_DRIVE_ROOT_FOLDER_ID not set; PDFs written locally only.")
-        return None
-    if not credentials_file_exists(PROJECT_ROOT):
-        logger.warning("Google Drive credentials not found. PDFs written locally only.")
-        return None
-    try:
-        uploader = GoogleDriveUploader(root_folder_id, project_root=PROJECT_ROOT)
-        logger.info("Google Drive upload enabled (root=%s...)", root_folder_id[:16])
-        return uploader
-    except Exception as e:
-        logger.warning("Google Drive upload disabled: %s", e)
-        return None
 
 
 async def _scrape_year(court: str, year: int, subtype: str) -> list[CaseLawDocument]:
@@ -132,8 +56,8 @@ def _pdf_and_upload(
 ) -> tuple[int, int, int, list[str]]:
     """Generate PDF from scraped full_text (or placeholder if empty) and upload to Drive. Returns (success, fail, skipped, failed_ids). skipped is always 0 (placeholders uploaded instead)."""
     type_label = TYPE_LABEL_MAP.get(subtype, subtype)
-    write_local = _write_local_enabled()
-    if write_local:
+    _write_local = write_local_enabled()
+    if _write_local:
         out_dir = export_root / type_label / str(year)
         out_dir.mkdir(parents=True, exist_ok=True)
     success = fail = 0
@@ -159,7 +83,7 @@ def _pdf_and_upload(
             failed_ids.append(f"{doc.case_id} (PDF error)")
             continue
         local_path = None
-        if write_local:
+        if _write_local:
             local_path = export_root / type_label / str(year) / pdf_name
             try:
                 local_path.write_bytes(pdf_bytes)
@@ -171,7 +95,7 @@ def _pdf_and_upload(
         if drive_uploader:
             source_content = (getattr(doc, "case_id", "") or "") + (getattr(doc, "full_text", "") or "")
             content_hash = GoogleDriveUploader.compute_content_hash(source_content)
-            if not _upload_to_drive(
+            if not upload_to_drive(
                 drive_uploader, pdf_bytes, local_path, type_label, year, pdf_name, content_hash=content_hash
             ):
                 fail += 1
@@ -213,9 +137,9 @@ def main() -> int:
     ).strip()
     export_root = (PROJECT_ROOT / export_root_raw).resolve()
     export_root.mkdir(parents=True, exist_ok=True)
-    drive_uploader = _init_drive_uploader()
+    drive_uploader = init_drive_uploader(PROJECT_ROOT)
 
-    if not _write_local_enabled() and not drive_uploader:
+    if not write_local_enabled() and not drive_uploader:
         logger.error("Nothing to do: set CASE_LAW_EXPORT_LOCAL=1 or configure Google Drive.")
         return 1
 
@@ -229,7 +153,7 @@ def main() -> int:
             logger.warning("No documents for %s %s", year, subtype)
             continue
         json_path = json_dir / f"{year}.json"
-        _save_to_json(documents, json_path)
+        save_documents_to_json(documents, json_path)
         logger.info("Generating PDFs (ditto copy of website text) and uploading to Drive...")
         ok, f, _sk, failed_ids = _pdf_and_upload(documents, year, subtype, export_root, drive_uploader)
         total_ok += ok

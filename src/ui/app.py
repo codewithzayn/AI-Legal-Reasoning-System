@@ -13,7 +13,8 @@ warnings.filterwarnings("ignore", message=".*(PyTorch|TensorFlow|Flax).*")
 
 import streamlit as st
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agent.stream import stream_query_response
 from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR, config, validate_env_for_app
@@ -227,7 +228,8 @@ def main():
             st.rerun()
 
         st.markdown("---")
-        st.caption(t("messages_count", lang, count=len(chat_history)))
+        user_count = sum(1 for m in chat_history if m.get("role") == "user")
+        st.caption(t("messages_count", lang, count=user_count))
         st.caption(t("input_hint", lang))
 
 

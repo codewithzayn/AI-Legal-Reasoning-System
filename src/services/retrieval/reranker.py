@@ -6,12 +6,10 @@ Re-ranks search results using Cohere Rerank.
 import os
 
 import cohere
-from dotenv import load_dotenv
 
 from src.config.logging_config import setup_logger
 from src.utils.retry import with_retry
 
-load_dotenv()
 logger = setup_logger(__name__)
 
 

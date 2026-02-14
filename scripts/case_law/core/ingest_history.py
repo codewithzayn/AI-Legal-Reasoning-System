@@ -8,8 +8,10 @@ import asyncio
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
-sys.path.insert(0, ".")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("LOG_FORMAT", "simple")  # human-readable logs
 
 from scripts.case_law.core.ingestion_manager import IngestionManager

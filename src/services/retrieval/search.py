@@ -9,27 +9,27 @@ import os
 import re
 import time
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from supabase import AsyncClient, create_async_client
 
 from src.config.logging_config import setup_logger
-from src.config.settings import config
+from src.config.settings import config  # load_dotenv() runs here
 from src.services.common.embedder import DocumentEmbedder
 from src.utils.retry import retry_async
 
 from .reranker import CohereReranker
 
-load_dotenv()
 logger = setup_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Regex to detect case IDs like KKO:2022:18, KHO:2023:5, KKO 2024:76, etc.
-# Supports: KKO:2024:76, KKO 2024:76, KKO:2024-II-76 (old format)
+# Supports: KKO:2024:76, KKO 2024:76, KKO2025:58 (no space),
+#           KKO 2025 58 (space-only), KKO/2024/76 (slash variant),
+#           KKO:2024-II-76 (old format with Roman numeral volume)
 # ---------------------------------------------------------------------------
 _CASE_ID_RE = re.compile(
-    r"\b(KKO|KHO)\s*[:\s]\s*(\d{4})\s*[:\-]\s*(?:(?:II|I)\s*[:\-]\s*)?(\d+)\b",
+    r"\b(KKO|KHO)\s*[:\-/\s]\s*(\d{4})\s*[:\-/\s]\s*(?:(?:II|I)\s*[:\-/\s]\s*)?(\d+)\b",
     re.IGNORECASE,
 )
 
@@ -243,8 +243,19 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         return sorted(reranked, key=lambda x: x.get("blended_score", 0), reverse=True)
 
     @staticmethod
-    def _smart_diversity_cap(results: list[dict], max_per_case: int = 3, top_k: int = 15) -> list[dict]:
-        """Keep top 2 chunks uncapped, then apply per-case cap for the rest."""
+    def _smart_diversity_cap(
+        results: list[dict],
+        max_per_case: int = 3,
+        top_k: int = 15,
+        exempt_case_ids: set[str] | None = None,
+    ) -> list[dict]:
+        """Keep top 2 chunks uncapped, then apply per-case cap for the rest.
+
+        Cases whose case_id is in *exempt_case_ids* (user explicitly mentioned
+        them in the query) bypass the per-case cap so we never discard chunks
+        the user specifically asked about.
+        """
+        exempt = {c.upper() for c in (exempt_case_ids or set())}
         if len(results) <= 2:
             return results[:top_k]
         output = list(results[:2])
@@ -256,7 +267,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if len(output) >= top_k:
                 break
             cid = (r.get("metadata") or {}).get("case_id") or ""
-            if case_counts.get(cid, 0) < max_per_case:
+            is_exempt = cid.upper() in exempt
+            if is_exempt or case_counts.get(cid, 0) < max_per_case:
                 output.append(r)
                 case_counts[cid] = case_counts.get(cid, 0) + 1
         return output
@@ -551,6 +563,62 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Metadata FTS search failed (non-critical): %s", e)
             return []
 
+    async def _case_id_fallback_search(self, case_id_pattern: str, limit: int = 5) -> list[dict]:
+        """Fallback: find cases whose case_id matches a pattern via ILIKE.
+
+        This ensures a directly requested case always appears even when FTS
+        scoring misses it (e.g. empty metadata columns).  Uses existing
+        Supabase client — no DB migration required.
+        """
+        try:
+            client = await self._get_client()
+            # Find matching case_law rows
+            case_resp = (
+                await client.table("case_law")
+                .select("id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url")
+                .ilike("case_id", f"%{case_id_pattern}%")
+                .limit(limit)
+                .execute()
+            )
+            if not case_resp.data:
+                return []
+
+            results: list[dict] = []
+            for case_row in case_resp.data:
+                # Fetch sections for each matched case
+                sec_resp = (
+                    await client.table("case_law_sections")
+                    .select("id, content, section_type, section_title")
+                    .eq("case_law_id", case_row["id"])
+                    .limit(5)
+                    .execute()
+                )
+                for sec in sec_resp.data or []:
+                    results.append(
+                        {
+                            "id": sec["id"],
+                            "text": sec.get("content", ""),
+                            "source": "case_law",
+                            "metadata": {
+                                "case_id": case_row.get("case_id", ""),
+                                "case_title": case_row.get("title", ""),
+                                "court": case_row.get("court_type"),
+                                "year": case_row.get("case_year"),
+                                "type": sec.get("section_type"),
+                                "keywords": case_row.get("legal_domains", []),
+                                "decision_outcome": case_row.get("decision_outcome", ""),
+                                "url": case_row.get("url"),
+                            },
+                            "score": 0.95,  # high score for direct pattern match
+                        }
+                    )
+            if results:
+                logger.info("Case-ID fallback → %s chunks for pattern '%s'", len(results), case_id_pattern)
+            return results
+        except Exception as e:
+            logger.warning("Case-ID fallback search failed (non-critical): %s", e)
+            return []
+
     async def hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:
         """
         Global Hybrid Search: (Statutes Hybrid) + (Case Law Hybrid) + (Metadata FTS)
@@ -583,21 +651,40 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         fts_task = asyncio.create_task(_timed(self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts"))
         meta_task = asyncio.create_task(_timed(self.search_case_law_metadata(query_text, limit=limit), "meta_fts"))
 
+        # Case-ID fallback: if query contains a recognizable case ID pattern,
+        # also search by ILIKE on case_id column so the case is always included.
+        mentioned_ids = self.extract_case_ids(query_text)
+        fallback_tasks = [
+            asyncio.create_task(_timed(self._case_id_fallback_search(cid), f"fallback_{cid}")) for cid in mentioned_ids
+        ]
+
         # Wait for embedding, then launch vector-dependent searches
         query_embedding = await embedding_task
-        vec_task = asyncio.create_task(_timed(
-            self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K), "vec"))
-        case_task = asyncio.create_task(_timed(
-            self.search_case_law(query_embedding, query_text, limit=limit), "case_law"))
+        vec_task = asyncio.create_task(
+            _timed(self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K), "vec")
+        )
+        case_task = asyncio.create_task(
+            _timed(self.search_case_law(query_embedding, query_text, limit=limit), "case_law")
+        )
 
         # Wait for everything
-        stat_vec, case_results, stat_fts, meta_results = await asyncio.gather(
-            vec_task, case_task, fts_task, meta_task
-        )
+        stat_vec, case_results, stat_fts, meta_results = await asyncio.gather(vec_task, case_task, fts_task, meta_task)
+        # Collect case-ID fallback results
+        fallback_results: list[dict] = []
+        if fallback_tasks:
+            fallback_lists = await asyncio.gather(*fallback_tasks)
+            for fl in fallback_lists:
+                fallback_results.extend(fl)
+
         t_search = time.time()
         logger.info(
-            "  search: %.1fs (vec=%s, fts=%s, case=%s, meta=%s)",
-            t_search - t0, len(stat_vec), len(stat_fts), len(case_results), len(meta_results),
+            "  search: %.1fs (vec=%s, fts=%s, case=%s, meta=%s, fallback=%s)",
+            t_search - t0,
+            len(stat_vec),
+            len(stat_fts),
+            len(case_results),
+            len(meta_results),
+            len(fallback_results),
         )
 
         # Process Statute Results (Merge Vector + FTS)
@@ -621,7 +708,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 }
             )
 
-        # Merge case law results + metadata results (dedup by section id)
+        # Merge case law results + metadata results + fallback results (dedup by section id)
         seen_ids: set[str] = set()
         merged_case_law: list[dict] = []
         for chunk in case_results:
@@ -630,6 +717,11 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 seen_ids.add(cid)
                 merged_case_law.append(chunk)
         for chunk in meta_results:
+            cid = chunk["id"]
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                merged_case_law.append(chunk)
+        for chunk in fallback_results:
             cid = chunk["id"]
             if cid not in seen_ids:
                 seen_ids.add(cid)
@@ -785,7 +877,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         reranked.sort(key=lambda x: x.get("blended_score", 0), reverse=True)
 
         # --- Step 8: Smart diversity cap (top 2 uncapped, then max 3 per case) ---
-        reranked = self._smart_diversity_cap(reranked, max_per_case=3, top_k=top_k)
+        # Exempt explicitly mentioned case IDs from the cap so they get full coverage.
+        exempt_ids = set(mentioned_ids) if mentioned_ids else None
+        reranked = self._smart_diversity_cap(reranked, max_per_case=3, top_k=top_k, exempt_case_ids=exempt_ids)
 
         # --- Step 9: When query mentions specific case(s), put those chunks first ---
         if mentioned_ids and reranked:

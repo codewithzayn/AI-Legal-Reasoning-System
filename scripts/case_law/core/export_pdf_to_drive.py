@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 import warnings
@@ -21,109 +20,26 @@ from pathlib import Path
 # Suppress Google lib Python 3.10 EOL warning (no impact on Drive upload)
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*Python version.*3\\.10.*")
 
-from dotenv import load_dotenv
-
 # Project root: scripts/case_law/core/export_pdf_to_drive.py -> 3 levels up to repo root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-load_dotenv(PROJECT_ROOT / ".env")
 os.environ.setdefault("LOG_FORMAT", "simple")  # human-readable logs like ingest pipeline
 
+from scripts.case_law.core.shared import (
+    COURT,
+    SUBTYPE_DIR_MAP,
+    TYPE_LABEL_MAP,
+    init_drive_uploader,
+    load_documents_from_json,
+    upload_to_drive,
+    write_local_enabled,
+)
 from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.case_law.pdf_export import doc_to_pdf, get_pdf_filename
-from src.services.case_law.scraper import CaseLawDocument, Reference
 from src.services.drive.uploader import GoogleDriveUploader
 
 logger = setup_logger(__name__)
-
-COURT = "supreme_court"
-SUBTYPE_DIR_MAP = {
-    "precedent": "precedents",
-    "ruling": "rulings",
-    "leave_to_appeal": "leaves_to_appeal",
-}
-TYPE_LABEL_MAP = {
-    "precedent": "Supreme Court Precedents",
-    "ruling": "Supreme Court Rulings",
-    "leave_to_appeal": "Supreme Court Leaves to Appeal",
-}
-
-
-def load_documents_from_json(json_path: Path) -> list[CaseLawDocument]:
-    """Load CaseLawDocument list from a year JSON file (same format as ingestion cache)."""
-    if not json_path or not json_path.exists():
-        return []
-    try:
-        with open(json_path, encoding="utf-8") as f:
-            data = json.load(f)
-    except json.JSONDecodeError as e:
-        logger.error("Invalid JSON in %s: %s", json_path, e)
-        return []
-    except OSError as e:
-        logger.error("Cannot read %s: %s", json_path, e)
-        return []
-    if not isinstance(data, list):
-        logger.warning("Expected list in %s, got %s", json_path, type(data).__name__)
-        return []
-    docs = []
-    for i, d in enumerate(data):
-        if not isinstance(d, dict):
-            logger.warning("Skip non-dict item at index %s in %s", i, json_path)
-            continue
-        try:
-            refs = [Reference(**r) for r in d.get("references", [])] if d.get("references") else []
-            d_copy = {k: v for k, v in d.items() if k != "references"}
-            doc = CaseLawDocument(**d_copy)
-            doc.references = refs
-            docs.append(doc)
-        except (TypeError, ValueError) as e:
-            logger.warning("Skip malformed document at index %s in %s: %s", i, json_path, e)
-            continue
-    return docs
-
-
-def _write_local_enabled() -> bool:
-    """True if we should write PDFs to local export root (CASE_LAW_EXPORT_LOCAL=1)."""
-    raw = getattr(config, "CASE_LAW_EXPORT_LOCAL", "1") or "1"
-    return str(raw).strip().lower() in ("1", "true", "yes")
-
-
-def _upload_to_drive(
-    drive_uploader,
-    pdf_bytes: bytes,
-    local_path: Path | None,
-    type_label: str,
-    year: int,
-    pdf_name: str,
-    content_hash: str | None = None,
-) -> str | bool:
-    """Upload PDF bytes to Google Drive. Returns True on success, False on failure, 'skipped' if unchanged."""
-    import contextlib
-    import tempfile
-
-    write_local = _write_local_enabled()
-    if write_local and local_path and local_path.exists():
-        upload_path = local_path
-        is_temp = False
-    else:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(pdf_bytes)
-        upload_path = Path(tmp.name)
-        is_temp = True
-    try:
-        fid = drive_uploader.upload_file(
-            upload_path,
-            type_folder_name=type_label,
-            year=str(year),
-            drive_filename=pdf_name,
-            content_hash=content_hash,
-        )
-        return bool(fid)
-    finally:
-        if is_temp and upload_path.exists():
-            with contextlib.suppress(OSError):
-                upload_path.unlink(missing_ok=True)
 
 
 def run_export(  # noqa: PLR0915
@@ -150,8 +66,8 @@ def run_export(  # noqa: PLR0915
         logger.debug("Skip %s %s (no documents)", type_label, year)
         return 0, 0, 0, []
 
-    write_local = _write_local_enabled()
-    if write_local:
+    _write_local = write_local_enabled()
+    if _write_local:
         out_dir = export_root / type_label / str(year)
         out_dir.mkdir(parents=True, exist_ok=True)
     success = 0
@@ -195,7 +111,7 @@ def run_export(  # noqa: PLR0915
             failed_ids.append(f"{doc.case_id} (PDF generation error)")
             continue
         local_path = None
-        if write_local:
+        if _write_local:
             local_path = export_root / type_label / str(year) / pdf_name
             try:
                 local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +135,7 @@ def run_export(  # noqa: PLR0915
             # Compute stable hash from source content (not PDF bytes, which have timestamps)
             source_content = (getattr(doc, "case_id", "") or "") + (getattr(doc, "full_text", "") or "")
             content_hash = GoogleDriveUploader.compute_content_hash(source_content)
-            result = _upload_to_drive(
+            result = upload_to_drive(
                 drive_uploader, pdf_bytes, local_path, type_label, year, pdf_name, content_hash=content_hash
             )
             if not result:
@@ -231,32 +147,6 @@ def run_export(  # noqa: PLR0915
             logger.info("[%s/%s] %s/%s exported", type_label, year, i, len(documents))
 
     return success, fail, skipped, failed_ids
-
-
-def _init_drive_uploader():
-    """Try to create a GoogleDriveUploader. Returns None if unavailable."""
-    root_folder_id = (config.GOOGLE_DRIVE_ROOT_FOLDER_ID or os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID", "")).strip()
-    if not root_folder_id:
-        logger.info("GOOGLE_DRIVE_ROOT_FOLDER_ID not set; PDFs will be written locally only.")
-        return None
-
-    from src.services.drive import GoogleDriveUploader, credentials_file_exists
-
-    if not credentials_file_exists(PROJECT_ROOT):
-        logger.warning(
-            "GOOGLE_DRIVE_ROOT_FOLDER_ID is set but no credentials file found. "
-            "Set GOOGLE_OAUTH_CLIENT_SECRET (recommended) or GOOGLE_APPLICATION_CREDENTIALS in .env. "
-            "PDFs will be written locally only (or skipped if CASE_LAW_EXPORT_LOCAL=0).",
-        )
-        return None
-
-    try:
-        uploader = GoogleDriveUploader(root_folder_id, project_root=PROJECT_ROOT)
-        logger.info("Google Drive upload enabled (root=%s...)", root_folder_id[:16])
-        return uploader
-    except (FileNotFoundError, ValueError, Exception) as e:
-        logger.warning("Google Drive upload disabled: %s", e)
-        return None
 
 
 def _parse_years(args) -> list[int]:
@@ -297,14 +187,14 @@ def main() -> int:
             project_root_resolved,
         )
         return 1
-    if _write_local_enabled():
+    if write_local_enabled():
         export_root.mkdir(parents=True, exist_ok=True)
     else:
         logger.info("CASE_LAW_EXPORT_LOCAL=0: PDFs will not be written to disk (Drive only).")
 
-    drive_uploader = _init_drive_uploader()
+    drive_uploader = init_drive_uploader(PROJECT_ROOT)
 
-    if not _write_local_enabled() and not drive_uploader:
+    if not write_local_enabled() and not drive_uploader:
         logger.error(
             "Nothing to do: CASE_LAW_EXPORT_LOCAL=0 and Google Drive upload is not available. "
             "Set GOOGLE_DRIVE_ROOT_FOLDER_ID + GOOGLE_OAUTH_CLIENT_SECRET, or CASE_LAW_EXPORT_LOCAL=1."
