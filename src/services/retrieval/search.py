@@ -1479,10 +1479,10 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             r["blended_score"] = r.get("blended_score", 0) * (exact_boost ** (boost_multiplier - 1))
         reranked.sort(key=lambda x: x.get("blended_score", 0), reverse=True)
 
-        # --- Step 8: Smart diversity cap (top 2 uncapped, then max 3 per case) ---
+        # --- Step 8: Smart diversity cap (top 2 uncapped, then max 2 per case) ---
         # Exempt explicitly mentioned case IDs from the cap so they get full coverage.
         exempt_ids = set(mentioned_ids) if mentioned_ids else None
-        reranked = self._smart_diversity_cap(reranked, max_per_case=3, top_k=top_k, exempt_case_ids=exempt_ids)
+        reranked = self._smart_diversity_cap(reranked, max_per_case=2, top_k=top_k, exempt_case_ids=exempt_ids)
 
         # --- Step 9: When query mentions specific case(s), put those chunks first ---
         if mentioned_ids and reranked:
