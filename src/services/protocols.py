@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from src.services.case_law.scraper import CaseLawDocument
+from src.services.case_law.models import CaseLawDocument
 
 
 # ---------------------------------------------------------------------------

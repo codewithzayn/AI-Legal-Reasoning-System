@@ -22,7 +22,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 
 from src.config.logging_config import setup_logger
-from src.services.case_law.scraper import CaseLawDocument
+from src.services.case_law.models import CaseLawDocument
 
 logger = setup_logger(__name__)
 

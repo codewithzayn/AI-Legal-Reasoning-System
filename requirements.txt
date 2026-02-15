@@ -10,6 +10,9 @@ langchain-openai==1.1.7
 # Finlex API
 requests==2.32.5
 
+# Web scraping (case law ingestion pipeline)
+beautifulsoup4==4.13.4
+
 # Cohere for re-ranking
 cohere==5.20.1
 

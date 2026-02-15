@@ -13,7 +13,7 @@ from postgrest.exceptions import APIError as PostgrestAPIError
 from supabase import Client, create_client
 
 from src.config.logging_config import setup_logger
-from src.services.case_law.scraper import CaseLawDocument
+from src.services.case_law.models import CaseLawDocument
 from src.services.common.embedder import DocumentEmbedder
 from src.services.protocols import EmbeddingService
 

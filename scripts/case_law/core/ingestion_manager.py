@@ -18,7 +18,8 @@ from scripts.case_law.core.shared import (
 from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.case_law.hybrid_extractor import HybridPrecedentExtractor
-from src.services.case_law.scraper import CaseLawDocument, CaseLawScraper, Reference
+from src.services.case_law.models import CaseLawDocument, Reference
+from src.services.case_law.scraper import CaseLawScraper
 from src.services.case_law.storage import CaseLawStorage
 
 logger = setup_logger(__name__)

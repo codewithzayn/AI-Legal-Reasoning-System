@@ -15,7 +15,7 @@ from pathlib import Path
 
 from src.config.logging_config import setup_logger
 from src.config.settings import config
-from src.services.case_law.scraper import CaseLawDocument, Reference
+from src.services.case_law.models import CaseLawDocument, Reference
 from src.services.drive import credentials_file_exists
 from src.services.drive.uploader import GoogleDriveUploader
 

@@ -35,8 +35,9 @@ from scripts.case_law.core.shared import (
 )
 from src.config.logging_config import setup_logger
 from src.config.settings import config
+from src.services.case_law.models import CaseLawDocument
 from src.services.case_law.pdf_export import doc_to_pdf, doc_to_placeholder_pdf, get_pdf_filename
-from src.services.case_law.scraper import CaseLawDocument, CaseLawScraper
+from src.services.case_law.scraper import CaseLawScraper
 from src.services.drive.uploader import GoogleDriveUploader
 
 logger = setup_logger(__name__)

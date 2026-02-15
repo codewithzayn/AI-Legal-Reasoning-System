@@ -70,7 +70,7 @@ EVAL_QUERIES = [
         "query_type": "sentencing",
     },
     {
-        "query": "Miten RL 7 luvun 6 §:n ja 9 §:n mukainen yhteinen rangaistus määrätään?",
+        "query": "Otetaanko Ruotsissa annettu vankeustuomio huomioon yhteistä rangaistusta määrättäessä Suomessa RL 7 luvun mukaan?",
         "expected_cases": ["KKO:2025:5"],
         "query_type": "sentencing",
     },
@@ -103,7 +103,7 @@ EVAL_QUERIES = [
     },
     # --- 13-14. Procedural law ---
     {
-        "query": "Milloin tuomioistuimen päätöksestä voi kannella ylimääräisenä muutoksenhakukeinona?",
+        "query": "Voidaanko työtuomioistuimen tuomiota moittia kantelulla OK 31 luvun nojalla väittämistaakan laiminlyönnin perusteella?",
         "expected_cases": ["KKO:2026:11"],
         "query_type": "procedural",
     },
@@ -131,7 +131,7 @@ EVAL_QUERIES = [
     },
     # --- 18-19. Insurance ---
     {
-        "query": "Miten tapaturmakorvauksen syy-yhteysvaatimus arvioidaan?",
+        "query": "Onko työtapaturman jälkeinen masennus korvattava tapaturmavakuutuksesta syy-yhteyden perusteella?",
         "expected_cases": ["KKO:2026:4"],
         "query_type": "insurance",
     },
@@ -165,7 +165,7 @@ EVAL_QUERIES = [
     },
     # --- 24. Criminal - specific ---
     {
-        "query": "Milloin kavallus katsotaan törkeäksi rikoslain mukaan?",
+        "query": "Onko yhtiön varojen siirtäminen toiseen yhtiöön osakkaana toimineen henkilön toimesta törkeä kavallus?",
         "expected_cases": ["KKO:2025:16"],
         "query_type": "criminal",
     },

@@ -17,7 +17,7 @@ from scripts.case_law.core.shared import (
     save_documents_to_json,
     write_local_enabled,
 )
-from src.services.case_law.scraper import CaseLawDocument, Reference
+from src.services.case_law.models import CaseLawDocument, Reference
 
 
 # ---------------------------------------------------------------------------

@@ -303,3 +303,98 @@ class TestRRFBlendScores:
         blended = retrieval._rrf_blend_scores(items)
         assert len(blended) == 1
         assert blended[0]["blended_score"] > 0
+
+
+# ---------------------------------------------------------------------------
+# _build_and_fts_query
+# ---------------------------------------------------------------------------
+class TestBuildAndFtsQuery:
+    """Test AND-based FTS query builder (high-precision channel)."""
+
+    def test_joins_top_three_terms_with_spaces(self, retrieval: HybridRetrieval) -> None:
+        """AND query should contain space-separated terms (implicit AND for websearch_to_tsquery)."""
+        query = "osamaksumyyjä vaatia takaisinsaantia kolmannelta osapuolelta"
+        result = retrieval._build_and_fts_query(query)
+        # Should NOT contain OR
+        assert "OR" not in result
+        # Should contain at most 3 terms
+        terms = result.split()
+        assert len(terms) <= 3
+        # Longest terms should be selected (sorted by length descending)
+        assert "osamaksumyyjä" in result.lower()
+        assert "takaisinsaantia" in result.lower()
+
+    def test_empty_when_fewer_than_two_terms(self, retrieval: HybridRetrieval) -> None:
+        """AND of a single term adds no value over OR — should return empty."""
+        # "onko" is a stopword, "laki" is the only surviving term
+        result = retrieval._build_and_fts_query("onko laki?")
+        assert result == ""
+
+    def test_preserves_three_terms_max(self, retrieval: HybridRetrieval) -> None:
+        """Should keep at most 3 terms even with many input words."""
+        query = "vahingonkorvauslain oikeuspaikkasäännös työsopimus irtisanominen"
+        result = retrieval._build_and_fts_query(query)
+        terms = result.split()
+        assert len(terms) == 3
+
+    def test_empty_for_all_stop_words(self, retrieval: HybridRetrieval) -> None:
+        result = retrieval._build_and_fts_query("onko vai?")
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# _title_keyword_overlap_boost
+# ---------------------------------------------------------------------------
+class TestTitleKeywordOverlapBoost:
+    """Test title keyword overlap boost logic."""
+
+    def test_no_boost_when_no_title(self) -> None:
+        """Should return 1.0 when chunk has no case_title."""
+        chunk = _make_chunk("c1", text="content")
+        boost = HybridRetrieval._title_keyword_overlap_boost(
+            chunk, "osamaksumyyjä takaisinsaantia", {"osamaksumyyjä", "takaisinsaantia"}
+        )
+        assert boost == pytest.approx(1.0)
+
+    def test_no_boost_when_short_words_only(self) -> None:
+        """Words shorter than 6 chars should not trigger the title boost."""
+        chunk = {
+            "id": "c1",
+            "text": "",
+            "metadata": {"case_id": "KKO:2020:1", "case_title": "Rikos - Tuomio"},
+            "score": 0.5,
+        }
+        boost = HybridRetrieval._title_keyword_overlap_boost(chunk, "rikos tuomio", {"rikos", "tuomio"})
+        # Both words < 6 chars: "rikos" = 5, "tuomio" = 6 → tuomio passes but only 1 root → 1.0
+        assert boost == pytest.approx(1.0)
+
+    def test_boost_when_two_roots_match(self) -> None:
+        """Should return 1.3 when 2 query root prefixes appear in the title."""
+        chunk = {
+            "id": "c1",
+            "text": "",
+            "metadata": {"case_id": "KKO:1987:124", "case_title": "Osamaksukauppa - Takaisinsaanti"},
+            "score": 0.5,
+        }
+        # "osamak" (6 chars) is in "Osamaksukauppa", "takais" (6 chars) is in "Takaisinsaanti"
+        boost = HybridRetrieval._title_keyword_overlap_boost(
+            chunk,
+            "osamaksumyyjä takaisinsaantia kolmannelta",
+            {"osamaksumyyjä", "takaisinsaantia", "kolmannelta"},
+        )
+        assert boost >= 1.3
+
+    def test_higher_boost_for_three_roots(self) -> None:
+        """Should return 1.6 when 3+ query root prefixes appear in the title."""
+        chunk = {
+            "id": "c1",
+            "text": "",
+            "metadata": {"case_id": "X", "case_title": "Osamaksukauppa - Takaisinsaanti - Kolmansien"},
+            "score": 0.5,
+        }
+        boost = HybridRetrieval._title_keyword_overlap_boost(
+            chunk,
+            "osamaksumyyjä takaisinsaantia kolmansien osapuolelta",
+            {"osamaksumyyjä", "takaisinsaantia", "kolmansien", "osapuolelta"},
+        )
+        assert boost >= 1.6

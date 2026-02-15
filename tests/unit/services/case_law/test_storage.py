@@ -8,7 +8,7 @@ and metadata row mapping.
 All tests are pure-logic — no network calls, no database.
 """
 
-from src.services.case_law.scraper import CaseLawDocument
+from src.services.case_law.models import CaseLawDocument
 from src.services.case_law.storage import CaseLawStorage
 
 

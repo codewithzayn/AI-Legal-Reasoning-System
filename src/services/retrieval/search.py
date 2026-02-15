@@ -382,7 +382,46 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if match_ratio >= 0.5:
                 boost *= 1 + match_ratio * 0.5  # Up to 1.75x for 100% match
 
+        # Title keyword overlap: boost chunks whose case title shares
+        # root words with the query.  Uses substring matching so that
+        # compound words like "osamaksumyyjä" (query) match
+        # "osamaksukauppa" (title) via the shared root "osamaksu".
+        boost *= self._title_keyword_overlap_boost(chunk, query_lower, query_words)
+
         return boost
+
+    @staticmethod
+    def _title_keyword_overlap_boost(chunk: dict, query_lower: str, query_words: set[str]) -> float:
+        """Compute a boost based on how well the case title matches the query.
+
+        For each substantive query word (>=6 chars), checks whether
+        a significant prefix (first 6+ chars) appears anywhere in the
+        case title.  This catches Finnish compound-word overlaps:
+        "osamaksumyyjä" and "osamaksukauppa" share the prefix "osamaksu".
+
+        Returns:
+            1.0 (no boost) when <2 roots match.
+            1.3 when 2 roots match.
+            1.6 when 3+ roots match.
+        """
+        case_title = ((chunk.get("metadata") or {}).get("case_title") or "").lower()
+        if not case_title or not query_words:
+            return 1.0
+
+        title_root_matches = 0
+        for word in query_words:
+            if len(word) < 6:
+                continue
+            # Use the first 6 characters as a root prefix for compound matching
+            root_prefix = word[:6]
+            if root_prefix in case_title:
+                title_root_matches += 1
+
+        if title_root_matches >= 3:
+            return 1.6
+        if title_root_matches >= 2:
+            return 1.3
+        return 1.0
 
     def _rrf_blend_scores(self, reranked: list[dict], k: int = 60) -> list[dict]:
         """Blend rerank and pre-rerank (RRF) using RRF formula instead of weighted average."""
@@ -603,6 +642,28 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         return " OR ".join(key_terms)
 
     @staticmethod
+    def _build_and_fts_query(query: str) -> str:
+        """Build an AND-based FTS query for ``websearch_to_tsquery``.
+
+        Takes the top 3 longest key terms (the most distinctive) and
+        joins them with spaces.  ``websearch_to_tsquery`` treats
+        space-separated tokens as implicit AND, so a match requires
+        *all* terms to be present in the document.
+
+        This produces fewer but more precisely relevant results than
+        the OR-based query, functioning as a high-precision channel.
+
+        Returns an empty string when fewer than 2 substantive terms
+        remain (AND of a single term adds no value over OR).
+        """
+        key_terms = HybridRetrieval._extract_key_terms(query)
+        if len(key_terms) < 2:
+            return ""
+        # Top 3 longest terms — already sorted by length descending
+        and_terms = key_terms[:3]
+        return " ".join(and_terms)
+
+    @staticmethod
     def _build_prefix_tsquery(query: str) -> str:
         """Build a ``to_tsquery``-compatible query with ``:*`` prefix variants.
 
@@ -734,6 +795,56 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             return results
         except (PostgrestAPIError, OSError) as e:
             logger.error("FTS search error: %s", e)
+            return []
+
+    async def and_fts_search(self, query_text: str, limit: int | None = None) -> list[dict]:
+        """AND-based FTS on case_law_sections — high-precision channel.
+
+        Requires the top 3 key terms to ALL appear in the same section.
+        Produces fewer results than the OR channel but each result is
+        far more likely to be topically relevant.  Merging this channel
+        into RRF alongside the OR channel gives documents that match
+        ALL terms a double RRF contribution, boosting them above
+        generic single-term matches.
+        """
+        try:
+            and_query = self._build_and_fts_query(query_text)
+            if not and_query.strip():
+                return []
+
+            client = await self._get_client()
+            response = await client.rpc(
+                "fts_search_case_law",
+                {
+                    "query_text": and_query,
+                    "match_count": limit or config.FTS_SEARCH_TOP_K,
+                },
+            ).execute()
+
+            results: list[dict] = []
+            for item in response.data or []:
+                results.append(
+                    {
+                        "id": item.get("section_id"),
+                        "text": item.get("content", ""),
+                        "source": "case_law",
+                        "metadata": {
+                            "case_id": item.get("case_id"),
+                            "case_title": item.get("title", ""),
+                            "court": item.get("court_type"),
+                            "year": item.get("case_year"),
+                            "type": item.get("section_type"),
+                            "keywords": item.get("legal_domains", []),
+                            "url": item.get("url"),
+                        },
+                        "score": item.get("rank", 0),
+                    }
+                )
+            if results:
+                logger.info("AND-FTS → %s section(s)", len(results))
+            return results
+        except (PostgrestAPIError, OSError) as e:
+            logger.warning("AND-FTS search error (non-critical): %s", e)
             return []
 
     def rrf_merge(self, *result_lists: list[dict], k: int = 60) -> list[dict]:
@@ -1029,17 +1140,77 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Prefix title search failed (non-critical): %s", exc)
             return []
 
+    async def _prefix_content_search(self, query_text: str, limit: int = 15) -> list[dict]:
+        """Prefix FTS on **section content** — compound-word bridge.
+
+        Similar to ``_prefix_title_search`` but searches the full
+        ``case_law_sections.fts_vector`` (67K rows) instead of just
+        titles (13K rows).  Uses the ``prefix_fts_search_case_law``
+        RPC which calls ``to_tsquery`` (supports ``:*`` prefix).
+
+        This fixes the core compound-word matching gap: a query about
+        "osamaksumyyjä" now matches sections containing
+        "osamaksukauppa" because ``osamaksu:*`` matches both.
+        """
+        prefix_query = self._build_prefix_tsquery(query_text)
+        if not prefix_query:
+            return []
+
+        try:
+            client = await self._get_client()
+            response = await client.rpc(
+                "prefix_fts_search_case_law",
+                {
+                    "query_text": prefix_query,
+                    "match_count": limit,
+                },
+            ).execute()
+
+            results: list[dict] = []
+            for item in response.data or []:
+                results.append(
+                    {
+                        "id": item.get("section_id"),
+                        "text": item.get("content", ""),
+                        "source": "case_law",
+                        "metadata": {
+                            "case_id": item.get("case_id"),
+                            "case_title": item.get("title", ""),
+                            "court": item.get("court_type"),
+                            "year": item.get("case_year"),
+                            "type": item.get("section_type"),
+                            "keywords": item.get("legal_domains", []),
+                            "url": item.get("url"),
+                        },
+                        "score": item.get("rank", 0),
+                    }
+                )
+            if results:
+                logger.info("Prefix content FTS → %s section(s)", len(results))
+            return results
+        except (PostgrestAPIError, OSError) as exc:
+            logger.warning("Prefix content search failed (non-critical): %s", exc)
+            return []
+
     async def hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:
         """
-        Hybrid Search on case_law_sections: Vector (HNSW) + FTS (GIN)
-        + Metadata FTS + Prefix title FTS + Case-ID fallback.
+        Hybrid Search on case_law_sections: 7 channels merged via RRF.
+
+        Channels
+        --------
+        1. Vector (HNSW)           — semantic similarity
+        2. FTS OR (GIN)            — broad keyword recall
+        3. FTS AND (GIN)           — high-precision keyword co-occurrence
+        4. Metadata FTS            — title / judgment / background / domains
+        5. Prefix title FTS        — compound-word bridge on case titles
+        6. Prefix content FTS      — compound-word bridge on section content
+        7. Case-ID fallback        — direct lookup when query mentions a case
 
         Architecture
         ------------
-        1. Embedding generation + FTS + metadata FTS run concurrently.
+        1. Embedding generation + all text-based searches run concurrently.
         2. Once the embedding is ready, vector search starts (uses HNSW).
-        3. Vector + FTS results are merged via RRF.
-        4. Metadata & fallback results are appended (deduplicated).
+        3. Channels 1–6 are merged via RRF; channel 7 is appended after.
 
         Each sub-query is capped at 15 s so one slow RPC never blocks all.
         Connection errors trigger an automatic client reset and single retry.
@@ -1068,17 +1239,28 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         # Log the FTS queries that will be sent (useful for debugging relevance)
         fts_query_preview = self._build_fts_query(query_text)
+        and_fts_query_preview = self._build_and_fts_query(query_text)
         prefix_query_preview = self._build_prefix_tsquery(query_text)
-        logger.info("  fts_query: %s", fts_query_preview)
+        logger.info("  fts_or_query: %s", fts_query_preview)
+        logger.info("  fts_and_query: %s", and_fts_query_preview)
         logger.info("  prefix_query: %s", prefix_query_preview)
 
         # Phase 1: Start text-only searches + embedding generation concurrently.
         embedding_task = asyncio.create_task(_get_embedding())
-        fts_task = asyncio.create_task(_timed(self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts"))
+        fts_task = asyncio.create_task(_timed(self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_or"))
+        and_fts_task = asyncio.create_task(
+            _timed(self.and_fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_and")
+        )
         meta_task = asyncio.create_task(_timed(self.search_case_law_metadata(query_text, limit=limit), "meta_fts"))
         # Prefix title search: bridges Finnish compound-word boundaries
         # by matching title keywords via to_tsquery :* prefix operator.
-        prefix_task = asyncio.create_task(_timed(self._prefix_title_search(query_text, limit=limit), "prefix_title"))
+        prefix_title_task = asyncio.create_task(
+            _timed(self._prefix_title_search(query_text, limit=limit), "prefix_title")
+        )
+        # Prefix content search: extends compound-word matching to section text.
+        prefix_content_task = asyncio.create_task(
+            _timed(self._prefix_content_search(query_text, limit=limit), "prefix_content")
+        )
 
         # Case-ID fallback: if query mentions a case ID, fetch directly.
         mentioned_ids = self.extract_case_ids(query_text)
@@ -1093,9 +1275,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         )
 
         # Wait for all parallel searches
-        vec_results, fts_results, meta_results, prefix_results = await asyncio.gather(
-            vec_task, fts_task, meta_task, prefix_task
-        )
+        (
+            vec_results,
+            fts_results,
+            and_fts_results,
+            meta_results,
+            prefix_title_results,
+            prefix_content_results,
+        ) = await asyncio.gather(vec_task, fts_task, and_fts_task, meta_task, prefix_title_task, prefix_content_task)
 
         # Collect case-ID fallback results
         fallback_results: list[dict] = []
@@ -1106,19 +1293,29 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         t_search = time.time()
         logger.info(
-            "  search: %.1fs (vec=%s, fts=%s, meta=%s, prefix=%s, fallback=%s)",
+            "  search: %.1fs (vec=%s, fts_or=%s, fts_and=%s, meta=%s, prefix_title=%s, prefix_content=%s, fallback=%s)",
             t_search - t0,
             len(vec_results),
             len(fts_results),
+            len(and_fts_results),
             len(meta_results),
-            len(prefix_results),
+            len(prefix_title_results),
+            len(prefix_content_results),
             len(fallback_results),
         )
 
-        # RRF merge of ALL search channels (vector + FTS + metadata + prefix).
-        # A document found by multiple channels gets a score boost,
-        # which naturally promotes the most relevant cases.
-        rrf_merged = self.rrf_merge(vec_results, fts_results, meta_results, prefix_results, k=60)
+        # RRF merge of ALL search channels (7 channels).
+        # A document found by multiple channels gets a higher score,
+        # naturally promoting the most topically relevant cases.
+        rrf_merged = self.rrf_merge(
+            vec_results,
+            fts_results,
+            and_fts_results,
+            meta_results,
+            prefix_title_results,
+            prefix_content_results,
+            k=60,
+        )
 
         # Deduplicate: RRF merged first, then case-ID fallback
         seen_ids: set[str] = set()
