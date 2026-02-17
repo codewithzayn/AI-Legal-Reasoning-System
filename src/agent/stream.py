@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.config.translations import t
+from src.utils.lang_detect import detect_query_language
 
 from .graph import agent_graph
 from .state import AgentState
@@ -42,6 +43,9 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
         yield f"\u26a0\ufe0f {t('query_too_long', lang, max=config.MAX_QUERY_LENGTH)}"
         return
 
+    # When "auto", detect response language from query; otherwise use UI selection
+    response_lang = detect_query_language(user_query) if lang == "auto" else lang or "fi"
+
     initial_state: AgentState = {
         "query": user_query,
         "messages": [],
@@ -54,7 +58,7 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
         "relevancy_score": None,
         "relevancy_reason": None,
         "error": None,
-        "response_lang": lang or "fi",
+        "response_lang": response_lang,
     }
 
     try:

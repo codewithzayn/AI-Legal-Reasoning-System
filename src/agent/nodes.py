@@ -229,10 +229,12 @@ async def search_knowledge(state: AgentState) -> AgentState:
     logger.info("Hybrid search → fetching candidates...")
     try:
         query = state["query"]
+        response_lang = state.get("response_lang")
         results = await _retrieval.hybrid_search_with_rerank(
             query,
             initial_limit=config.SEARCH_CANDIDATES_FOR_RERANK,
             final_limit=config.CHUNKS_TO_LLM,
+            response_lang=response_lang,
         )
         elapsed = time.time() - start_time
         logger.info("Reranking done → %s chunks in %.1fs", len(results), elapsed)

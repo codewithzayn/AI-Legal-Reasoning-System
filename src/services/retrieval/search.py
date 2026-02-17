@@ -18,6 +18,7 @@ from src.config.logging_config import setup_logger
 from src.config.settings import config  # load_dotenv() runs here
 from src.services.common.embedder import DocumentEmbedder
 from src.services.protocols import EmbeddingService
+from src.utils.legal_glossary import expand_query_with_glossary
 from src.utils.retry import retry_async
 
 from .reranker import CohereReranker
@@ -1380,11 +1381,56 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         )
         return merged
 
+    async def _filter_by_language(self, results: list[dict], response_lang: str | None) -> list[dict]:
+        """Filter results by document language when response_lang is set.
+
+        Prefers documents matching the requested language. If filter yields
+        zero results, returns original (no filter) to preserve recall.
+        """
+        if not response_lang or not results:
+            return results
+        lang = response_lang.lower()
+        case_ids = list({(r.get("metadata") or {}).get("case_id", "") for r in results})
+        case_ids = [c for c in case_ids if c]
+        if not case_ids:
+            return results
+        try:
+            client = await self._get_client()
+            resp = (
+                await client.table("case_law")
+                .select("case_id, primary_language, available_languages")
+                .in_("case_id", case_ids)
+                .execute()
+            )
+            lang_map: dict[str, bool] = {}
+            for row in resp.data or []:
+                cid = row.get("case_id", "")
+                prim = (row.get("primary_language") or "").lower()
+                avail = row.get("available_languages") or []
+                avail_lower = [str(a).lower() for a in avail] if isinstance(avail, list) else []
+                matches = (
+                    (lang == "fi" and (prim in ("finnish", "fi") or "finnish" in avail_lower))
+                    or (lang == "sv" and (prim in ("swedish", "sv") or "swedish" in avail_lower))
+                    or (lang == "en" and (prim in ("english", "en") or "english" in avail_lower))
+                )
+                lang_map[cid] = matches
+            filtered = [r for r in results if lang_map.get((r.get("metadata") or {}).get("case_id", ""), True)]
+            if filtered:
+                logger.info("Language filter (%s): %s → %s chunks", response_lang, len(results), len(filtered))
+                return filtered
+        except Exception as exc:
+            logger.warning("Language filter failed (non-critical): %s", exc)
+        return results
+
     # ------------------------------------------------------------------
     # Main entry point: hybrid search + case-ID boost + multi-query + rerank
     # ------------------------------------------------------------------
     async def hybrid_search_with_rerank(  # noqa: C901, PLR0912, PLR0915
-        self, query_text: str, initial_limit: int = 20, final_limit: int = 10
+        self,
+        query_text: str,
+        initial_limit: int = 20,
+        final_limit: int = 10,
+        response_lang: str | None = None,
     ) -> list[dict]:
         """
         Full retrieval pipeline:
@@ -1400,6 +1446,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         direct_chunks: list[dict] = []
         search_results: list[dict] = []
 
+        # Glossary expansion: when user queries in en/sv, add Finnish terms for recall
+        search_query = query_text
+        if response_lang and response_lang.lower() in ("en", "sv"):
+            expanded = expand_query_with_glossary(query_text, response_lang)
+            if expanded != query_text:
+                search_query = expanded
+                logger.info("Glossary expansion: added Finnish terms for %s query", response_lang)
+
         async def _do_direct():
             if not mentioned_ids:
                 return []
@@ -1413,8 +1467,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         async def _do_search():
             if config.MULTI_QUERY_ENABLED:
-                return await self._multi_query_hybrid_search(query_text, limit=initial_limit)
-            return await self.hybrid_search(query_text, limit=initial_limit)
+                return await self._multi_query_hybrid_search(search_query, limit=initial_limit)
+            return await self.hybrid_search(search_query, limit=initial_limit)
 
         direct_chunks, search_results = await asyncio.gather(_do_direct(), _do_search())
 
@@ -1437,6 +1491,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         if not combined:
             return []
+
+        # --- Step 3b: Optional language filter (prefer docs in response language) ---
+        combined = await self._filter_by_language(combined, response_lang)
 
         # Log retrieved candidates before rerank (for debugging relevancy)
         logger.info(

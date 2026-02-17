@@ -82,7 +82,7 @@ TRANSLATIONS = {
     },
 }
 
-LANGUAGE_OPTIONS = {"English": "en", "Suomi": "fi", "Svenska": "sv"}
+LANGUAGE_OPTIONS = {"Auto": "auto", "English": "en", "Suomi": "fi", "Svenska": "sv"}
 DEFAULT_LANGUAGE = "en"
 
 
