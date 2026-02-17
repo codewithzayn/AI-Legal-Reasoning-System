@@ -144,29 +144,60 @@ async def reformulate_query(state: AgentState) -> AgentState:
     return state
 
 
+def _clarification_prompt(lang: str) -> str:
+    prompts = {
+        "en": "The user's legal question is too vague. Ask a polite follow-up question in English to clarify what they are looking for.",
+        "sv": "Användarens rättsliga fråga är för vag. Ställ en artig uppföljningsfråga på svenska för att förtydliga vad de söker.",
+        "fi": "Käyttäjän oikeudellinen kysymys on liian epämääräinen. Kysy kohtelias jatkokysymys suomeksi selvittääksesi mitä he etsivät.",
+    }
+    return prompts.get(lang, prompts["fi"])
+
+
+def _clarification_fallback(lang: str) -> str:
+    fallbacks = {
+        "en": "Could you please clarify your question? I'm not sure what you're asking about.",
+        "sv": "Kan du förtydliga din fråga? Jag är inte säker på vad du menar.",
+        "fi": "Voisitko tarkentaa kysymystäsi? En ole varma mitä asiaa tarkoitat.",
+    }
+    return fallbacks.get(lang, fallbacks["fi"])
+
+
 async def ask_clarification(state: AgentState) -> AgentState:
     """
     Node: Ask Clarification (Async)
     """
     state["stage"] = "clarify"
     query = state["query"]
+    lang = state.get("response_lang") or "fi"
 
     try:
+        prompt = _clarification_prompt(lang)
         response = await retry_async(
-            lambda: _llm_mini.ainvoke(
-                [
-                    SystemMessage(
-                        content="The user's legal question is too vague. Ask a polite follow-up question in Finnish to clarify what they are looking for."
-                    ),
-                    HumanMessage(content=query),
-                ]
-            )
+            lambda: _llm_mini.ainvoke([SystemMessage(content=prompt), HumanMessage(content=query)])
         )
         state["response"] = response.content
     except Exception:
-        state["response"] = "Voisitko tarkentaa kysymystäsi? En ole varma mitä asiaa tarkoitat."
+        state["response"] = _clarification_fallback(lang)
 
     return state
+
+
+def _general_chat_prompt(lang: str) -> str:
+    prompts = {
+        "en": "You are a helpful Finnish Legal Assistant. The user is engaging in general chat (greetings/thanks). Respond politely in English. If they ask who you are, explain that you are an AI assistant specialized in Finnish legislation and case law (KKO/KHO).",
+        "sv": "Du är en hjälpsam finsk juridisk assistent. Användaren har en allmän konversation (hälsningar/tack). Svara artigt på svenska. Om de frågar vem du är, förklara att du är en AI-assistent specialiserad på finsk lagstiftning och rättspraxis (KKO/KHO).",
+        "fi": "Olet avulias suomalainen oikeudellinen avustaja. Käyttäjä keskustelee yleisesti (tervehdykset/kiitokset). Vastaa kohteliaasti suomeksi. Jos he kysyvät kuka olet, kerro että olet tekoälyavustaja, joka on erikoistunut Suomen lainsäädäntöön ja oikeuskäytäntöön (KKO/KHO).",
+    }
+    return prompts.get(lang, prompts["fi"])
+
+
+def _general_chat_fallback(lang: str) -> str:
+    fallbacks = {
+        "en": "Hello! How can I help you with legal matters?",
+        "sv": "Hej! Hur kan jag hjälpa dig med rättsliga frågor?",
+        "fi": "Hei! Kuinka voin auttaa sinua oikeudellisissa asioissa?",
+    }
+    return fallbacks.get(lang, fallbacks["fi"])
 
 
 async def general_chat(state: AgentState) -> AgentState:
@@ -175,20 +206,16 @@ async def general_chat(state: AgentState) -> AgentState:
     """
     state["stage"] = "chat"
     query = state["query"]
-
-    system_prompt = """You are a helpful Finnish Legal Assistant.
-    The user is engaging in general chat (greetings/thanks).
-    Respond politely in Finnish.
-    If they ask who you are, explain that you are an AI assistant specialized in Finnish legislation and case law (KKO/KHO).
-    """
+    lang = state.get("response_lang") or "fi"
 
     try:
+        system_prompt = _general_chat_prompt(lang)
         response = await retry_async(
             lambda: _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
         )
         state["response"] = response.content
     except Exception:
-        state["response"] = "Hei! Kuinka voin auttaa sinua oikeudellisissa asioissa?"
+        state["response"] = _general_chat_fallback(lang)
 
     return state
 
@@ -226,18 +253,35 @@ async def search_knowledge(state: AgentState) -> AgentState:
     return state
 
 
+def _no_results_fallback(lang: str) -> str:
+    fallbacks = {
+        "en": "Based on the provided documents, I cannot find information on this topic. There are no relevant documents in the database.",
+        "sv": "Baserat på de angivna dokumenten kan jag inte hitta information om detta ämne. Det finns inga relevanta dokument i databasen.",
+        "fi": "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja.",
+    }
+    return fallbacks.get(lang, fallbacks["fi"])
+
+
+def _llm_error_fallback(lang: str) -> str:
+    fallbacks = {
+        "en": "Sorry, an error occurred while generating the response. Please try again.",
+        "sv": "Förlåt, ett fel uppstod vid generering av svaret. Försök igen.",
+        "fi": "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen.",
+    }
+    return fallbacks.get(lang, fallbacks["fi"])
+
+
 async def reason_legal(state: AgentState) -> AgentState:
     """
     Node 3: Legal reasoning with LLM (Async)
     """
     state["stage"] = "reason"
     results = state.get("search_results", [])
+    lang = state.get("response_lang") or "fi"
 
     if not results:
         logger.warning("No search results found")
-        state["response"] = (
-            "Annettujen asiakirjojen perusteella en löydä tietoa tästä aiheesta. Tietokannassa ei ole relevantteja asiakirjoja."
-        )
+        state["response"] = _no_results_fallback(lang)
         return state
 
     start_time = time.time()
@@ -247,14 +291,18 @@ async def reason_legal(state: AgentState) -> AgentState:
         logger.info("Focus case(s) for answer: %s", focus_case_ids)
     try:
         response = await _generator.agenerate_response(
-            query=state["query"], context_chunks=results, focus_case_ids=focus_case_ids or None
+            query=state["query"],
+            context_chunks=results,
+            focus_case_ids=focus_case_ids or None,
+            response_language=lang,
         )
         state["response"] = response
         elapsed = time.time() - start_time
         logger.info("Response ready in %.1fs", elapsed)
 
         # Relevancy check (optional, adds ~2-5s; set RELEVANCY_CHECK_ENABLED=true to enable)
-        if config.RELEVANCY_CHECK_ENABLED and response and not response.startswith("Pahoittelut"):
+        is_error_response = response and response.startswith(("Pahoittelut", "Sorry", "Förlåt"))
+        if config.RELEVANCY_CHECK_ENABLED and response and not is_error_response:
             try:
                 rel = await check_relevancy(state["query"], response)
                 state["relevancy_score"] = float(rel["score"])
@@ -269,11 +317,20 @@ async def reason_legal(state: AgentState) -> AgentState:
     except Exception as e:
         logger.error("LLM error: %s", e)
         state["error"] = f"LLM generation failed: {e!s}"
-        state["response"] = "Pahoittelut, vastauksen luomisessa tapahtui virhe. Yritä uudelleen."
+        state["response"] = _llm_error_fallback(lang)
         state["relevancy_score"] = None
         state["relevancy_reason"] = None
 
     return state
+
+
+def _respond_fallback(lang: str) -> str:
+    fallbacks = {
+        "en": "Sorry, the response could not be generated. Please try again.",
+        "sv": "Förlåt, svaret kunde inte genereras. Försök igen.",
+        "fi": "Pahoittelut, vastausta ei voitu luoda. Yritä uudelleen.",
+    }
+    return fallbacks.get(lang, fallbacks["fi"])
 
 
 async def generate_response(state: AgentState) -> AgentState:
@@ -281,8 +338,9 @@ async def generate_response(state: AgentState) -> AgentState:
     Node 4: Return final response (Async)
     """
     state["stage"] = "respond"
+    lang = state.get("response_lang") or "fi"
     if not state.get("response"):
-        state["response"] = "Pahoittelut, vastausta ei voitu luoda. Yritä uudelleen."
+        state["response"] = _respond_fallback(lang)
     return state
 
 

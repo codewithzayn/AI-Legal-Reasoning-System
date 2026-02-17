@@ -53,9 +53,36 @@ TRANSLATIONS = {
         "stream_connection_error": "Virhe yhteydessä: {error}",
         "query_too_long": "Kysymys on liian pitkä (max {max} merkkiä). Lyhennä kysymystäsi.",
     },
+    "sv": {
+        "page_title": "AI Rättsligt Resonemangssystem",
+        "header_title": "Finskt rättsligt resonemang",
+        "header_subtitle": "Fråga om lagar, rättspraxis och förordningar på finska eller engelska.",
+        "ask_question": "Ställ en fråga",
+        "send": "Skicka",
+        "welcome_title": "Välkommen",
+        "welcome_body": "Ställ din fråga nedan. Jag kan hjälpa till med finsk lagstiftning, KKO- och KHO-rättspraxis samt rättsliga definitioner — på finska eller engelska.",
+        "input_hint": "Fråga om finsk lag på finska eller engelska. Tryck Enter för att skicka.",
+        "placeholder": "Välkommen! Fråga mig om finsk lagstiftning.",
+        "settings": "Inställningar",
+        "sidebar_app_name": "Juridisk assistent",
+        "sidebar_tagline": "Finsk lag och rättspraxis (KKO, KHO)",
+        "language": "Språk",
+        "clear_chat": "Rensa chatt",
+        "system": "System",
+        "messages_count": "Ställda frågor: {count}",
+        "spinner_searching": "Söker i kunskapsbasen...",
+        "stream_analyzing": "Analyserar frågan...",
+        "stream_searching": "Söker... (Hittade {count} resultat)",
+        "stream_reformulating": "Inga sökresultat. Förfinar sökningen: '{query}'...",
+        "stream_relevancy": "Relevans: {score}/5. {reason}",
+        "stream_relevancy_short": "Relevans: {score}/5.",
+        "stream_error": "Fel: {error}",
+        "stream_connection_error": "Anslutningsfel: {error}",
+        "query_too_long": "Frågan är för lång (max {max} tecken). Förkorta din fråga.",
+    },
 }
 
-LANGUAGE_OPTIONS = {"English": "en", "Suomi": "fi"}
+LANGUAGE_OPTIONS = {"English": "en", "Suomi": "fi", "Svenska": "sv"}
 DEFAULT_LANGUAGE = "en"
 
 

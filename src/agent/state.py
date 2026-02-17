@@ -46,3 +46,6 @@ class AgentState(TypedDict):
 
     # Error handling
     error: str | None
+
+    # Response language: "en" | "fi" | "sv" (matches UI language selector)
+    response_lang: str | None

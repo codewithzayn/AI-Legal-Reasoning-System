@@ -16,12 +16,12 @@ logger = setup_logger(__name__)
 
 def _strip_relevancy_line(text: str) -> str:
     """Remove any trailing relevancy score line so it is never shown to the user."""
-    if not text or "Relevanssi:" not in text:
+    if not text:
         return text
     lines = text.split("\n")
     out = []
     for line in lines:
-        if "Relevanssi:" in line and ("/5" in line or "5/5" in line):
+        if ("Relevanssi:" in line or "Relevancy:" in line) and ("/5" in line or "5/5" in line):
             continue
         out.append(line)
     return "\n".join(out).rstrip()
@@ -33,7 +33,7 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
 
     Args:
         user_query: User's question
-        lang: Language code for UI messages ("en" or "fi")
+        lang: Language code for UI and response ("en", "fi", or "sv")
 
     Yields:
         Response chunks as they're generated
@@ -54,6 +54,7 @@ async def stream_query_response(user_query: str, lang: str = "en") -> AsyncItera
         "relevancy_score": None,
         "relevancy_reason": None,
         "error": None,
+        "response_lang": lang or "fi",
     }
 
     try:
