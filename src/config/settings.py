@@ -53,6 +53,21 @@ class Config:
     # Multi-query expansion: generate alternative queries via LLM to improve recall.
     # Set to "false" to disable (saves 1 cheap LLM call per question).
     MULTI_QUERY_ENABLED: bool = (os.getenv("MULTI_QUERY_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
+    # When true: skip multi-query expansion when user explicitly mentions a case ID (e.g. KKO:2024:76).
+    # Saves 2 LLM calls + 2 hybrid searches; direct lookup + single search suffice.
+    MULTI_QUERY_SKIP_WHEN_CASE_ID: bool = (os.getenv("MULTI_QUERY_SKIP_WHEN_CASE_ID", "true")).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+    # When true: ask for year range when user's legal query has no case ID and no year specified.
+    # Set to "false" to skip and search all years.
+    YEAR_CLARIFICATION_ENABLED: bool = (os.getenv("YEAR_CLARIFICATION_ENABLED", "true")).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
     # Query-time answer generator (user asks a question). Default: cheaper/fast.
     OPENAI_CHAT_MODEL: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
@@ -124,7 +139,7 @@ PAGE_CONFIG = {
     "page_title": APP_TITLE,
     "page_icon": APP_ICON,
     "layout": "centered",
-    "initial_sidebar_state": "collapsed",
+    "initial_sidebar_state": "expanded",
 }
 
 # Chat Configuration

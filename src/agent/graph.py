@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 from .nodes import (
     analyze_intent,
     ask_clarification,
+    ask_year_clarification,
     general_chat,
     generate_response,
     handle_error,
@@ -20,13 +21,14 @@ from .nodes import (
 from .state import AgentState
 
 
-def route_intent(state: AgentState) -> Literal["search", "chat", "clarify"]:
+def route_intent(state: AgentState) -> Literal["search", "chat", "clarify", "clarify_year"]:
     """Route based on analysis intent"""
     intent = state.get("intent", "search")
     intent_map = {
         "legal_search": "search",
         "general_chat": "chat",
         "clarification": "clarify",
+        "year_clarification": "clarify_year",
     }
     return intent_map.get(intent, "search")
 
@@ -63,6 +65,7 @@ def create_agent_graph() -> StateGraph:
     workflow.add_node("reason", reason_legal)
     workflow.add_node("reformulate", reformulate_query)
     workflow.add_node("clarify", ask_clarification)
+    workflow.add_node("clarify_year", ask_year_clarification)
     workflow.add_node("chat", general_chat)
     workflow.add_node("respond", generate_response)
     workflow.add_node("error", handle_error)
@@ -70,8 +73,12 @@ def create_agent_graph() -> StateGraph:
     # Define edges
     workflow.set_entry_point("analyze")
 
-    # Conditional Edge: Analyze -> (Search | Chat | Clarify)
-    workflow.add_conditional_edges("analyze", route_intent, {"search": "search", "chat": "chat", "clarify": "clarify"})
+    # Conditional Edge: Analyze -> (Search | Chat | Clarify | ClarifyYear)
+    workflow.add_conditional_edges(
+        "analyze",
+        route_intent,
+        {"search": "search", "chat": "chat", "clarify": "clarify", "clarify_year": "clarify_year"},
+    )
 
     # Conditional Edge: Search -> (Reason | Reformulate)
     workflow.add_conditional_edges("search", route_search_result, {"reason": "reason", "reformulate": "reformulate"})
@@ -83,6 +90,7 @@ def create_agent_graph() -> StateGraph:
     workflow.add_edge("reason", "respond")
     workflow.add_edge("chat", END)
     workflow.add_edge("clarify", END)
+    workflow.add_edge("clarify_year", END)
     workflow.add_edge("respond", END)
     workflow.add_edge("error", END)
 

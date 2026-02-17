@@ -20,6 +20,8 @@ from src.agent.stream import stream_query_response
 from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR, config, validate_env_for_app
 from src.config.translations import LANGUAGE_OPTIONS, t
 from src.utils.chat_helpers import add_message, clear_chat_history, get_chat_history, initialize_chat_history
+from src.utils.query_context import resolve_query_with_context
+from src.utils.year_filter import parse_year_response
 
 THEME_PRIMARY = "#0f172a"
 THEME_PRIMARY_LIGHT = "#1e293b"
@@ -221,13 +223,53 @@ def _inject_custom_css() -> None:
     )
 
 
+def _is_year_clarification_message(msg: str, lang: str) -> bool:
+    """True if msg is (or contains) the year clarification question (any language).
+
+    Stored messages may include stream prefixes like 'Analyzing question...' before
+    the clarification text, so we check for containment, not exact match.
+    """
+    content = (msg or "").strip()
+    return any(t("year_clarification", code).strip() in content for code in ("en", "fi", "sv"))
+
+
 def _process_prompt(prompt: str) -> None:
     lang = _get_lang()
+    chat_history = get_chat_history()
+    original_query = None
+    year_range = None
+
+    if len(chat_history) >= 2:
+        last_msg = chat_history[-1]
+        prev_msg = chat_history[-2]
+        if (
+            last_msg.get("role") == "assistant"
+            and _is_year_clarification_message(last_msg.get("content", ""), lang)
+            and prev_msg.get("role") == "user"
+        ):
+            original_query = prev_msg.get("content", "").strip()
+            parsed = parse_year_response(prompt)
+            year_range = parsed
+
+    if original_query is None:
+        effective_query, ctx_year = resolve_query_with_context(prompt, chat_history)
+        if ctx_year is not None or effective_query != prompt:
+            original_query = effective_query
+            year_range = ctx_year
+
     add_message("user", prompt)
     with st.chat_message("user", avatar=USER_AVATAR):
         st.write(prompt)
     with st.chat_message("assistant", avatar=ASSISTANT_AVATAR), st.spinner(t("spinner_searching", lang)):
-        response = st.write_stream(stream_query_response(prompt, lang=lang))
+        if original_query:
+            yr = year_range if year_range is not None else (None, None)
+            response = st.write_stream(
+                stream_query_response(
+                    prompt, lang=lang, original_query_for_year=original_query, year_range=yr, chat_history=chat_history
+                )
+            )
+        else:
+            response = st.write_stream(stream_query_response(prompt, lang=lang, chat_history=chat_history))
     add_message("assistant", response)
 
 

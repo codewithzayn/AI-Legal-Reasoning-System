@@ -49,3 +49,13 @@ class AgentState(TypedDict):
 
     # Response language: "en" | "fi" | "sv" (matches UI language selector)
     response_lang: str | None
+
+    # Year filter for case-law search (inclusive). When set, only cases in this range.
+    year_start: int | None
+    year_end: int | None
+
+    # True when UI detected year clarification reply (user already answered; do not ask again).
+    year_clarification_answered: bool
+
+    # Optional queue for streaming LLM tokens (reason node puts chunks here)
+    stream_queue: object | None

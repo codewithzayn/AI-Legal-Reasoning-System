@@ -1422,6 +1422,34 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Language filter failed (non-critical): %s", exc)
         return results
 
+    @staticmethod
+    def _filter_by_year(results: list[dict], year_start: int | None, year_end: int | None) -> list[dict]:
+        """Filter results to cases within [year_start, year_end] inclusive."""
+        if year_start is None and year_end is None:
+            return results
+        if not results:
+            return results
+        filtered = []
+        for r in results:
+            meta = r.get("metadata") or {}
+            year = meta.get("year") or meta.get("case_year")
+            if year is None:
+                filtered.append(r)  # keep if no year (e.g. statutes)
+                continue
+            try:
+                y = int(year)
+            except (ValueError, TypeError):
+                filtered.append(r)
+                continue
+            if year_start is not None and y < year_start:
+                continue
+            if year_end is not None and y > year_end:
+                continue
+            filtered.append(r)
+        if filtered:
+            logger.info("Year filter (%s-%s): %s → %s chunks", year_start, year_end, len(results), len(filtered))
+        return filtered
+
     # ------------------------------------------------------------------
     # Main entry point: hybrid search + case-ID boost + multi-query + rerank
     # ------------------------------------------------------------------
@@ -1431,6 +1459,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         initial_limit: int = 20,
         final_limit: int = 10,
         response_lang: str | None = None,
+        year_start: int | None = None,
+        year_end: int | None = None,
     ) -> list[dict]:
         """
         Full retrieval pipeline:
@@ -1466,7 +1496,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             return out
 
         async def _do_search():
-            if config.MULTI_QUERY_ENABLED:
+            use_multi = config.MULTI_QUERY_ENABLED and not (config.MULTI_QUERY_SKIP_WHEN_CASE_ID and mentioned_ids)
+            if use_multi:
                 return await self._multi_query_hybrid_search(search_query, limit=initial_limit)
             return await self.hybrid_search(search_query, limit=initial_limit)
 
@@ -1494,6 +1525,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         # --- Step 3b: Optional language filter (prefer docs in response language) ---
         combined = await self._filter_by_language(combined, response_lang)
+
+        # --- Step 3c: Optional year filter (limit to case_year range) ---
+        combined = self._filter_by_year(combined, year_start, year_end)
 
         # Log retrieved candidates before rerank (for debugging relevancy)
         logger.info(

@@ -53,6 +53,8 @@ class RetrievalService(Protocol):
         initial_limit: int = 20,
         final_limit: int = 10,
         response_lang: str | None = None,
+        year_start: int | None = None,
+        year_end: int | None = None,
     ) -> list[dict]:
         """Full retrieval pipeline: hybrid search → rerank → boost → diversity cap."""
         ...

@@ -222,7 +222,7 @@ class LLMGenerator:
         response_language: "fi", "en", or "sv" — controls output language.
         """
         context = self._build_context(context_chunks)
-        user_content = self._build_user_content(query, context, focus_case_ids)
+        user_content = self._build_user_content(query, context, focus_case_ids, response_language)
         system_prompt = _build_system_prompt(response_language)
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
 
@@ -245,14 +245,20 @@ class LLMGenerator:
         context_chunks: list[dict],
         focus_case_ids: list[str] | None = None,
         response_language: str = "fi",
+        conversation_history: list[dict] | None = None,
     ) -> str:
         """
         Generate response with citations (Asynchronous).
         If focus_case_ids is set, answer is focused on that/those case(s).
-        response_language: "fi", "en", or "sv" — controls output language.
+        conversation_history: optional recent chat messages for context.
         """
+        from src.utils.query_context import get_recent_context_for_llm
+
+        conv_context = get_recent_context_for_llm(conversation_history or [], max_turns=2) or ""
         context = self._build_context(context_chunks)
-        user_content = self._build_user_content(query, context, focus_case_ids)
+        user_content = self._build_user_content(
+            query, context, focus_case_ids, response_language, conversation_context=conv_context
+        )
         system_prompt = _build_system_prompt(response_language)
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
 
@@ -272,10 +278,16 @@ class LLMGenerator:
         context_chunks: list[dict],
         focus_case_ids: list[str] | None = None,
         response_language: str = "fi",
+        conversation_history: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Stream response with citations. If focus_case_ids set, answer focuses on that case."""
+        from src.utils.query_context import get_recent_context_for_llm
+
+        conv_context = get_recent_context_for_llm(conversation_history or [], max_turns=2) or ""
         context = self._build_context(context_chunks)
-        user_content = self._build_user_content(query, context, focus_case_ids)
+        user_content = self._build_user_content(
+            query, context, focus_case_ids, response_language, conversation_context=conv_context
+        )
         system_prompt = _build_system_prompt(response_language)
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
 
@@ -283,12 +295,50 @@ class LLMGenerator:
             if chunk.content:
                 yield chunk.content
 
-    def _build_user_content(self, query: str, context: str, focus_case_ids: list[str] | None = None) -> str:
+    def _build_user_content(
+        self,
+        query: str,
+        context: str,
+        focus_case_ids: list[str] | None = None,
+        response_language: str = "fi",
+        conversation_context: str = "",
+    ) -> str:
         """Build the user message; when focus_case_ids is set, add instruction to focus on that case."""
-        base = f"KYSYMYS: {query}\n\nKONTEKSTI:\n{context}"
+        labels = {
+            "en": (
+                "QUESTION",
+                "CONTEXT",
+                "NOTE: The question refers to case(s): {}. Base your answer primarily on this case. Cite others only if the question requires comparison or the focus case explicitly references them.",
+            ),
+            "sv": (
+                "FRÅGA",
+                "KONTEXT",
+                "OBS: Frågan avser fall: {}. Basera ditt svar främst på detta fall. Citera andra endast om frågan kräver jämförelse eller fokusfallet uttryckligen refererar till dem.",
+            ),
+            "fi": (
+                "KYSYMYS",
+                "KONTEKSTI",
+                "HUOM: Kysymys viittaa tapaukseen/tapauksiin: {}. Perustele vastauksesi ensisijaisesti tähän tapaukseen. Viittaa muihin tapauksiin vain, jos kysymys niin vaatii tai kyseinen tapaus niihin nimenomaisesti viittaa. Älä laimenta vastausta muilla tapauksilla.",
+            ),
+        }
+        lang = response_language or "fi"
+        q_label, c_label, focus_tpl = labels.get(lang, labels["fi"])
+        prefix = f"{conversation_context}" if conversation_context else ""
+        base = f"{prefix}{q_label}: {query}\n\n{c_label}:\n{context}"
         if focus_case_ids:
             cases_str = ", ".join(focus_case_ids)
-            base += f"\n\nHUOM: Kysymys viittaa tapaukseen/tapauksiin: {cases_str}. Perustele vastauksesi ensisijaisesti tähän tapaukseen. Viittaa muihin tapauksiin vain, jos kysymys niin vaatii tai kyseinen tapaus niihin nimenomaisesti viittaa. Älä laimenta vastausta muilla tapauksilla."
+            base += f"\n\n{focus_tpl.format(cases_str)}"
+            # Case-specific: structure as bullet points, be comprehensive
+            if lang == "en":
+                base += "\n\nFORMAT FOR THIS CASE-SPECIFIC QUERY: Structure your answer with bullet points. Include: • Keywords / Legal domains • Case year • Key facts / Background • Legal issues • Reasoning • Resolution / Outcome • Sources. Be comprehensive—include all relevant details from the case."
+            elif lang == "sv":
+                base += "\n\nFORMAT FÖR DENNA FALLSPECIFIKA FRÅGA: Strukturera ditt svar med punkter. Inkludera: • Nyckelord / Rättsliga områden • År • Huvudfakta / Bakgrund • Rättsliga frågor • Motivering • Beslut / Resultat • Källor. Var uttömmande—inkludera alla relevanta detaljer från fallet."
+            else:
+                base += "\n\nTAPAU KOHTAINEN MUOTOILU: Muotoile vastauksesi luettelomerkein. Sisällytä: • Asiasanat / Oikeusalueet • Vuosi • Keskeiset tosiasiat / Tausta • Oikeudelliset kysymykset • Perustelut • Ratkaisu / Tulos • Lähteet. Ole kattava—sisällytä kaikki tapaukseen liittyvät oleelliset tiedot."
+        if lang == "en":
+            base += "\n\nIMPORTANT: The context is in Finnish. When explaining Finnish legal terms (e.g. kavallus, petos, varkaus, vahingonkorvaus), use their English equivalents (embezzlement, fraud, theft, damages) — do NOT leave Finnish terms untranslated in your answer."
+        elif lang == "sv":
+            base += "\n\nVIKTIGT: Kontexten är på finska. När du förklarar finska rättstermer (t.ex. kavallus, petos, varkaus, vahingonkorvaus), använd deras svenska motsvarigheter (förskingring, bedrägeri, stöld, skadestånd) — lämna INTE finska termer oöversatta i ditt svar."
         return base
 
     def _build_context(self, chunks: list[dict]) -> str:

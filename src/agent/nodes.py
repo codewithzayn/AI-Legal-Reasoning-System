@@ -14,6 +14,7 @@ from src.services.retrieval import HybridRetrieval
 from src.services.retrieval.generator import LLMGenerator
 from src.services.retrieval.relevancy import check_relevancy
 from src.utils.retry import retry_async
+from src.utils.year_filter import extract_year_range, has_year_in_query
 
 from .state import AgentState
 
@@ -26,33 +27,58 @@ _generator = LLMGenerator()  # model from config.OPENAI_CHAT_MODEL (e.g. gpt-4o 
 _retrieval = HybridRetrieval()  # singleton: reuses Supabase client, embedder, reranker across searches
 
 
+_LEGAL_TOPIC_MARKERS = (
+    "kko",
+    "kho",
+    "laki",
+    "§",
+    "pykälä",
+    "tuomio",
+    "rangaistus",
+    "edellyty",
+    "milloin",
+    "missä tapauksessa",
+    "rikos",
+    "sopimus",
+    "oikeus",
+    "finlex",
+    "ennakkopäätös",
+    "tuomioistuin",
+    "syyte",
+    "valitus",
+    "hakemus",
+    "fraud",
+    "petos",
+    "theft",
+    "varkaus",
+    "embezzlement",
+    "kavallus",
+    "consequences",
+    "seuraus",
+    "korvaus",
+    "damages",
+    "vahingonkorvaus",
+    "liability",
+    "vastuu",
+    "case",
+    "tapaus",
+)
+
+
 def _is_obvious_legal_query(query: str) -> bool:
     """Fast path: skip LLM when query is clearly a legal question."""
     if not query or len(query.strip()) < 3:
         return False
     q = query.strip().lower()
-    legal_markers = (
-        "kko",
-        "kho",
-        "laki",
-        "§",
-        "pykälä",
-        "tuomio",
-        "rangaistus",
-        "edellyty",
-        "milloin",
-        "missä tapauksessa",
-        "rikos",
-        "sopimus",
-        "oikeus",
-        "finlex",
-        "ennakkopäätös",
-        "tuomioistuin",
-        "syyte",
-        "valitus",
-        "hakemus",
-    )
-    return any(m in q for m in legal_markers) or len(q) > 40
+    return any(m in q for m in _LEGAL_TOPIC_MARKERS) or len(q) > 40
+
+
+def _has_legal_topic_keyword(query: str) -> bool:
+    """True if query mentions a legal topic (used to override over-strict clarification)."""
+    if not query or len(query.strip()) < 2:
+        return False
+    q = query.strip().lower()
+    return any(m in q for m in _LEGAL_TOPIC_MARKERS)
 
 
 async def analyze_intent(state: AgentState) -> AgentState:
@@ -67,23 +93,60 @@ async def analyze_intent(state: AgentState) -> AgentState:
         state["original_query"] = query
         state["search_attempts"] = 0
 
-    # Fast path: skip LLM for obvious legal questions (saves ~1-2s)
-    if _is_obvious_legal_query(query):
-        logger.info("Fast path: legal_search (no LLM)")
+    # Preserve year from UI (year clarification reply); do not ask again
+    if state.get("year_start") is not None or state.get("year_end") is not None:
         return {
             "intent": "legal_search",
             "stage": "analyze",
             "original_query": state.get("original_query", query),
             "search_attempts": 0,
+            "year_start": state.get("year_start"),
+            "year_end": state.get("year_end"),
+        }
+
+    # User already answered year clarification (e.g. "all") — proceed to search, do not ask again
+    if state.get("year_clarification_answered"):
+        return {
+            "intent": "legal_search",
+            "stage": "analyze",
+            "original_query": state.get("original_query", query),
+            "search_attempts": 0,
+            "year_start": state.get("year_start"),
+            "year_end": state.get("year_end"),
+        }
+
+    # Fast path: skip LLM for obvious legal questions (saves ~1-2s)
+    if _is_obvious_legal_query(query):
+        mentioned_ids = HybridRetrieval.extract_case_ids(query)
+        year_start, year_end = extract_year_range(query)
+        # Year clarification: broad legal query, no case ID, no year
+        if config.YEAR_CLARIFICATION_ENABLED and not mentioned_ids and not has_year_in_query(query):
+            logger.info("Year clarification needed (broad query, no year)")
+            return {
+                "intent": "year_clarification",
+                "stage": "analyze",
+                "original_query": state.get("original_query", query),
+                "search_attempts": 0,
+                "year_start": None,
+                "year_end": None,
+            }
+        return {
+            "intent": "legal_search",
+            "stage": "analyze",
+            "original_query": state.get("original_query", query),
+            "search_attempts": 0,
+            "year_start": year_start,
+            "year_end": year_end,
         }
 
     logger.info("Analyzing intent...")
 
     system_prompt = """Classify the user's input into exactly one category:
-    1. 'legal_search': Questions about Finnish law, court cases, penalties, rights, or legal definitions.
+    1. 'legal_search': Questions about Finnish law, court cases, penalties, rights, or legal definitions. Include ANY query that mentions a legal topic (fraud, contract, theft, consequences, damages, etc.).
     2. 'general_chat': Greetings (Hi, Hello), thanks, or questions about you (Who are you?).
-    3. 'clarification': The query is too vague to search (e.g., "What is the penalty?", "Does it apply?").
+    3. 'clarification': ONLY when there is NO identifiable legal subject at all (e.g. "What is the penalty?" with no context, "Does it apply?").
 
+    If the user mentions a legal topic (fraud, petos, contract, theft, consequences, etc.), ALWAYS use legal_search. Do NOT ask for clarification when a legal topic is clear.
     Return ONLY the category name.
     """
 
@@ -94,6 +157,19 @@ async def analyze_intent(state: AgentState) -> AgentState:
         intent = response.content.strip().lower()
         if intent not in ["legal_search", "general_chat", "clarification"]:
             intent = "legal_search"
+        if intent == "clarification" and _has_legal_topic_keyword(query):
+            intent = "legal_search"
+
+        mentioned_ids = HybridRetrieval.extract_case_ids(query)
+        year_start, year_end = extract_year_range(query)
+        if (
+            intent == "legal_search"
+            and config.YEAR_CLARIFICATION_ENABLED
+            and not mentioned_ids
+            and not has_year_in_query(query)
+        ):
+            intent = "year_clarification"
+            year_start, year_end = None, None
 
         logger.info("Intent: %s", intent)
         return {
@@ -101,11 +177,13 @@ async def analyze_intent(state: AgentState) -> AgentState:
             "stage": "analyze",
             "original_query": state.get("original_query", query),
             "search_attempts": 0,
+            "year_start": year_start,
+            "year_end": year_end,
         }
 
     except Exception as e:
         logger.error("Intent error: %s", e)
-        return {"intent": "legal_search", "stage": "analyze"}
+        return {"intent": "legal_search", "stage": "analyze", "year_start": None, "year_end": None}
 
 
 async def reformulate_query(state: AgentState) -> AgentState:
@@ -160,6 +238,23 @@ def _clarification_fallback(lang: str) -> str:
         "fi": "Voisitko tarkentaa kysymystäsi? En ole varma mitä asiaa tarkoitat.",
     }
     return fallbacks.get(lang, fallbacks["fi"])
+
+
+def _year_clarification_message(lang: str) -> str:
+    """Return the year clarification question in the given language."""
+    from src.config.translations import t
+
+    return t("year_clarification", lang)
+
+
+async def ask_year_clarification(state: AgentState) -> AgentState:
+    """
+    Node: Ask which years' court decisions to search (when broad query, no year).
+    """
+    state["stage"] = "clarify_year"
+    lang = state.get("response_lang") or "fi"
+    state["response"] = _year_clarification_message(lang)
+    return state
 
 
 async def ask_clarification(state: AgentState) -> AgentState:
@@ -230,11 +325,15 @@ async def search_knowledge(state: AgentState) -> AgentState:
     try:
         query = state["query"]
         response_lang = state.get("response_lang")
+        year_start = state.get("year_start")
+        year_end = state.get("year_end")
         results = await _retrieval.hybrid_search_with_rerank(
             query,
             initial_limit=config.SEARCH_CANDIDATES_FOR_RERANK,
             final_limit=config.CHUNKS_TO_LLM,
             response_lang=response_lang,
+            year_start=year_start,
+            year_end=year_end,
         )
         elapsed = time.time() - start_time
         logger.info("Reranking done → %s chunks in %.1fs", len(results), elapsed)
@@ -284,6 +383,9 @@ async def reason_legal(state: AgentState) -> AgentState:
     if not results:
         logger.warning("No search results found")
         state["response"] = _no_results_fallback(lang)
+        stream_queue = state.get("stream_queue")
+        if stream_queue is not None:
+            await stream_queue.put(None)
         return state
 
     start_time = time.time()
@@ -292,13 +394,32 @@ async def reason_legal(state: AgentState) -> AgentState:
     if focus_case_ids:
         logger.info("Focus case(s) for answer: %s", focus_case_ids)
     try:
-        response = await _generator.agenerate_response(
-            query=state["query"],
-            context_chunks=results,
-            focus_case_ids=focus_case_ids or None,
-            response_language=lang,
-        )
-        state["response"] = response
+        stream_queue = state.get("stream_queue")
+        if stream_queue is not None:
+            response_parts: list[str] = []
+            try:
+                async for chunk in _generator.astream_response(
+                    query=state["query"],
+                    context_chunks=results,
+                    focus_case_ids=focus_case_ids or None,
+                    response_language=lang,
+                    conversation_history=state.get("messages") or None,
+                ):
+                    response_parts.append(chunk)
+                    await stream_queue.put(chunk)
+                response = "".join(response_parts)
+            finally:
+                await stream_queue.put(None)
+            state["response"] = response
+        else:
+            response = await _generator.agenerate_response(
+                query=state["query"],
+                context_chunks=results,
+                focus_case_ids=focus_case_ids or None,
+                response_language=lang,
+                conversation_history=state.get("messages") or None,
+            )
+            state["response"] = response
         elapsed = time.time() - start_time
         logger.info("Response ready in %.1fs", elapsed)
 
