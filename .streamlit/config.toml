@@ -14,14 +14,14 @@ enableWebsocketCompression = false
 # Theme: legal-AI look (aligned with app.py THEME_* tokens)
 [theme]
 base = "light"
-primaryColor = "#0f172a"
+primaryColor = "#2563eb"
 backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f8fafc"
 textColor = "#0f172a"
 font = "sans serif"
 
 [theme.light]
-primaryColor = "#0f172a"
+primaryColor = "#2563eb"
 backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f8fafc"
 textColor = "#0f172a"

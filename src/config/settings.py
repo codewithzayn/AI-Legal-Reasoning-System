@@ -51,7 +51,7 @@ class Config:
     )
 
     # Multi-query expansion: generate alternative queries via LLM to improve recall.
-    # Set to "false" to disable (saves 1 cheap LLM call per question).
+    # Set to "false" to disable (saves 1 LLM call + 2 hybrid searches; uses single hybrid search).
     MULTI_QUERY_ENABLED: bool = (os.getenv("MULTI_QUERY_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
     # When true: skip multi-query expansion when user explicitly mentions a case ID (e.g. KKO:2024:76).
     # Saves 2 LLM calls + 2 hybrid searches; direct lookup + single search suffice.
@@ -60,6 +60,10 @@ class Config:
         "1",
         "yes",
     )
+
+    # Reformulate: when search returns 0 results, rewrite query and retry (up to 2 attempts).
+    # Set to "false" to skip reformulation and go straight to "I couldn't find" apology.
+    REFORMULATE_ENABLED: bool = (os.getenv("REFORMULATE_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
 
     # When true: ask for year range when user's legal query has no case ID and no year specified.
     # Set to "false" to skip and search all years.

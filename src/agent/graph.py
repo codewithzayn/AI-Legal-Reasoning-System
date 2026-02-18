@@ -7,6 +7,8 @@ from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
+from src.config.settings import config
+
 from .nodes import (
     analyze_intent,
     ask_clarification,
@@ -39,15 +41,14 @@ def route_search_result(state: AgentState) -> Literal["reason", "reformulate"]:
     attempts = state.get("search_attempts", 1)
 
     if results:
-        # Found something -> Reason
+        return "reason"
+
+    if not config.REFORMULATE_ENABLED:
         return "reason"
 
     if attempts >= 2:
-        # Give up after 2 attempts → reason (will generate apology).
-        # More retries just waste time when the DB cannot find matches.
         return "reason"
 
-    # Formatting failed -> Try again
     return "reformulate"
 
 

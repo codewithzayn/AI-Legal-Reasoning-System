@@ -1551,11 +1551,23 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         if config.RERANK_ENABLED:
             logger.info("Reranking...")
             rerank_start = time.time()
-            reranker = self._get_reranker()
-            rerank_n = min(config.RERANK_MAX_DOCS, len(combined))
-            reranked = reranker.rerank(query_text, combined[:rerank_n], top_k=rerank_n)
-            logger.info("Rerank done → top %s in %.1fs", len(reranked), time.time() - rerank_start)
-            reranked = self._rrf_blend_scores(reranked, k=60)
+            try:
+                reranker = self._get_reranker()
+                rerank_n = min(config.RERANK_MAX_DOCS, len(combined))
+                reranked = reranker.rerank(query_text, combined[:rerank_n], top_k=rerank_n)
+                logger.info("Rerank done → top %s in %.1fs", len(reranked), time.time() - rerank_start)
+                reranked = self._rrf_blend_scores(reranked, k=60)
+            except Exception as rerank_err:
+                logger.warning(
+                    "Rerank failed (%s), falling back to hybrid order (no reformulate): %s",
+                    type(rerank_err).__name__,
+                    rerank_err,
+                )
+                reranked = combined[: min(config.RERANK_MAX_DOCS, len(combined))]
+                for r in reranked:
+                    base = r.get("score", 0) or 0.3
+                    r["rerank_score"] = base
+                    r["blended_score"] = base
         else:
             # Fast mode: use pre-rerank order (RRF from hybrid), apply exact-match boost only
             reranked = combined[: min(config.RERANK_MAX_DOCS, len(combined))]

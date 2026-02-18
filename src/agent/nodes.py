@@ -14,7 +14,8 @@ from src.services.retrieval import HybridRetrieval
 from src.services.retrieval.generator import LLMGenerator
 from src.services.retrieval.relevancy import check_relevancy
 from src.utils.retry import retry_async
-from src.utils.year_filter import extract_year_range, has_year_in_query
+from src.utils.year_filter import extract_year_range
+from src.utils.year_llm import interpret_year_scope_from_query_async
 
 from .state import AgentState
 
@@ -119,17 +120,38 @@ async def analyze_intent(state: AgentState) -> AgentState:
     if _is_obvious_legal_query(query):
         mentioned_ids = HybridRetrieval.extract_case_ids(query)
         year_start, year_end = extract_year_range(query)
-        # Year clarification: broad legal query, no case ID, no year
-        if config.YEAR_CLARIFICATION_ENABLED and not mentioned_ids and not has_year_in_query(query):
-            logger.info("Year clarification needed (broad query, no year)")
-            return {
-                "intent": "year_clarification",
-                "stage": "analyze",
-                "original_query": state.get("original_query", query),
-                "search_attempts": 0,
-                "year_start": None,
-                "year_end": None,
-            }
+        if config.YEAR_CLARIFICATION_ENABLED and not mentioned_ids:
+            # Use LLM to understand: specific year, all years, or ask
+            scope, ys, ye = await interpret_year_scope_from_query_async(query)
+            if scope == "all":
+                logger.info("User wants all years (LLM), skipping clarification")
+                return {
+                    "intent": "legal_search",
+                    "stage": "analyze",
+                    "original_query": state.get("original_query", query),
+                    "search_attempts": 0,
+                    "year_start": None,
+                    "year_end": None,
+                }
+            if scope == "specific" and ys is not None:
+                return {
+                    "intent": "legal_search",
+                    "stage": "analyze",
+                    "original_query": state.get("original_query", query),
+                    "search_attempts": 0,
+                    "year_start": ys,
+                    "year_end": ye,
+                }
+            if scope == "ask" or (scope == "specific" and ys is None):
+                logger.info("Year clarification needed (broad query, no year)")
+                return {
+                    "intent": "year_clarification",
+                    "stage": "analyze",
+                    "original_query": state.get("original_query", query),
+                    "search_attempts": 0,
+                    "year_start": None,
+                    "year_end": None,
+                }
         return {
             "intent": "legal_search",
             "stage": "analyze",
@@ -162,14 +184,17 @@ async def analyze_intent(state: AgentState) -> AgentState:
 
         mentioned_ids = HybridRetrieval.extract_case_ids(query)
         year_start, year_end = extract_year_range(query)
-        if (
-            intent == "legal_search"
-            and config.YEAR_CLARIFICATION_ENABLED
-            and not mentioned_ids
-            and not has_year_in_query(query)
-        ):
-            intent = "year_clarification"
-            year_start, year_end = None, None
+        if intent == "legal_search" and config.YEAR_CLARIFICATION_ENABLED and not mentioned_ids:
+            scope, ys, ye = await interpret_year_scope_from_query_async(query)
+            if scope == "all":
+                intent = "legal_search"
+                year_start, year_end = None, None
+            elif scope == "specific" and ys is not None:
+                intent = "legal_search"
+                year_start, year_end = ys, ye
+            else:
+                intent = "year_clarification"
+                year_start, year_end = None, None
 
         logger.info("Intent: %s", intent)
         return {

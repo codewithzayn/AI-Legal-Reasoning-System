@@ -26,6 +26,10 @@ TRANSLATIONS = {
         "stream_connection_error": "Connection error: {error}",
         "query_too_long": "Query too long (max {max} characters). Please shorten your question.",
         "year_clarification": "Which years' court decisions would you like to search? Specify a range (e.g. 2010–2020) or say 'all' for no filter.",
+        "templates_heading": "Example questions",
+        "templates_hint": "Click to add to input field — edit, then press Enter to search.",
+        "edit_template_label": "Edit your question",
+        "cancel": "Cancel",
     },
     "fi": {
         "page_title": "Tekoälypohjainen oikeudellinen päättelyjärjestelmä",
@@ -54,6 +58,10 @@ TRANSLATIONS = {
         "stream_connection_error": "Virhe yhteydessä: {error}",
         "query_too_long": "Kysymys on liian pitkä (max {max} merkkiä). Lyhennä kysymystäsi.",
         "year_clarification": "Miltä vuosiluvuilta etsit tuomioistuimen päätöksiä? Anna väli (esim. 2010–2020) tai sano 'kaikki' ilman rajoitusta.",
+        "templates_heading": "Esimerkkikysymykset",
+        "templates_hint": "Klikkaa lisätäksesi syöttökenttään — muokkaa ja paina Enter.",
+        "edit_template_label": "Muokkaa kysymystäsi",
+        "cancel": "Peruuta",
     },
     "sv": {
         "page_title": "AI Rättsligt Resonemangssystem",
@@ -82,6 +90,10 @@ TRANSLATIONS = {
         "stream_connection_error": "Anslutningsfel: {error}",
         "query_too_long": "Frågan är för lång (max {max} tecken). Förkorta din fråga.",
         "year_clarification": "Vilka år vill du söka domstolsbeslut från? Ange ett intervall (t.ex. 2010–2020) eller säg 'allt' utan filter.",
+        "templates_heading": "Exempelfrågor",
+        "templates_hint": "Klicka för att lägga till i fältet — redigera och tryck Enter.",
+        "edit_template_label": "Redigera din fråga",
+        "cancel": "Avbryt",
     },
 }
 

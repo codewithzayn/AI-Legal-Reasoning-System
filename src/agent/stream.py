@@ -214,5 +214,12 @@ async def stream_query_response(
         logger.error("Stream error: %s", e)
         yield f"\u26a0\ufe0f {t('stream_connection_error', lang, error=str(e))}"
     finally:
-        await asyncio.sleep(0.2)
+        try:
+            if not graph_task.done():
+                graph_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await graph_task
+            await asyncio.sleep(0.2)
+        except RuntimeError:
+            pass
         logger.debug("Stream finished.")
