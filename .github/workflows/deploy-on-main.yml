@@ -1,0 +1,21 @@
+# © 2026 Crest Advisory Group LLC. All rights reserved.
+# PROPRIETARY AND CONFIDENTIAL
+#
+# Runs on every push to main (e.g. after a PR merge).
+# Streamlit Cloud deploys from main automatically; this workflow can run
+# tests or checks. Your app: https://ai-legal-reasoning-system.streamlit.app/
+
+name: On merge to main
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Main updated
+        run: echo "main branch updated; Streamlit Cloud will deploy to https://ai-legal-reasoning-system.streamlit.app/"
