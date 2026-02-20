@@ -3,8 +3,7 @@
 
 PROPRIETARY AND CONFIDENTIAL
 
-This file is part of the Crest Pet System and contains proprietary
-and confidential information of Crest Advisory Group LLC.
+This file is part of the AI Legal Reasoning System.
 Unauthorized copying, distribution, or use is strictly prohibited.
 """
 
@@ -24,7 +23,6 @@ from src.utils.year_filter import extract_year_range
 MAX_CONTEXT_MESSAGES = 6
 
 # For Case 2 (topic + year merge): only look at last N messages
-# (2 exchanges) so we don't attach year from an old, closed thread
 MAX_MESSAGES_FOR_YEAR_MERGE = 4
 
 # Legal topic keywords (fi, en, sv) - if present, query is searchable
@@ -43,9 +41,6 @@ _LEGAL_TOPIC_WORDS = (
     "damages",
     "vahingonkorvaus",
     "skadestånd",
-    "consequences",
-    "seuraus",
-    "följd",
     "penalty",
     "rangaistus",
     "straff",
@@ -55,9 +50,34 @@ _LEGAL_TOPIC_WORDS = (
     "oikeus",
     "laki",
     "tuomio",
-    "rangaistus",
     "case",
     "tapaus",
+    "mål",
+    "fall",
+    "administrative",
+    "hallinto",
+    "förvaltning",
+    "tax",
+    "vero",
+    "skatt",
+    "employment",
+    "työoikeus",
+    "arbetsrätt",
+    "civil",
+    "siviili",
+    "civile",
+    "criminal",
+    "rikosoikeus",
+    "straffrätt",
+    "insurance",
+    "vakuutus",
+    "försäkring",
+    "immigration",
+    "maahanmuutto",
+    "invandring",
+    "environment",
+    "ympäristö",
+    "miljö",
 )
 
 
@@ -133,13 +153,26 @@ def resolve_query_with_context(
 
     recent = chat_history[-MAX_CONTEXT_MESSAGES:]
     in_clarification_chain = _last_assistant_looks_like_clarification(recent)
+    prior_topic = _last_user_message_with_topic(recent)
 
     # Case 1: Current prompt is mainly a year range -> use prior topic + this year
     if year_from_prompt[0] is not None and _is_mainly_year_range(text):
-        prior = _last_user_message_with_topic(recent)
-        if prior:
-            return (prior, year_from_prompt)
+        if prior_topic:
+            return (prior_topic, year_from_prompt)
         return (text, year_from_prompt)
+
+    # Do not attach year from history if current prompt says "all years" / "no filter"
+    _all_years_markers = (
+        "all years",
+        "for all years",
+        "any year",
+        "no filter",
+        "every year",
+        "kaikki vuodet",
+        "ei rajoitusta",
+    )
+    if any(m in text.lower() for m in _all_years_markers):
+        return (text, None)
 
     # Case 2: Current prompt is short and has legal topic; prior user may have given year.
     # Use narrower window when not in clarification chain to avoid stale merge.
@@ -159,7 +192,7 @@ def resolve_query_with_context(
     return (text, None)
 
 
-def get_recent_context_for_llm(chat_history: list[dict], max_turns: int = 2) -> str:
+def get_recent_context_for_llm(chat_history: list[dict], max_turns: int = 3) -> str:
     """
     Build a short context string from recent conversation for the LLM.
 

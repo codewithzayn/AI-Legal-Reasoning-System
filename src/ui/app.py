@@ -11,13 +11,15 @@ os.environ.setdefault("LOG_FORMAT", "simple")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 warnings.filterwarnings("ignore", message=".*(PyTorch|TensorFlow|Flax).*")
 
+import re
+
 import streamlit as st
 import streamlit.components.v1 as components
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agent.stream import stream_query_response
+from src.agent.stream import stream_query_response_sync
 from src.config.prompt_templates import get_templates_for_lang
 from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR, config, validate_env_for_app
 from src.config.translations import LANGUAGE_OPTIONS, t
@@ -39,6 +41,30 @@ THEME_SIDEBAR_ACCENT = "#7c3aed"
 
 def _get_lang() -> str:
     return st.session_state.get("lang", "en")
+
+
+def _markdown_to_safe_html(text: str) -> str:
+    """Convert minimal markdown (links, bold, newlines) to HTML for fixed-size container. Sanitizes hrefs to http/https only."""
+    if not text or not text.strip():
+        return ""
+    s = text.strip()
+    # Escaping for HTML
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Links: [text](url) - only allow http/https
+    def _link_repl(m):
+        label, url = m.group(1), m.group(2)
+        if url.startswith(("http://", "https://")):
+            return f'<a href="{url}">{label}</a>'
+        return label
+
+    s = re.sub(r"\[([^\]]*)\]\((https?://[^\)]+)\)", _link_repl, s)
+    # Bold: **text**
+    s = re.sub(r"\*\*([^\*]+)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"\*([^\*]+)\*", r"<em>\1</em>", s)
+    # Paragraphs / newlines
+    lines = [f"<p>{ln}</p>" if ln.strip() else "<br/>" for ln in s.split("\n")]
+    return "\n".join(lines)
 
 
 def _inject_scroll_to_bottom() -> None:
@@ -80,7 +106,7 @@ def _inject_custom_css() -> None:
                 padding: 1.25rem 1rem 6rem 1rem;
             }}
 
-            /* ── Chat bubbles ────────────────────────────────── */
+            /* ── Chat bubbles: consistent width, height fits content ─── */
             [data-testid="stChatMessage"] {{
                 padding: 0.875rem 1rem;
                 border-radius: 14px;
@@ -89,7 +115,9 @@ def _inject_custom_css() -> None:
                 border-left: 4px solid {THEME_ACCENT};
                 background: {THEME_SURFACE} !important;
                 transition: box-shadow 0.2s ease;
-                min-height: 8rem;
+                min-width: min(100%, 680px);
+                width: 100%;
+                box-sizing: border-box;
             }}
             [data-testid="stChatMessage"]:hover {{
                 box-shadow: 0 2px 12px rgba(37, 99, 235, 0.08);
@@ -98,6 +126,53 @@ def _inject_custom_css() -> None:
                 font-size: 0.9375rem;
                 line-height: 1.65;
             }}
+            /* Assistant message content: markdown links and structure */
+            [data-testid="stChatMessage"] a {{
+                color: {THEME_ACCENT};
+                text-decoration: none;
+                border-bottom: 1px solid transparent;
+            }}
+            [data-testid="stChatMessage"] a:hover {{
+                border-bottom-color: {THEME_ACCENT};
+            }}
+            [data-testid="stChatMessage"] ul, [data-testid="stChatMessage"] ol {{
+                margin: 0.5rem 0 0.75rem 1.25rem;
+                padding-left: 1rem;
+            }}
+            [data-testid="stChatMessage"] li {{
+                margin-bottom: 0.25rem;
+            }}
+            /* Content area: width full, height fits content */
+            .assistant-content-fixed {{
+                min-width: 100%;
+                width: 100%;
+                display: block;
+                padding: 0.25rem 0;
+                box-sizing: border-box;
+            }}
+            /* Thinking/analyzing phase: compact, height fits text */
+            .assistant-thinking {{
+                color: #64748b;
+                font-size: 0.9375rem;
+                padding: 0.25rem 0;
+            }}
+            /* Rendered response (markdown-as-HTML) inside fixed container */
+            .assistant-response {{
+                font-size: 0.9375rem;
+                line-height: 1.65;
+            }}
+            .assistant-response p {{ margin: 0.5rem 0 0.75rem 0; }}
+            .assistant-response a {{
+                color: {THEME_ACCENT};
+                text-decoration: none;
+                border-bottom: 1px solid transparent;
+            }}
+            .assistant-response a:hover {{ border-bottom-color: {THEME_ACCENT}; }}
+            .assistant-response ul, .assistant-response ol {{
+                margin: 0.5rem 0 0.75rem 1.25rem;
+                padding-left: 1rem;
+            }}
+            .assistant-response li {{ margin-bottom: 0.25rem; }}
 
             /* ── Sticky bottom input bar ─────────────────────── */
             [data-testid="stBottom"] {{
@@ -235,6 +310,11 @@ def _inject_custom_css() -> None:
             [data-testid="stSidebar"] [data-testid="stSelectbox"] {{
                 border-radius: 8px;
             }}
+            /* ── Prompt guide expander ───────────────────────── */
+            .prompt-guide {{
+                color: {THEME_TEXT};
+                font-size: 0.875rem;
+            }}
 
             /* ── Mobile (< 640px) ────────────────────────────── */
             @media (max-width: 640px) {{
@@ -264,7 +344,7 @@ def _inject_custom_css() -> None:
                     padding: 0.75rem 0.875rem;
                     border-radius: 12px;
                 }}
-                [data-testid="stChatMessage"] p {{ font-size: 0.875rem; }}
+                [data-testid="stChatMessage"] p, .assistant-response {{ font-size: 0.875rem; }}
                 .welcome-card {{ padding: 1.125rem 1rem; border-radius: 12px; }}
             }}
 
@@ -349,16 +429,44 @@ def _process_prompt(prompt: str) -> None:
     add_message("user", prompt)
     with st.chat_message("user", avatar=USER_AVATAR):
         st.write(prompt)
-    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR), st.spinner(t("spinner_searching", lang)):
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
+        placeholder = st.empty()
+        accumulated: list[str] = []
         if original_query:
             yr = year_range if year_range is not None else (None, None)
-            response = st.write_stream(
-                stream_query_response(
-                    prompt, lang=lang, original_query_for_year=original_query, year_range=yr, chat_history=chat_history
-                )
+            stream = stream_query_response_sync(
+                prompt, lang=lang, original_query_for_year=original_query, year_range=yr, chat_history=chat_history
             )
         else:
-            response = st.write_stream(stream_query_response(prompt, lang=lang, chat_history=chat_history))
+            stream = stream_query_response_sync(prompt, lang=lang, chat_history=chat_history)
+        for chunk in stream:
+            accumulated.append(chunk)
+            text = "".join(accumulated)
+            with placeholder.container():
+                is_status_only = (
+                    len(text) < 120
+                    and (
+                        "Analyzing" in text
+                        or "Searching" in text
+                        or "Etsitään" in text
+                        or "Analys" in text
+                        or "Söker" in text
+                    )
+                    and "](http" not in text
+                    and "**" not in text
+                )
+                if is_status_only:
+                    st.markdown(
+                        f'<div class="assistant-content-fixed"><div class="assistant-thinking">{" ".join(text.split())}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    html_body = _markdown_to_safe_html(text)
+                    st.markdown(
+                        f'<div class="assistant-content-fixed"><div class="assistant-response">{html_body}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+        response = "".join(accumulated)
     add_message("assistant", response)
 
 
@@ -411,7 +519,11 @@ def _render_chat_or_welcome(chat_history: list, lang: str) -> None:
         for message in chat_history:
             avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
             with st.chat_message(message["role"], avatar=avatar):
-                st.write(message["content"])
+                content = message.get("content") or ""
+                if message.get("role") == "assistant" and content:
+                    st.markdown(content)
+                else:
+                    st.write(content)
     else:
         st.markdown(
             f"""<div class="welcome-card">
@@ -469,6 +581,22 @@ def _render_sidebar(lang: str, chat_history: list) -> None:
     with st.sidebar:
         st.markdown(f"**{t('sidebar_app_name', lang)}**")
         st.caption(t("sidebar_tagline", lang))
+        st.markdown("---")
+
+        with st.expander(t("prompt_guide_title", lang), expanded=False):
+            st.markdown(
+                f"""
+                <div class="prompt-guide">
+                <ul style="margin:0.25rem 0;padding-left:1.25rem;font-size:0.875rem;line-height:1.6;color:#475569;">
+                <li>{t("prompt_guide_tip1", lang)}</li>
+                <li>{t("prompt_guide_tip2", lang)}</li>
+                <li>{t("prompt_guide_tip3", lang)}</li>
+                <li>{t("prompt_guide_tip4", lang)}</li>
+                </ul>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         st.markdown("---")
 
         st.markdown(f"**{t('templates_heading', lang)}**")

@@ -8,26 +8,8 @@ and metadata row mapping.
 All tests are pure-logic — no network calls, no database.
 """
 
-from src.services.case_law.models import CaseLawDocument
 from src.services.case_law.storage import CaseLawStorage
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-def _make_doc(**overrides) -> CaseLawDocument:
-    """Create a minimal CaseLawDocument with sensible defaults."""
-    defaults = {
-        "case_id": "KKO:2024:1",
-        "court_type": "supreme_court",
-        "court_code": "KKO",
-        "decision_type": "precedent",
-        "case_year": 2024,
-        "title": "Test Case",
-        "full_text": "Some legal text content.",
-    }
-    defaults.update(overrides)
-    return CaseLawDocument(**defaults)
+from tests.helpers import make_case_law_doc
 
 
 # ---------------------------------------------------------------------------
@@ -73,18 +55,18 @@ class TestComputeContentHash:
     """Test content hash computation for idempotency."""
 
     def test_same_content_same_hash(self) -> None:
-        doc = _make_doc()
+        doc = make_case_law_doc()
         hash1 = CaseLawStorage.compute_content_hash(doc)
         hash2 = CaseLawStorage.compute_content_hash(doc)
         assert hash1 == hash2
 
     def test_different_content_different_hash(self) -> None:
-        doc_a = _make_doc(full_text="Version A")
-        doc_b = _make_doc(full_text="Version B")
+        doc_a = make_case_law_doc(full_text="Version A")
+        doc_b = make_case_law_doc(full_text="Version B")
         assert CaseLawStorage.compute_content_hash(doc_a) != CaseLawStorage.compute_content_hash(doc_b)
 
     def test_hash_is_hex_sha256(self) -> None:
-        doc = _make_doc()
+        doc = make_case_law_doc()
         h = CaseLawStorage.compute_content_hash(doc)
         assert len(h) == 64  # SHA-256 hex length
         assert all(c in "0123456789abcdef" for c in h)
@@ -129,6 +111,10 @@ class TestSubChunk:
         chunks = CaseLawStorage._sub_chunk("")
         assert chunks == [""]
 
+    def test_none_text_returns_empty_chunk(self) -> None:
+        chunks = CaseLawStorage._sub_chunk(None)
+        assert chunks == [""]
+
 
 # ---------------------------------------------------------------------------
 # _insert_case_metadata row mapping
@@ -138,7 +124,7 @@ class TestMetadataRowMapping:
 
     def test_required_fields_present(self) -> None:
         """The row dict should contain all required DB columns."""
-        doc = _make_doc(
+        doc = make_case_law_doc(
             decision_date="2024-06-15",
             ecli="ECLI:FI:KKO:2024:1",
             legal_domains=["criminal", "civil"],
@@ -165,7 +151,7 @@ class TestMetadataRowMapping:
             assert key in d, f"Missing key: {key}"
 
     def test_default_values_are_sane(self) -> None:
-        doc = _make_doc()
+        doc = make_case_law_doc()
         d = doc.to_dict()
         assert d["is_precedent"] is False
         assert d["legal_domains"] == []

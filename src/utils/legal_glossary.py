@@ -3,8 +3,7 @@
 
 PROPRIETARY AND CONFIDENTIAL
 
-This file is part of the Crest Pet System and contains proprietary
-and confidential information of Crest Advisory Group LLC.
+This file is part of the AI Legal Reasoning System.
 Unauthorized copying, distribution, or use is strictly prohibited.
 """
 

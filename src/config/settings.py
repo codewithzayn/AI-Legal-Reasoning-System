@@ -38,6 +38,8 @@ class Config:
     # How many candidates to fetch before rerank; then how many to send to the LLM.
     SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "50"))
     CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "12"))
+    # Max chunks per case after rerank. Higher = more context from strong cases (e.g. 4).
+    MAX_CHUNKS_PER_CASE: int = int(os.getenv("MAX_CHUNKS_PER_CASE", "4"))
     # Max documents sent to Cohere reranker. Higher = better recall, slower.
     # 50 ensures deeper candidates still get a fair reranking.
     RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "50"))
@@ -75,6 +77,8 @@ class Config:
 
     # Query-time answer generator (user asks a question). Default: cheaper/fast.
     OPENAI_CHAT_MODEL: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+    # Max tokens for LLM response. Higher = more comprehensive answers with more citations (default 1200).
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1200"))
 
     # Ingestion pipeline (extraction/chunking). Default: GPT-4o for better extraction quality.
     EXTRACTION_MODEL: str = os.getenv("EXTRACTION_MODEL", "gpt-4o")

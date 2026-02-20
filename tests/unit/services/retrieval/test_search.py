@@ -8,16 +8,10 @@ exact-match boost, query classification, and RRF blend scores.
 All tests are pure-logic — no network calls, no database, no LLM.
 """
 
-import os
-
 import pytest
 
-# Ensure env vars are set so the class can be instantiated in offline tests.
-os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
-os.environ.setdefault("SUPABASE_KEY", "test-key")
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-
 from src.services.retrieval.search import HybridRetrieval
+from tests.helpers import make_search_chunk
 
 
 # ---------------------------------------------------------------------------
@@ -25,19 +19,8 @@ from src.services.retrieval.search import HybridRetrieval
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def retrieval() -> HybridRetrieval:
-    """Create an instance with dummy credentials (no real connection needed)."""
+    """Create an instance with test credentials (no real connection in unit tests)."""
     return HybridRetrieval(url="http://localhost:54321", key="test-key")
-
-
-def _make_chunk(chunk_id: str, text: str = "", case_id: str = "", score: float = 0.5) -> dict:
-    """Helper: create a minimal search-result chunk dict."""
-    return {
-        "id": chunk_id,
-        "text": text,
-        "source": "case_law",
-        "metadata": {"case_id": case_id},
-        "score": score,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +54,12 @@ class TestRRFMerge:
     def test_empty_inputs_return_empty(self, retrieval: HybridRetrieval) -> None:
         """Merging two empty lists should produce an empty list."""
         assert retrieval.rrf_merge([], []) == []
+
+    def test_none_input_treated_as_empty(self, retrieval: HybridRetrieval) -> None:
+        """None in result lists should be treated as empty, not raise."""
+        merged = retrieval.rrf_merge(None, [{"id": "a"}])
+        assert len(merged) == 1
+        assert merged[0]["id"] == "a"
 
     def test_single_source_returns_all(self, retrieval: HybridRetrieval) -> None:
         """When only one source has results, all its chunks should appear."""
@@ -160,6 +149,22 @@ class TestBuildPrefixTsquery:
     def test_empty_for_all_stop_words(self, retrieval: HybridRetrieval) -> None:
         assert retrieval._build_prefix_tsquery("onko vai?") == ""
 
+    def test_none_query_returns_empty(self, retrieval: HybridRetrieval) -> None:
+        assert retrieval._build_prefix_tsquery(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# Edge cases: None / empty inputs (FTS and AND-FTS)
+# ---------------------------------------------------------------------------
+class TestFtsQueryEdgeCases:
+    """Test FTS query builders handle None and empty inputs gracefully."""
+
+    def test_build_fts_query_none_returns_empty(self, retrieval: HybridRetrieval) -> None:
+        assert retrieval._build_fts_query(None) == ""
+
+    def test_build_and_fts_query_none_returns_empty(self, retrieval: HybridRetrieval) -> None:
+        assert retrieval._build_and_fts_query(None) == ""
+
 
 # ---------------------------------------------------------------------------
 # extract_case_ids
@@ -191,6 +196,12 @@ class TestExtractCaseIds:
         ids = HybridRetrieval.extract_case_ids("kko:2024:1")
         assert ids == ["KKO:2024:1"]
 
+    def test_none_query_returns_empty(self) -> None:
+        assert HybridRetrieval.extract_case_ids(None) == []
+
+    def test_empty_string_returns_empty(self) -> None:
+        assert HybridRetrieval.extract_case_ids("") == []
+
 
 # ---------------------------------------------------------------------------
 # _smart_diversity_cap
@@ -200,28 +211,33 @@ class TestSmartDiversityCap:
 
     def test_respects_max_per_case(self) -> None:
         """After the top-2 uncapped slots, max_per_case should be enforced."""
-        results = [_make_chunk(f"c{i}", case_id="CASE_A") for i in range(10)]
+        results = [make_search_chunk(f"c{i}", case_id="CASE_A") for i in range(10)]
         capped = HybridRetrieval._smart_diversity_cap(results, max_per_case=3, top_k=15)
         # Top 2 uncapped + 1 more from cap (3 total for CASE_A)
         assert len(capped) == 3
 
     def test_exempt_case_ids_bypass_cap(self) -> None:
         """Exempt case IDs should not be limited by the cap."""
-        results = [_make_chunk(f"c{i}", case_id="CASE_A") for i in range(10)]
+        results = [make_search_chunk(f"c{i}", case_id="CASE_A") for i in range(10)]
         capped = HybridRetrieval._smart_diversity_cap(results, max_per_case=2, top_k=15, exempt_case_ids={"CASE_A"})
         assert len(capped) == 10
 
     def test_top_k_respected(self) -> None:
         """Should never return more than top_k results."""
-        results = [_make_chunk(f"c{i}", case_id=f"CASE_{i}") for i in range(20)]
+        results = [make_search_chunk(f"c{i}", case_id=f"CASE_{i}") for i in range(20)]
         capped = HybridRetrieval._smart_diversity_cap(results, max_per_case=3, top_k=5)
         assert len(capped) == 5
 
     def test_small_input_returned_as_is(self) -> None:
         """2 or fewer results should be returned without capping."""
-        results = [_make_chunk("c1", case_id="X"), _make_chunk("c2", case_id="X")]
+        results = [make_search_chunk("c1", case_id="X"), make_search_chunk("c2", case_id="X")]
         capped = HybridRetrieval._smart_diversity_cap(results, max_per_case=1, top_k=15)
         assert len(capped) == 2
+
+    def test_none_results_returns_empty(self) -> None:
+        """None results should be treated as empty list."""
+        capped = HybridRetrieval._smart_diversity_cap(None, max_per_case=3, top_k=15)
+        assert capped == []
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +267,9 @@ class TestClassifyQuery:
     def test_general_query(self) -> None:
         assert HybridRetrieval._classify_query("kertoo tästä") == "general"
 
+    def test_none_query_returns_general(self) -> None:
+        assert HybridRetrieval._classify_query(None) == "general"
+
 
 # ---------------------------------------------------------------------------
 # _compute_exact_match_boost
@@ -259,12 +278,12 @@ class TestExactMatchBoost:
     """Test exact-match boost computation."""
 
     def test_no_match_returns_base_boost(self, retrieval: HybridRetrieval) -> None:
-        chunk = _make_chunk("c1", text="Random content here")
+        chunk = make_search_chunk("c1", text="Random content here")
         boost = retrieval._compute_exact_match_boost(chunk, "some query")
         assert boost == pytest.approx(1.0, abs=0.01)
 
     def test_statute_match_doubles_boost(self, retrieval: HybridRetrieval) -> None:
-        chunk = _make_chunk("c1", text="OYL 5:21 defines the procedure")
+        chunk = make_search_chunk("c1", text="OYL 5:21 defines the procedure")
         boost = retrieval._compute_exact_match_boost(chunk, "OYL 5:21 soveltaminen")
         assert boost >= 2.0
 
@@ -277,6 +296,15 @@ class TestExactMatchBoost:
         }
         boost = retrieval._compute_exact_match_boost(chunk, "KKO:2024:1")
         assert boost >= 1.5
+
+    def test_none_chunk_returns_base_boost(self, retrieval: HybridRetrieval) -> None:
+        boost = retrieval._compute_exact_match_boost(None, "some query")
+        assert boost == pytest.approx(1.0)
+
+    def test_none_query_returns_base_boost(self, retrieval: HybridRetrieval) -> None:
+        chunk = make_search_chunk("c1", text="content")
+        boost = retrieval._compute_exact_match_boost(chunk, None)
+        assert boost == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +331,10 @@ class TestRRFBlendScores:
         blended = retrieval._rrf_blend_scores(items)
         assert len(blended) == 1
         assert blended[0]["blended_score"] > 0
+
+    def test_none_reranked_returns_empty(self, retrieval: HybridRetrieval) -> None:
+        blended = retrieval._rrf_blend_scores(None)
+        assert blended == []
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +382,7 @@ class TestTitleKeywordOverlapBoost:
 
     def test_no_boost_when_no_title(self) -> None:
         """Should return 1.0 when chunk has no case_title."""
-        chunk = _make_chunk("c1", text="content")
+        chunk = make_search_chunk("c1", text="content")
         boost = HybridRetrieval._title_keyword_overlap_boost(
             chunk, "osamaksumyyjä takaisinsaantia", {"osamaksumyyjä", "takaisinsaantia"}
         )

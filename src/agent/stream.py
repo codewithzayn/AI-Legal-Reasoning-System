@@ -4,7 +4,9 @@ Streaming version of agent for Streamlit
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+import queue
+import threading
+from collections.abc import AsyncIterator, Iterator
 
 from src.config.logging_config import setup_logger
 from src.config.settings import config
@@ -223,3 +225,46 @@ async def stream_query_response(
         except RuntimeError:
             pass
         logger.debug("Stream finished.")
+
+
+def stream_query_response_sync(
+    user_query: str,
+    lang: str = "en",
+    original_query_for_year: str | None = None,
+    year_range: tuple[int | None, int | None] | None = None,
+    chat_history: list[dict] | None = None,
+) -> Iterator[str]:
+    """
+    Synchronous wrapper for stream_query_response so Streamlit can iterate
+    without async. Runs the async generator in a background thread and yields
+    chunks on the main thread.
+    """
+    chunk_queue: queue.Queue[str | None] = queue.Queue()
+
+    def run() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+
+            async def consume() -> None:
+                async for chunk in stream_query_response(
+                    user_query,
+                    lang=lang,
+                    original_query_for_year=original_query_for_year,
+                    year_range=year_range,
+                    chat_history=chat_history,
+                ):
+                    chunk_queue.put(chunk)
+                chunk_queue.put(None)
+
+            loop.run_until_complete(consume())
+        finally:
+            loop.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    while True:
+        chunk = chunk_queue.get()
+        if chunk is None:
+            break
+        yield chunk
+    thread.join(timeout=1.0)

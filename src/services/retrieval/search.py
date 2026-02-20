@@ -25,6 +25,23 @@ from .reranker import CohereReranker
 
 logger = setup_logger(__name__)
 
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """True when the exception indicates a connection/transport/API failure (not business logic)."""
+    if isinstance(exc, (OSError, ConnectionError)):
+        return True
+    msg = str(exc).lower()
+    return (
+        "closed" in msg
+        or "transport" in msg
+        or "handler is closed" in msg
+        or "timeout" in msg
+        or "event loop" in msg
+        or "unable to perform" in msg
+        or "connection" in msg
+    )
+
+
 # ---------------------------------------------------------------------------
 # Finnish stop words — stripped from FTS queries so only substantive
 # legal terms remain.  When combined with to_tsquery OR (|) mode
@@ -287,6 +304,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     @staticmethod
     def _classify_query(query: str) -> str:
         """Classify query type to adjust retrieval strategy."""
+        if query is None or not isinstance(query, str):
+            return "general"
         query_lower = query.lower()
         # Statute: abbreviation (RL 10:3) or Finnish form (10 luvun 3 §)
         if re.search(r"\b(OYL|RL|OK|VML|SOL|SotOikL)\s*\d+:\d+", query, re.IGNORECASE):
@@ -304,6 +323,10 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
     def _compute_exact_match_boost(self, chunk: dict, query: str) -> float:
         """Boost chunks with exact statute/case ID matches to the query."""
+        if chunk is None or not isinstance(chunk, dict):
+            return 1.0
+        if query is None or not isinstance(query, str):
+            return 1.0
         boost = 1.0
         text = (chunk.get("text") or chunk.get("chunk_text") or chunk.get("content") or "").lower()
         query_lower = query.lower()
@@ -405,6 +428,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             1.3 when 2 roots match.
             1.6 when 3+ roots match.
         """
+        if chunk is None or not isinstance(chunk, dict):
+            return 1.0
         case_title = ((chunk.get("metadata") or {}).get("case_title") or "").lower()
         if not case_title or not query_words:
             return 1.0
@@ -426,6 +451,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
     def _rrf_blend_scores(self, reranked: list[dict], k: int = 60) -> list[dict]:
         """Blend rerank and pre-rerank (RRF) using RRF formula instead of weighted average."""
+        reranked = reranked or []
         rerank_ranks = {
             r["id"]: i + 1 for i, r in enumerate(sorted(reranked, key=lambda x: x.get("rerank_score", 0), reverse=True))
         }
@@ -452,6 +478,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         them in the query) bypass the per-case cap so we never discard chunks
         the user specifically asked about.
         """
+        results = results or []
         exempt = {c.upper() for c in (exempt_case_ids or set())}
         if len(results) <= 2:
             return results[:top_k]
@@ -476,6 +503,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     @staticmethod
     def extract_case_ids(query: str) -> list[str]:
         """Extract case IDs (e.g. KKO:2022:18, KKO:1983-II-124) mentioned in the query."""
+        if query is None or not isinstance(query, str):
+            return []
         ids: list[str] = []
         # Modern format: KKO:2024:76 or KKO 2024:76
         for court, year, number in _CASE_ID_RE.findall(query):
@@ -607,6 +636,8 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         Keeping the cap at 5 (down from 8) prevents ``websearch_to_tsquery``
         with many OR terms from timing out on the 67K-row GIN index.
         """
+        if query is None or not isinstance(query, str):
+            return []
         sanitized = re.sub(r"[^\w\s]", " ", query)
         sanitized = re.sub(r"\s+", " ", sanitized).strip()
 
@@ -863,9 +894,11 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         Returns:
             Merged and re-ranked results sorted by RRF score descending.
         """
+        # Guard against None inputs
+        safe_lists = [lst or [] for lst in result_lists]
         # Build per-list rank maps
         rank_maps: list[dict[str, int]] = []
-        for results in result_lists:
+        for results in safe_lists:
             rank_maps.append({item["id"]: rank + 1 for rank, item in enumerate(results)})
 
         # Collect all unique chunk IDs across every list
@@ -885,7 +918,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         # Build a chunk-data lookup (first occurrence wins)
         chunks_map: dict[str, dict] = {}
-        for results in result_lists:
+        for results in safe_lists:
             for item in results:
                 if item["id"] not in chunks_map:
                     chunks_map[item["id"]] = item
@@ -1218,18 +1251,20 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         """
         t0 = time.time()
 
-        # Helper: run a search task with a timeout + connection recovery.
-        async def _timed(coro, label: str, timeout: float = 15.0):
+        # Helper: run a search task with timeout + connection recovery (retry once after reset).
+        async def _timed(coro_factory, label: str, timeout: float = 15.0, retried: bool = False):
             try:
+                coro = coro_factory()
                 return await asyncio.wait_for(coro, timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning("  %s timed out after %.0fs", label, timeout)
                 return []
-            except OSError as exc:
-                if "closed" in str(exc).lower() or "transport" in str(exc).lower():
-                    logger.warning("  %s hit stale connection, resetting client: %s", label, exc)
+            except Exception as exc:
+                if _is_connection_error(exc) and not retried:
+                    logger.warning("  %s hit connection error, resetting client and retrying: %s", label, exc)
                     await self._reset_client()
-                return []
+                    return await _timed(coro_factory, label, timeout, retried=True)
+                raise
 
         # Generate embedding in thread pool (non-blocking)
         async def _get_embedding():
@@ -1248,31 +1283,34 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         # Phase 1: Start text-only searches + embedding generation concurrently.
         embedding_task = asyncio.create_task(_get_embedding())
-        fts_task = asyncio.create_task(_timed(self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_or"))
+        fts_task = asyncio.create_task(
+            _timed(lambda: self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_or")
+        )
         and_fts_task = asyncio.create_task(
-            _timed(self.and_fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_and")
+            _timed(lambda: self.and_fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_and")
         )
-        meta_task = asyncio.create_task(_timed(self.search_case_law_metadata(query_text, limit=limit), "meta_fts"))
+        meta_task = asyncio.create_task(
+            _timed(lambda: self.search_case_law_metadata(query_text, limit=limit), "meta_fts")
+        )
         # Prefix title search: bridges Finnish compound-word boundaries
-        # by matching title keywords via to_tsquery :* prefix operator.
         prefix_title_task = asyncio.create_task(
-            _timed(self._prefix_title_search(query_text, limit=limit), "prefix_title")
+            _timed(lambda: self._prefix_title_search(query_text, limit=limit), "prefix_title")
         )
-        # Prefix content search: extends compound-word matching to section text.
         prefix_content_task = asyncio.create_task(
-            _timed(self._prefix_content_search(query_text, limit=limit), "prefix_content")
+            _timed(lambda: self._prefix_content_search(query_text, limit=limit), "prefix_content")
         )
 
         # Case-ID fallback: if query mentions a case ID, fetch directly.
         mentioned_ids = self.extract_case_ids(query_text)
         fallback_tasks = [
-            asyncio.create_task(_timed(self._case_id_fallback_search(cid), f"fallback_{cid}")) for cid in mentioned_ids
+            asyncio.create_task(_timed(lambda c=cid: self._case_id_fallback_search(c), f"fallback_{cid}"))
+            for cid in mentioned_ids
         ]
 
         # Phase 2: Wait for embedding, then launch vector search (HNSW).
         query_embedding = await embedding_task
         vec_task = asyncio.create_task(
-            _timed(self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K), "vec")
+            _timed(lambda: self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K), "vec")
         )
 
         # Wait for all parallel searches
@@ -1501,7 +1539,16 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 return await self._multi_query_hybrid_search(search_query, limit=initial_limit)
             return await self.hybrid_search(search_query, limit=initial_limit)
 
-        direct_chunks, search_results = await asyncio.gather(_do_direct(), _do_search())
+        for attempt in range(2):
+            try:
+                direct_chunks, search_results = await asyncio.gather(_do_direct(), _do_search())
+                break
+            except Exception as exc:
+                if _is_connection_error(exc) and attempt == 0:
+                    logger.warning("Pipeline hit connection error, resetting client and retrying: %s", exc)
+                    await self._reset_client()
+                    continue
+                raise
 
         # --- Step 3: Merge direct chunks + search results (dedup by id) ---
         seen_ids: set[str] = set()
@@ -1585,7 +1632,12 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         # --- Step 8: Smart diversity cap (top 2 uncapped, then max 2 per case) ---
         # Exempt explicitly mentioned case IDs from the cap so they get full coverage.
         exempt_ids = set(mentioned_ids) if mentioned_ids else None
-        reranked = self._smart_diversity_cap(reranked, max_per_case=2, top_k=top_k, exempt_case_ids=exempt_ids)
+        reranked = self._smart_diversity_cap(
+            reranked,
+            max_per_case=config.MAX_CHUNKS_PER_CASE,
+            top_k=top_k,
+            exempt_case_ids=exempt_ids,
+        )
 
         # --- Step 9: When query mentions specific case(s), put those chunks first ---
         if mentioned_ids and reranked:

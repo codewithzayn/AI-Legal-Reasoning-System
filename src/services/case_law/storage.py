@@ -245,6 +245,8 @@ class CaseLawStorage:
         """Split *text* into chunks of ≤ *max_chars*, breaking on paragraph
         boundaries (\n\n).  Consecutive chunks share up to *overlap* trailing
         characters from the previous chunk so that boundary context is preserved."""
+        if text is None:
+            return [""]
         limit = max_chars or cls._MAX_CHUNK_CHARS
         ovlp = overlap if overlap is not None else cls._CHUNK_OVERLAP_CHARS
 

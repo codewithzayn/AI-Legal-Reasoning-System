@@ -37,8 +37,12 @@ def route_intent(state: AgentState) -> Literal["search", "chat", "clarify", "cla
 
 def route_search_result(state: AgentState) -> Literal["reason", "reformulate"]:
     """Route based on search success"""
-    results = state.get("search_results", [])
-    attempts = state.get("search_attempts", 1)
+    results = state.get("search_results", []) or []
+    raw_attempts = state.get("search_attempts", 1)
+    try:
+        attempts = int(raw_attempts) if raw_attempts is not None else 1
+    except (TypeError, ValueError):
+        attempts = 1
 
     if results:
         return "reason"

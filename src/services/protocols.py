@@ -4,8 +4,8 @@
 """
 Service Protocols (Interfaces)
 
-Defines the contracts for key services so they can be mocked in tests and swapped
-in production without coupling to concrete implementations.
+Defines the contracts for key services so implementations can be swapped
+in production or tests without coupling to concrete classes.
 """
 
 from __future__ import annotations

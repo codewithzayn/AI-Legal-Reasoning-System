@@ -10,9 +10,11 @@ from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
 from src.config.settings import config
+from src.config.translations import t
 from src.services.retrieval import HybridRetrieval
 from src.services.retrieval.generator import LLMGenerator
 from src.services.retrieval.relevancy import check_relevancy
+from src.utils.query_context import get_recent_context_for_llm
 from src.utils.retry import retry_async
 from src.utils.year_filter import extract_year_range
 from src.utils.year_llm import interpret_year_scope_from_query_async
@@ -82,18 +84,38 @@ def _has_legal_topic_keyword(query: str) -> bool:
     return any(m in q for m in _LEGAL_TOPIC_MARKERS)
 
 
-async def analyze_intent(state: AgentState) -> AgentState:
-    """
-    Node 1: Analyze User Intent (Async)
-    Fast path: skip LLM for obvious legal queries.
-    """
-    state["stage"] = "analyze"
-    query = state["query"]
+def _query_may_be_follow_up(query: str, messages: list) -> bool:
+    """True if query is short and could be a follow-up requiring context."""
+    if not query or not messages or len(messages) < 2:
+        return False
+    q = query.strip()
+    if len(q) > 60:
+        return False
+    return not _has_legal_topic_keyword(query)
 
-    if not state.get("original_query"):
-        state["original_query"] = query
-        state["search_attempts"] = 0
 
+async def _resolve_ambiguous_query_with_llm(query: str, messages: list[dict]) -> str:
+    """Use LLM to interpret short/ambiguous follow-ups in context. Returns effective search query."""
+    conv = get_recent_context_for_llm(messages, max_turns=3)
+    prompt = f"""Conversation:
+{conv}User's latest message: {query}
+
+The user may be asking a follow-up, wanting more on the same topic, or switching to a new topic.
+What legal search query should we use to find relevant KKO/KHO Finnish Supreme Court cases?
+Reply with ONLY the search query in one line, nothing else. Use Finnish or English legal terms."""
+    try:
+        response = await retry_async(lambda: _llm_mini.ainvoke([HumanMessage(content=prompt)]))
+        resolved = (response.content or "").strip()
+        if resolved and len(resolved) > 2:
+            logger.info("Resolved ambiguous query: '%s' -> '%s'", query[:40], resolved[:60])
+            return resolved
+    except Exception as e:
+        logger.warning("Query resolution failed: %s, using original", e)
+    return query
+
+
+def _handle_existing_clarification(state: AgentState, query: str) -> AgentState | None:
+    """Handle cases where year clarification is already resolved or in progress."""
     # Preserve year from UI (year clarification reply); do not ask again
     if state.get("year_start") is not None or state.get("year_end") is not None:
         return {
@@ -105,7 +127,7 @@ async def analyze_intent(state: AgentState) -> AgentState:
             "year_end": state.get("year_end"),
         }
 
-    # User already answered year clarification (e.g. "all") — proceed to search, do not ask again
+    # User already answered year clarification (e.g. "all") — proceed to search
     if state.get("year_clarification_answered"):
         return {
             "intent": "legal_search",
@@ -115,52 +137,95 @@ async def analyze_intent(state: AgentState) -> AgentState:
             "year_start": state.get("year_start"),
             "year_end": state.get("year_end"),
         }
+    return None
 
-    # Fast path: skip LLM for obvious legal questions (saves ~1-2s)
-    if _is_obvious_legal_query(query):
-        mentioned_ids = HybridRetrieval.extract_case_ids(query)
-        year_start, year_end = extract_year_range(query)
-        if config.YEAR_CLARIFICATION_ENABLED and not mentioned_ids:
-            # Use LLM to understand: specific year, all years, or ask
-            scope, ys, ye = await interpret_year_scope_from_query_async(query)
-            if scope == "all":
-                logger.info("User wants all years (LLM), skipping clarification")
-                return {
-                    "intent": "legal_search",
-                    "stage": "analyze",
-                    "original_query": state.get("original_query", query),
-                    "search_attempts": 0,
-                    "year_start": None,
-                    "year_end": None,
-                }
-            if scope == "specific" and ys is not None:
-                return {
-                    "intent": "legal_search",
-                    "stage": "analyze",
-                    "original_query": state.get("original_query", query),
-                    "search_attempts": 0,
-                    "year_start": ys,
-                    "year_end": ye,
-                }
-            if scope == "ask" or (scope == "specific" and ys is None):
-                logger.info("Year clarification needed (broad query, no year)")
-                return {
-                    "intent": "year_clarification",
-                    "stage": "analyze",
-                    "original_query": state.get("original_query", query),
-                    "search_attempts": 0,
-                    "year_start": None,
-                    "year_end": None,
-                }
-        return {
-            "intent": "legal_search",
-            "stage": "analyze",
-            "original_query": state.get("original_query", query),
-            "search_attempts": 0,
-            "year_start": year_start,
-            "year_end": year_end,
-        }
 
+async def _handle_obvious_legal_query(state: AgentState, query: str) -> AgentState | None:
+    """Fast path: skip LLM for obvious legal questions."""
+    if not _is_obvious_legal_query(query):
+        return None
+
+    mentioned_ids = HybridRetrieval.extract_case_ids(query)
+    year_start, year_end = extract_year_range(query)
+
+    if config.YEAR_CLARIFICATION_ENABLED and not mentioned_ids:
+        # Use LLM to understand: specific year, all years, or ask
+        scope, ys, ye = await interpret_year_scope_from_query_async(query)
+
+        if scope == "all":
+            logger.info("User wants all years (LLM), skipping clarification")
+            return {
+                "intent": "legal_search",
+                "stage": "analyze",
+                "original_query": state.get("original_query", query),
+                "search_attempts": 0,
+                "year_start": None,
+                "year_end": None,
+            }
+
+        if scope == "specific" and ys is not None:
+            return {
+                "intent": "legal_search",
+                "stage": "analyze",
+                "original_query": state.get("original_query", query),
+                "search_attempts": 0,
+                "year_start": ys,
+                "year_end": ye,
+            }
+
+        if scope == "ask" or (scope == "specific" and ys is None):
+            logger.info("Year clarification needed (broad query, no year)")
+            return {
+                "intent": "year_clarification",
+                "stage": "analyze",
+                "original_query": state.get("original_query", query),
+                "search_attempts": 0,
+                "year_start": None,
+                "year_end": None,
+            }
+
+    return {
+        "intent": "legal_search",
+        "stage": "analyze",
+        "original_query": state.get("original_query", query),
+        "search_attempts": 0,
+        "year_start": year_start,
+        "year_end": year_end,
+    }
+
+
+async def analyze_intent(state: AgentState) -> AgentState:
+    """
+    Node 1: Analyze User Intent (Async)
+    Fast path: skip LLM for obvious legal queries.
+    Resolves ambiguous follow-ups via LLM (no hard-coded phrases).
+    """
+    state["stage"] = "analyze"
+    query = state["query"]
+    messages = state.get("messages") or []
+
+    # When query is short/ambiguous and we have conversation context, let the LLM interpret it
+    if _query_may_be_follow_up(query, messages):
+        resolved = await _resolve_ambiguous_query_with_llm(query, messages)
+        if resolved != query:
+            state["query"] = resolved
+            query = resolved
+
+    if not state.get("original_query"):
+        state["original_query"] = query
+        state["search_attempts"] = 0
+
+    # 1. Check existing clarification state
+    existing_result = _handle_existing_clarification(state, query)
+    if existing_result:
+        return existing_result
+
+    # 2. Fast path for obvious legal queries
+    obvious_result = await _handle_obvious_legal_query(state, query)
+    if obvious_result:
+        return obvious_result
+
+    # 3. LLM Intent Analysis (Fallback)
     logger.info("Analyzing intent...")
 
     system_prompt = """Classify the user's input into exactly one category:
@@ -379,7 +444,53 @@ async def search_knowledge(state: AgentState) -> AgentState:
     return state
 
 
+def _is_search_failure_error(error_msg: str) -> bool:
+    """True when search failed due to connection, timeout, or API—not due to zero documents."""
+    if not error_msg or not isinstance(error_msg, str):
+        return False
+    msg = error_msg.lower()
+    return (
+        "closed" in msg
+        or "transport" in msg
+        or "handler is closed" in msg
+        or "timeout" in msg
+        or "connection" in msg
+        or "connect" in msg
+        or "network" in msg
+        or "event loop" in msg
+        or "429" in msg
+        or "401" in msg
+        or "403" in msg
+        or "500" in msg
+        or "502" in msg
+        or "503" in msg
+        or "subscription" in msg
+        or "rate limit" in msg
+        or "quota" in msg
+        or "unable to perform" in msg
+    )
+
+
+def _search_error_fallback(lang: str, error_msg: str) -> str:
+    """User-facing message when search failed due to connection/timeout/API—NOT when DB has no documents."""
+    msg = (error_msg or "").lower()
+    if "timeout" in msg or "timed out" in msg:
+        return t("error_search_timeout", lang)
+    if (
+        "closed" in msg
+        or "transport" in msg
+        or "handler is closed" in msg
+        or "connection" in msg
+        or "connect" in msg
+        or "network" in msg
+        or "event loop" in msg
+    ):
+        return t("error_search_connection", lang)
+    return t("error_search_api", lang)
+
+
 def _no_results_fallback(lang: str) -> str:
+    """Used ONLY when search succeeded but returned zero documents (no relevant docs in DB)."""
     fallbacks = {
         "en": "Based on the provided documents, I cannot find information on this topic. There are no relevant documents in the database.",
         "sv": "Baserat på de angivna dokumenten kan jag inte hitta information om detta ämne. Det finns inga relevanta dokument i databasen.",
@@ -406,8 +517,13 @@ async def reason_legal(state: AgentState) -> AgentState:
     lang = state.get("response_lang") or "fi"
 
     if not results:
-        logger.warning("No search results found")
-        state["response"] = _no_results_fallback(lang)
+        search_error = state.get("error")
+        if search_error and _is_search_failure_error(search_error):
+            logger.warning("Search failed (connection/timeout/API): %s", search_error)
+            state["response"] = _search_error_fallback(lang, search_error)
+        else:
+            logger.warning("No search results found (DB empty for query)")
+            state["response"] = _no_results_fallback(lang)
         stream_queue = state.get("stream_queue")
         if stream_queue is not None:
             await stream_queue.put(None)

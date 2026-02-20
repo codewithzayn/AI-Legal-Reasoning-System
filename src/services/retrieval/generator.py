@@ -49,8 +49,9 @@ CORE RULES:
    - Each case in the context includes metadata: title, keywords (legal domains), section type, court, year, and URL.
    - Use this metadata to identify which cases are relevant to the user's query.
 
-5. **Mandatory citations**
+5. **Mandatory citations — cite ALL relevant sources**
    - Every factual or legal claim must cite its source case.
+   - Cite ALL cases from the provided context that are relevant to the question — do NOT limit yourself to 2–3.
    - Format: [CaseID] for case law (e.g. [KKO:2019:104])
    - You may mention statute sections inline, but do NOT list statutes as separate sources.
    - Use only case IDs that appear in the provided context.
@@ -106,8 +107,9 @@ GRUNDREGLER:
    - Varje fall i kontexten innehåller metadata: titel, nyckelord (rättsliga områden), sektionstyp, domstol, år och URL.
    - Använd denna metadata för att identifiera vilka fall som är relevanta för användarens fråga.
 
-5. **Obligatoriska citat**
+5. **Obligatoriska citat — citera ALLA relevanta källor**
    - Varje faktapåstående eller rättsligt påstående måste citera sin källa.
+   - Citera ALLA fall från kontexten som är relevanta för frågan — begränsa dig INTE till 2–3.
    - Format: [CaseID] för rättsfall (t.ex. [KKO:2019:104])
    - Du får nämna lagparagrafer i texten, men lista INTE lagparagrafer som separata källor.
    - Använd endast fall-ID:n som finns i den angivna kontexten.
@@ -165,8 +167,9 @@ CORE RULES:
    - Use this metadata to identify which cases are relevant to the user's query.
    - The title often contains the legal topic (e.g. "Seksuaalirikos - Lapsen seksuaalinen hyväksikäyttö").
 
-5. **Mandatory citations**
+5. **Mandatory citations — cite ALL relevant sources**
    - Every factual or legal claim must cite its source case.
+   - Cite ALL cases from the provided context that are relevant to the question — do NOT limit yourself to 2–3.
    - Format: [CaseID] for case law (e.g. [KKO:2019:104])
    - You may mention statute sections inline (e.g. "OYL 6 luvun 26 §:n mukaan"), but do NOT list statutes as separate sources.
    - Use only case IDs that appear in the provided context.
@@ -203,7 +206,7 @@ class LLMGenerator:
         self.llm = ChatOpenAI(
             model=model,
             temperature=0.1,  # Low temperature for accuracy
-            max_tokens=800,  # Cap response length for faster generation
+            max_tokens=config.LLM_MAX_TOKENS,  # Room for comprehensive answers and more citations
             api_key=os.getenv("OPENAI_API_KEY"),
             request_timeout=30,  # 30s cap; retries are expensive
         )
@@ -254,7 +257,7 @@ class LLMGenerator:
         """
         from src.utils.query_context import get_recent_context_for_llm
 
-        conv_context = get_recent_context_for_llm(conversation_history or [], max_turns=2) or ""
+        conv_context = get_recent_context_for_llm(conversation_history or [], max_turns=3) or ""
         context = self._build_context(context_chunks)
         user_content = self._build_user_content(
             query, context, focus_case_ids, response_language, conversation_context=conv_context
@@ -283,7 +286,7 @@ class LLMGenerator:
         """Stream response with citations. If focus_case_ids set, answer focuses on that case."""
         from src.utils.query_context import get_recent_context_for_llm
 
-        conv_context = get_recent_context_for_llm(conversation_history or [], max_turns=2) or ""
+        conv_context = get_recent_context_for_llm(conversation_history or [], max_turns=3) or ""
         context = self._build_context(context_chunks)
         user_content = self._build_user_content(
             query, context, focus_case_ids, response_language, conversation_context=conv_context

@@ -6,14 +6,8 @@ Unit tests for agent routing logic: route_intent, route_search_result,
 and the _is_obvious_legal_query fast-path helper.
 
 All tests are pure-logic — no LLM calls, no network.
+Env vars (e.g. REFORMULATE_ENABLED) are set in conftest.py.
 """
-
-import os
-
-# Set env vars before importing modules that trigger settings/config loading.
-os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
-os.environ.setdefault("SUPABASE_KEY", "test-key")
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from src.agent.graph import route_intent, route_search_result
 from src.agent.nodes import _is_obvious_legal_query
@@ -45,6 +39,10 @@ class TestRouteIntent:
         state = {}
         assert route_intent(state) == "search"
 
+    def test_none_intent_defaults_to_search(self) -> None:
+        state = {"intent": None}
+        assert route_intent(state) == "search"
+
 
 # ---------------------------------------------------------------------------
 # route_search_result
@@ -72,6 +70,16 @@ class TestRouteSearchResult:
 
     def test_missing_results_key_defaults_to_reformulate(self) -> None:
         state = {"search_attempts": 1}
+        assert route_search_result(state) == "reformulate"
+
+    def test_search_results_none_treated_as_empty(self) -> None:
+        """When search_results is None, treat as empty and route accordingly."""
+        state = {"search_results": None, "search_attempts": 1}
+        assert route_search_result(state) == "reformulate"
+
+    def test_search_attempts_non_numeric_falls_back_to_one(self) -> None:
+        """When search_attempts is non-numeric, treat as 1 (reformulate on first attempt)."""
+        state = {"search_results": [], "search_attempts": "invalid"}
         assert route_search_result(state) == "reformulate"
 
 
@@ -106,3 +114,6 @@ class TestIsObviousLegalQuery:
 
     def test_very_short_nonlegal_is_false(self) -> None:
         assert _is_obvious_legal_query("ab") is False
+
+    def test_none_query_returns_false(self) -> None:
+        assert _is_obvious_legal_query(None) is False

@@ -17,24 +17,8 @@ from scripts.case_law.core.shared import (
     save_documents_to_json,
     write_local_enabled,
 )
-from src.services.case_law.models import CaseLawDocument, Reference
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-def _make_doc(**overrides) -> CaseLawDocument:
-    defaults = {
-        "case_id": "KKO:2024:42",
-        "court_type": "supreme_court",
-        "court_code": "KKO",
-        "decision_type": "precedent",
-        "case_year": 2024,
-        "title": "Test Case 42",
-        "full_text": "Full legal text here.",
-    }
-    defaults.update(overrides)
-    return CaseLawDocument(**defaults)
+from src.services.case_law.models import Reference
+from tests.helpers import make_case_law_doc
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +28,7 @@ class TestJsonRoundTrip:
     """Test save → load produces equivalent documents."""
 
     def test_single_document_round_trip(self, tmp_path: Path) -> None:
-        doc = _make_doc()
+        doc = make_case_law_doc(case_id="KKO:2024:42", title="Test Case 42", full_text="Full legal text here.")
         json_path = tmp_path / "test.json"
         save_documents_to_json([doc], json_path)
 
@@ -55,7 +39,7 @@ class TestJsonRoundTrip:
         assert loaded[0].title == "Test Case 42"
 
     def test_round_trip_preserves_references(self, tmp_path: Path) -> None:
-        doc = _make_doc()
+        doc = make_case_law_doc(case_id="KKO:2024:42")
         doc.references = [
             Reference(ref_id="KKO:2020:15", ref_type="precedent"),
             Reference(ref_id="RL 21:1", ref_type="legislation"),
@@ -69,7 +53,7 @@ class TestJsonRoundTrip:
         assert loaded[0].references[1].ref_type == "legislation"
 
     def test_multiple_documents(self, tmp_path: Path) -> None:
-        docs = [_make_doc(case_id=f"KKO:2024:{i}") for i in range(5)]
+        docs = [make_case_law_doc(case_id=f"KKO:2024:{i}") for i in range(5)]
         json_path = tmp_path / "multi.json"
         save_documents_to_json(docs, json_path)
 
@@ -106,7 +90,7 @@ class TestLoadDocumentsEdgeCases:
 
     def test_malformed_item_skipped(self, tmp_path: Path) -> None:
         path = tmp_path / "partial.json"
-        good = _make_doc().to_dict()
+        good = make_case_law_doc().to_dict()
         good["references"] = []
         bad = {"missing": "fields"}
         path.write_text(json.dumps([good, bad]), encoding="utf-8")
