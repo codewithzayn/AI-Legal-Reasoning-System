@@ -17,6 +17,7 @@ Conversation boundary: only use recent messages to avoid stale context
 when the user has moved to a new topic.
 """
 
+from src.utils.legal_keywords import LEGAL_TOPIC_KEYWORDS
 from src.utils.year_filter import extract_year_range
 
 # Max messages to consider when resolving context (prevents stale merge)
@@ -25,60 +26,8 @@ MAX_CONTEXT_MESSAGES = 6
 # For Case 2 (topic + year merge): only look at last N messages
 MAX_MESSAGES_FOR_YEAR_MERGE = 4
 
-# Legal topic keywords (fi, en, sv) - if present, query is searchable
-_LEGAL_TOPIC_WORDS = (
-    "fraud",
-    "petos",
-    "bedrägeri",
-    "theft",
-    "varkaus",
-    "stöld",
-    "embezzlement",
-    "kavallus",
-    "contract",
-    "sopimus",
-    "avtal",
-    "damages",
-    "vahingonkorvaus",
-    "skadestånd",
-    "penalty",
-    "rangaistus",
-    "straff",
-    "kko",
-    "kho",
-    "rikos",
-    "oikeus",
-    "laki",
-    "tuomio",
-    "case",
-    "tapaus",
-    "mål",
-    "fall",
-    "administrative",
-    "hallinto",
-    "förvaltning",
-    "tax",
-    "vero",
-    "skatt",
-    "employment",
-    "työoikeus",
-    "arbetsrätt",
-    "civil",
-    "siviili",
-    "civile",
-    "criminal",
-    "rikosoikeus",
-    "straffrätt",
-    "insurance",
-    "vakuutus",
-    "försäkring",
-    "immigration",
-    "maahanmuutto",
-    "invandring",
-    "environment",
-    "ympäristö",
-    "miljö",
-)
+# Single source: imported from src.utils.legal_keywords — covers EN, FI, SV.
+_LEGAL_TOPIC_WORDS = LEGAL_TOPIC_KEYWORDS
 
 
 def _has_legal_topic(text: str) -> bool:
@@ -163,13 +112,24 @@ def resolve_query_with_context(
 
     # Do not attach year from history if current prompt says "all years" / "no filter"
     _all_years_markers = (
+        # English
         "all years",
         "for all years",
         "any year",
         "no filter",
         "every year",
+        "no restriction",
+        "any time",
+        # Finnish
         "kaikki vuodet",
         "ei rajoitusta",
+        "kaikki",
+        # Swedish
+        "alla år",
+        "allt",
+        "inga restriktioner",
+        "alla tider",
+        "alla",
     )
     if any(m in text.lower() for m in _all_years_markers):
         return (text, None)

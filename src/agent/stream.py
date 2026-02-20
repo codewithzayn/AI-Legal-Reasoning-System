@@ -178,7 +178,20 @@ async def stream_query_response(
     effective_query, year_start, year_end, year_clarification_answered = _resolve_query_params(
         user_query, original_query_for_year, year_range
     )
-    response_lang = detect_query_language(effective_query) if lang == "auto" else lang or "fi"
+
+    # Language resolution rules (EN / FI / SV supported):
+    # 1. Explicit UI language setting → always use it.
+    # 2. Auto mode → detect from query, but use the *original* user_query for
+    #    detection (not effective_query), because year-range strings like
+    #    "2010-2020" or "all years" are too short/numeric to detect reliably.
+    if lang in ("en", "fi", "sv"):
+        response_lang = lang
+    elif lang == "auto":
+        # Prefer original user_query for detection; fall back to "fi"
+        detect_source = user_query if len(user_query.strip()) > 5 else effective_query
+        response_lang = detect_query_language(detect_source) if detect_source.strip() else "fi"
+    else:
+        response_lang = "fi"
 
     stream_queue: asyncio.Queue[str | None] = asyncio.Queue()
     initial_state = _build_initial_state(

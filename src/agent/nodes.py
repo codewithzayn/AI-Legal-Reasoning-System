@@ -14,6 +14,7 @@ from src.config.translations import t
 from src.services.retrieval import HybridRetrieval
 from src.services.retrieval.generator import LLMGenerator
 from src.services.retrieval.relevancy import check_relevancy
+from src.utils.legal_keywords import LEGAL_TOPIC_KEYWORDS
 from src.utils.query_context import get_recent_context_for_llm
 from src.utils.retry import retry_async
 from src.utils.year_filter import extract_year_range
@@ -30,42 +31,8 @@ _generator = LLMGenerator()  # model from config.OPENAI_CHAT_MODEL (e.g. gpt-4o 
 _retrieval = HybridRetrieval()  # singleton: reuses Supabase client, embedder, reranker across searches
 
 
-_LEGAL_TOPIC_MARKERS = (
-    "kko",
-    "kho",
-    "laki",
-    "§",
-    "pykälä",
-    "tuomio",
-    "rangaistus",
-    "edellyty",
-    "milloin",
-    "missä tapauksessa",
-    "rikos",
-    "sopimus",
-    "oikeus",
-    "finlex",
-    "ennakkopäätös",
-    "tuomioistuin",
-    "syyte",
-    "valitus",
-    "hakemus",
-    "fraud",
-    "petos",
-    "theft",
-    "varkaus",
-    "embezzlement",
-    "kavallus",
-    "consequences",
-    "seuraus",
-    "korvaus",
-    "damages",
-    "vahingonkorvaus",
-    "liability",
-    "vastuu",
-    "case",
-    "tapaus",
-)
+# Single source: imported from src.utils.legal_keywords — covers EN, FI, SV.
+_LEGAL_TOPIC_MARKERS = LEGAL_TOPIC_KEYWORDS
 
 
 def _is_obvious_legal_query(query: str) -> bool:
@@ -204,23 +171,26 @@ async def analyze_intent(state: AgentState) -> AgentState:
     query = state["query"]
     messages = state.get("messages") or []
 
-    # When query is short/ambiguous and we have conversation context, let the LLM interpret it
+    if not state.get("original_query"):
+        state["original_query"] = query
+        state["search_attempts"] = 0
+
+    # 1. FIRST: honour any already-resolved year clarification.
+    #    Must run BEFORE the follow-up resolver so that short year replies
+    #    (e.g. "2010-2020", "all") are not mutated into a legal search query.
+    existing_result = _handle_existing_clarification(state, query)
+    if existing_result:
+        return existing_result
+
+    # 2. THEN: resolve ambiguous / follow-up queries with LLM context.
+    #    Safe now: year-clarification case already handled above.
     if _query_may_be_follow_up(query, messages):
         resolved = await _resolve_ambiguous_query_with_llm(query, messages)
         if resolved != query:
             state["query"] = resolved
             query = resolved
 
-    if not state.get("original_query"):
-        state["original_query"] = query
-        state["search_attempts"] = 0
-
-    # 1. Check existing clarification state
-    existing_result = _handle_existing_clarification(state, query)
-    if existing_result:
-        return existing_result
-
-    # 2. Fast path for obvious legal queries
+    # 3. Fast path for obvious legal queries
     obvious_result = await _handle_obvious_legal_query(state, query)
     if obvious_result:
         return obvious_result
@@ -531,7 +501,13 @@ async def reason_legal(state: AgentState) -> AgentState:
 
     start_time = time.time()
     logger.info("Generating response from %s chunks...", len(results))
-    focus_case_ids = HybridRetrieval.extract_case_ids(state["query"]) if state.get("query") else []
+
+    # Use the original (user-visible) query for case-ID extraction and LLM framing.
+    # The reformulated query is for retrieval only — the user should see answers
+    # phrased around what *they* actually asked.
+    display_query = state.get("original_query") or state["query"]
+
+    focus_case_ids = HybridRetrieval.extract_case_ids(display_query) if display_query else []
     if focus_case_ids:
         logger.info("Focus case(s) for answer: %s", focus_case_ids)
     try:
@@ -540,7 +516,7 @@ async def reason_legal(state: AgentState) -> AgentState:
             response_parts: list[str] = []
             try:
                 async for chunk in _generator.astream_response(
-                    query=state["query"],
+                    query=display_query,
                     context_chunks=results,
                     focus_case_ids=focus_case_ids or None,
                     response_language=lang,
@@ -554,7 +530,7 @@ async def reason_legal(state: AgentState) -> AgentState:
             state["response"] = response
         else:
             response = await _generator.agenerate_response(
-                query=state["query"],
+                query=display_query,
                 context_chunks=results,
                 focus_case_ids=focus_case_ids or None,
                 response_language=lang,

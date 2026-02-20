@@ -396,10 +396,19 @@ def _render_quick_start_templates(lang: str) -> None:
 def _is_year_clarification_message(msg: str, lang: str) -> bool:
     """True if msg is (or contains) the year clarification question (any language).
 
-    Stored messages may include stream prefixes like 'Analyzing question...' before
-    the clarification text, so we check for containment, not exact match.
+    Stored messages may include stream status prefixes like '🔍 Searching...\n\n'
+    before the clarification text. We strip those before checking.
     """
+    import re as _re
+
     content = (msg or "").strip()
+    # Remove leading status lines (emoji + status word + ellipsis)
+    content = _re.sub(
+        r"^[\U0001F300-\U0001FFFF\U00002702-\U000027B0\U0001F004\U0001F0CF\u2600-\u26FF]+\s.*?\n+",
+        "",
+        content,
+        flags=_re.DOTALL,
+    ).strip()
     return any(t("year_clarification", code).strip() in content for code in ("en", "fi", "sv"))
 
 

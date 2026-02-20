@@ -8,30 +8,39 @@ Edit this file to add or change suggested prompts.
 # Keys: "en", "fi", "sv" for language. Use same keys as translations.
 PROMPT_TEMPLATES: dict[str, list[dict[str, str]]] = {
     "en": [
-        {"label": "Find cases about fraud", "prompt": "Find KKO cases about fraud (petos)"},
-        {"label": "Insurance contracts", "prompt": "Tell me about insurance contracts (vakuutussopimus)"},
-        {"label": "Penalty for theft", "prompt": "What is the penalty for theft (varkaus)?"},
+        # Year-aware examples first — teach users about year filtering proactively
+        {"label": "Fraud cases 2018–2023", "prompt": "Find KKO cases about fraud (petos) from 2018 to 2023"},
+        {"label": "Theft — all years", "prompt": "What is the penalty for theft (varkaus)? Search all years."},
+        # Specific case
         {"label": "Summarize specific case", "prompt": "Summarize case KKO:2024:76"},
+        # Topic searches
+        {"label": "Insurance contracts", "prompt": "Tell me about insurance contracts (vakuutussopimus)"},
         {"label": "Administrative court decisions", "prompt": "Find KHO cases about administrative law"},
-        {"label": "Damages and compensation", "prompt": "Find cases about damages (vahingonkorvaus)"},
+        {"label": "Damages and compensation", "prompt": "Find cases about damages (vahingonkorvaus) from 2015 to 2022"},
         {"label": "Civil court jurisdiction", "prompt": "Tell me about civil court jurisdiction"},
     ],
     "fi": [
-        {"label": "Etsi petostapauksia", "prompt": "Etsi KKO-tapauksia petoksesta"},
-        {"label": "Vakuutussopimukset", "prompt": "Kerro vakuutussopimuksista"},
-        {"label": "Varkauden rangaistus", "prompt": "Mikä on varkauden (varkaus) rangaistus?"},
+        # Vuositietoiset esimerkit ensin — opettaa käyttäjälle vuosisuodatuksen
+        {"label": "Petostapaukset 2018–2023", "prompt": "Etsi KKO-tapauksia petoksesta vuosilta 2018–2023"},
+        {"label": "Varkaus — kaikki vuodet", "prompt": "Mikä on varkauden (varkaus) rangaistus? Hae kaikki vuodet."},
+        # Tietty tapaus
         {"label": "Tiivistä tapaus", "prompt": "Tiivistä tapaus KKO:2024:76"},
+        # Aihekohtaiset haut
+        {"label": "Vakuutussopimukset", "prompt": "Kerro vakuutussopimuksista"},
         {"label": "Hallinto-oikeuden päätökset", "prompt": "Etsi KHO-tapauksia hallinto-oikeudesta"},
-        {"label": "Vahingonkorvaus", "prompt": "Etsi tapauksia vahingonkorvauksesta"},
+        {"label": "Vahingonkorvaus 2015–2022", "prompt": "Etsi tapauksia vahingonkorvauksesta vuosilta 2015–2022"},
         {"label": "Siviilioikeus", "prompt": "Kerro siviilioikeuksien toimivaltasta"},
     ],
     "sv": [
-        {"label": "Hitta fall om bedrägeri", "prompt": "Hitta KKO-fall om bedrägeri (petos)"},
-        {"label": "Försäkringsavtal", "prompt": "Berätta om försäkringsavtal"},
-        {"label": "Straff för stöld", "prompt": "Vad är straffet för stöld (varkaus)?"},
+        # Årsmedvetna exempel först — lär användaren om årsfiltrering
+        {"label": "Bedrägerimål 2018–2023", "prompt": "Hitta KKO-fall om bedrägeri (petos) från 2018 till 2023"},
+        {"label": "Stöld — alla år", "prompt": "Vad är straffet för stöld (varkaus)? Sök alla år."},
+        # Specifikt fall
         {"label": "Sammanfatta fall", "prompt": "Sammanfatta fall KKO:2024:76"},
+        # Ämnessökningar
+        {"label": "Försäkringsavtal", "prompt": "Berätta om försäkringsavtal"},
         {"label": "Förvaltningsdomstol", "prompt": "Hitta KHO-fall om förvaltningsrätt"},
-        {"label": "Skadestånd", "prompt": "Hitta fall om skadestånd (vahingonkorvaus)"},
+        {"label": "Skadestånd 2015–2022", "prompt": "Hitta fall om skadestånd (vahingonkorvaus) från 2015 till 2022"},
         {"label": "Civila domstolar", "prompt": "Berätta om civila domstolars behörighet"},
     ],
 }

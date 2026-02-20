@@ -30,8 +30,11 @@ _YEAR_SCOPE_SYSTEM = """You interpret the user's intent regarding which years of
 
 Given a legal search query, determine the year scope:
 
-1. "all" - User explicitly wants ALL years / no filter. Examples: "for all years", "all years", "any year", "check all", "every year", "no restriction", "no filter", "any time", "don't care about years", "search everything".
-2. "specific" - User specified a year or range (e.g. 2018, 2010-2020, "from 2015").
+1. "all" - User explicitly wants ALL years / no filter. Examples (any language):
+   English: "for all years", "all years", "any year", "check all", "every year", "no restriction", "no filter", "any time", "don't care about years", "search everything".
+   Finnish: "kaikki vuodet", "kaikki", "ei rajoitusta", "kaikki ajat".
+   Swedish: "alla år", "allt", "alla", "inga restriktioner", "alla tider", "något år", "inget filter".
+2. "specific" - User specified a year or range (e.g. 2018, 2010-2020, "from 2015", "vuodesta 2015", "från 2015").
 3. "ask" - User has NOT specified; we should ask which years to search.
 
 Respond with exactly one word on the first line: all, specific, or ask.
@@ -39,9 +42,12 @@ If "specific", add a second line with the year/range as YEAR or YEAR1-YEAR2 (e.g
 
 _YEAR_REPLY_SYSTEM = """The user was asked: "Which years' court decisions would you like to search? Specify a range (e.g. 2010–2020) or say 'all' for no filter."
 
-Interpret their reply. Respond with exactly one word on the first line:
-- "all" - They want no filter / all years. Examples: "all", "check all", "every year", "any", "no filter", "any year", "I don't care", "all of them".
-- "specific" - They gave a year or range (e.g. "2018", "2010-2020", "from 2015 to 2020").
+Interpret their reply. The user may answer in English, Finnish, or Swedish. Respond with exactly one word on the first line:
+- "all" - They want no filter / all years. Examples:
+  English: "all", "check all", "every year", "any", "no filter", "any year", "I don't care", "all of them".
+  Finnish: "kaikki", "kaikki vuodet", "ei rajoitusta".
+  Swedish: "allt", "alla", "alla år", "inga restriktioner", "inget filter".
+- "specific" - They gave a year or range (e.g. "2018", "2010-2020", "from 2015 to 2020", "vuodesta 2010", "från 2015").
 - "ask" - Unclear; treat as needing clarification.
 
 If "specific", add a second line with the year or range as YEAR or YEAR1-YEAR2."""
