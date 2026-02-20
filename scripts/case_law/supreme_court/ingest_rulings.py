@@ -4,8 +4,7 @@
 """
 Ingest Supreme Court (KKO) cases by subtype.
 
-Unified script that replaces the old separate ingest_leaves.py and ingest_rulings.py.
-Defaults to "ruling" when called directly; pass --subtype to choose.
+Unified script for KKO rulings and leaves to appeal. Defaults to "ruling"; use --subtype leave_to_appeal for valitusluvat. make ingest-leaves calls this with --subtype leave_to_appeal.
 
 Usage:
   python scripts/case_law/supreme_court/ingest_rulings.py --year 2025

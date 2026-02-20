@@ -10,9 +10,9 @@ from datetime import datetime
 from pathlib import Path
 
 from scripts.case_law.core.shared import (
-    SUBTYPE_DIR_MAP,
     get_supabase_client,
     load_documents_from_json,
+    resolve_json_path,
     save_documents_to_json,
 )
 from src.config.logging_config import setup_logger
@@ -281,13 +281,15 @@ class IngestionManager:
     #  ingest_year helper methods
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _resolve_json_path(year: int, subtype: str | None) -> tuple[Path, bool]:
-        """Return (json_file, no_json_cache) for a given year/subtype."""
-        subdir = SUBTYPE_DIR_MAP.get(subtype, "other")
-        json_dir = Path(f"data/case_law/supreme_court/{subdir}")
+    def _resolve_json_path(self, year: int, subtype: str | None) -> tuple[Path, bool]:
+        """Return (json_file, no_json_cache) for a given court/year/subtype.
+
+        Resolves to: data/case_law/{court}/{subdir}/{year}.json
+        Works for both KKO (supreme_court) and KHO (supreme_administrative_court).
+        """
+        json_file = resolve_json_path(self.court, year, subtype)
         no_json_cache = os.getenv("CASE_LAW_NO_JSON_CACHE", "").lower() in ("1", "true", "yes")
-        return json_dir / f"{year}.json", no_json_cache
+        return json_file, no_json_cache
 
     async def _load_or_scrape(
         self,

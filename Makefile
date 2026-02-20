@@ -7,6 +7,8 @@
 	ingest-rulings ingest-leaves ingest-kko ingest-kho ingest-history \
 	scrape-json-pdf-drive scrape-json-pdf-drive-range \
 	export-pdf-drive export-pdf-drive-range export-pdf-drive-type \
+	kho-scrape-json-pdf-drive kho-scrape-json-pdf-drive-range \
+	kho-export-pdf-drive kho-export-pdf-drive-range kho-export-pdf-drive-type \
 	ingest-finlex \
 	verify-ingestion reingest-cases
 
@@ -59,7 +61,12 @@ help:
 	@echo "  make export-pdf-drive-type   Export one type for one year. Optional: TYPE=precedent YEAR=2025"
 	@echo ""
 	@echo "--- Case law: Supreme Administrative Court (KHO) ---"
-	@echo "  make ingest-kho           Ingest KHO case law for one year. Optional: YEAR=2026"
+	@echo "  make ingest-kho                             Ingest KHO case law for one year. Optional: YEAR=2026"
+	@echo "  make kho-scrape-json-pdf-drive              KHO: Scrape → JSON → PDF → Drive. YEAR=2025"
+	@echo "  make kho-scrape-json-pdf-drive-range        KHO: Same, year range. START=2020 END=2024"
+	@echo "  make kho-export-pdf-drive                   KHO: Export existing JSON to PDF + Drive. YEAR=2025"
+	@echo "  make kho-export-pdf-drive-range             KHO: Same, year range. START=2020 END=2026"
+	@echo "  make kho-export-pdf-drive-type              KHO: Export one subtype. TYPE=precedent YEAR=2025"
 	@echo ""
 	@echo "--- Finlex (statutes) ---"
 	@echo "  make ingest-finlex       Bulk ingest Finlex statutes"
@@ -153,7 +160,7 @@ ingest-rulings:
 	python3 scripts/case_law/supreme_court/ingest_rulings.py --year $(YEAR)
 
 ingest-leaves:
-	python3 scripts/case_law/supreme_court/ingest_leaves.py --year $(YEAR)
+	python3 scripts/case_law/supreme_court/ingest_rulings.py --subtype leave_to_appeal --year $(YEAR)
 
 ingest-kko:
 	python3 scripts/case_law/supreme_court/ingest_all_subtypes.py --year $(YEAR)
@@ -171,7 +178,33 @@ ingest-history:
 # Case law: Supreme Administrative Court (KHO)
 # ------------------------------------------------------------------------------
 ingest-kho:
-	python3 scripts/case_law/supreme_administrative_court/ingest.py --year $(YEAR)
+	python3 scripts/case_law/supreme_administrative_court/ingest.py --year $(YEAR) $(if $(KHO_TYPE),--type $(KHO_TYPE),)
+
+# KHO: Scrape website → save JSON → PDF (ditto copy) → Google Drive (one command, no Supabase)
+KHO_TYPE ?=
+kho-scrape-json-pdf-drive:
+	python3 scripts/case_law/core/scrape_json_pdf_drive.py --court supreme_administrative_court --year $(YEAR) $(if $(KHO_TYPE),--type $(KHO_TYPE),)
+
+kho-scrape-json-pdf-drive-range:
+	python3 scripts/case_law/core/scrape_json_pdf_drive.py --court supreme_administrative_court --start $(START) --end $(END) $(if $(KHO_TYPE),--type $(KHO_TYPE),)
+
+# KHO: Scrape only → save JSON (no PDF, no Drive). Then run kho-export-pdf-drive-range to upload.
+kho-scrape-json-only-range:
+	python3 scripts/case_law/core/scrape_json_pdf_drive.py --court supreme_administrative_court --start $(START) --end $(END) $(if $(KHO_TYPE),--type $(KHO_TYPE),) --json-only
+
+# KHO: One year only, precedents only, JSON only (free/light run).
+kho-scrape-json-only:
+	python3 scripts/case_law/core/scrape_json_pdf_drive.py --court supreme_administrative_court --year $(YEAR) --type precedent --json-only
+
+# KHO: Export existing JSON → PDF → Google Drive (no scraping)
+kho-export-pdf-drive:
+	python3 scripts/case_law/core/export_pdf_to_drive.py --court supreme_administrative_court --year $(YEAR) $(if $(KHO_TYPE),--type $(KHO_TYPE),)
+
+kho-export-pdf-drive-range:
+	python3 scripts/case_law/core/export_pdf_to_drive.py --court supreme_administrative_court --start $(START) --end $(END) $(if $(KHO_TYPE),--type $(KHO_TYPE),)
+
+kho-export-pdf-drive-type:
+	python3 scripts/case_law/core/export_pdf_to_drive.py --court supreme_administrative_court --type $(KHO_TYPE) --year $(YEAR)
 
 # ------------------------------------------------------------------------------
 # Case law: Scrape → JSON + PDF (ditto copy of website) → Google Drive (one command)

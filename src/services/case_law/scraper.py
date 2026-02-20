@@ -451,22 +451,60 @@ class CaseLawScraper:
         Create a CaseLawDocument from the scraped text.
         Extracts metadata from the structured header block and populates all available fields.
         url_suffix: when URL path ends with a non-numeric segment (e.g. "II-219" for 1926 precedents), use for case_id.
+
+        Handled case ID formats:
+          Modern standard:  KHO:2022:150   KKO:2025:3
+          Modern English:   Supreme Court:2014:199   (Finlex English-page label for both KKO and KHO)
+          Old standard:     KHO:1979-II-659  KKO:1926-I-10
+          Old w/ letter:    KHO:1979-B-II-659  KKO:1994-B-583   (letter prefix before Roman numeral)
+          Old English:      Supreme Court:1994-B-583
         """
         court_prefix = "KKO" if court == "supreme_court" else "KHO"
 
-        # Extract case_id: prefer old format (KKO:1926-I-10, KKO:1926-II-219) from first line, then modern format
+        # --- Priority 1: Finlex English label "Supreme Court:YEAR:REST" or "Supreme Administrative Court:YEAR:REST"
+        # Finlex English-language pages prefix case IDs with "Supreme Court" (for both KKO and KHO)
+        # or "Supreme Administrative Court" (for KHO). We strip the label and keep everything after the first colon.
+        # Examples:
+        #   "Supreme Court:2014:199"      → KHO:2014:199   (or KKO:2014:199 depending on court arg)
+        #   "Supreme Court:1994-B-583"    → KHO:1994-B-583
+        #   "Supreme Administrative Court:2014:199" → KHO:2014:199
         first_line = (text.split("\n")[0] or "").strip()
-        old_format_match = re.match(rf"^({court_prefix}:\d{{4}}-[IVXLCDM]+-\d+)\b", first_line, re.IGNORECASE)
-        if old_format_match:
-            final_id = old_format_match.group(1)
+        _english_label_match = re.match(
+            r"^Supreme\s+(?:Administrative\s+)?Court[:\s]+(\S.*)",
+            first_line,
+            re.IGNORECASE,
+        )
+        if _english_label_match:
+            raw_suffix = _english_label_match.group(1).strip()
+            # raw_suffix is everything after the court label, e.g. "2014:199" or "1994-B-583"
+            # Just prepend the correct Finnish prefix
+            final_id = f"{court_prefix}:{raw_suffix}"
+
+        # --- Priority 2: Old Finnish hyphenated format — extended to handle letter prefixes
+        # Matches: KHO:1979-II-659   KHO:1979-B-II-659   KKO:1926-II-10   KKO:1994-B-583
+        # Pattern:  PREFIX:YEAR - [optional LETTER(S)-] ROMAN-OR-ALPHA - NUMBER
+        elif re.match(
+            rf"^({court_prefix}:\d{{4}}-(?:[A-Z]+-)?[IVXLCDM\w]+-\d+)\b",
+            first_line,
+            re.IGNORECASE,
+        ):
+            final_id = re.match(
+                rf"^({court_prefix}:\d{{4}}-(?:[A-Z]+-)?[IVXLCDM\w]+-\d+)\b",
+                first_line,
+                re.IGNORECASE,
+            ).group(1)
+
+        # --- Priority 3: Modern Finnish format KHO:YEAR:NUM / KKO:YEAR:NUM in full text
         else:
             case_id_match = re.search(rf"{court_prefix}[:\s]*\d{{4}}[:\s]*\d+", text)
             if not case_id_match:
+                # Fallback: date-based format e.g. "KHO 12.3.2001/123"
                 case_id_match = re.search(rf"{court_prefix}\s+\d{{1,2}}\.\d{{1,2}}\.{year}/\d+", text)
             if case_id_match:
                 raw_id = case_id_match.group(0)
                 final_id = raw_id if "/" in raw_id else raw_id.replace(" ", ":")
             elif url_suffix:
+                # URL-based fallback: last path segment is the case number (e.g. ".../ennakkopaatokset/2025/6")
                 final_id = f"{court_prefix}:{year}:{url_suffix}"
             else:
                 final_id = f"{court_prefix}:{year}:{number}"

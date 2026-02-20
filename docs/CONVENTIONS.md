@@ -45,7 +45,7 @@ Where to put what, and how the project is organized.
 - **Finlex ingestion:** `finlex_ingest/` – uses the Finlex API (documented).
 - **Case law:** `case_law/` – per court/subtype; uses scraping (no API). See [DATA_SOURCES.md](DATA_SOURCES.md).
   - **Core** (`case_law/core/`): shared pipeline – `ingestion_manager.py`, `ingest_history.py`, `export_pdf_to_drive.py`, `scrape_json_pdf_drive.py`, `check_ingestion_status.py` (Supabase ingestion status).
-  - **Supreme Court** (`case_law/supreme_court/`): `ingest_precedents.py`, `ingest_rulings.py`, `ingest_leaves.py`, `ingest_all_subtypes.py`, `verify_json_full_text.py` (scan JSON for empty full_text), `update_case_full_text.py` (manual full_text fix).
+  - **Supreme Court** (`case_law/supreme_court/`): `ingest_precedents.py`, `ingest_rulings.py` (rulings + leave_to_appeal via --subtype), `ingest_all_subtypes.py`, `verify_json_full_text.py` (scan JSON for empty full_text), `update_case_full_text.py` (manual full_text fix).
 - **Migrations:** `migrations/*.sql` – all schema/DB changes.
 - Scripts import from `src/` only. Run from **project root** (optionally with `PYTHONPATH` set to project root).
 
@@ -85,7 +85,7 @@ Where to put what, and how the project is organized.
 
 ## Naming conventions
 
-- **Ingestion scripts (case law):** `ingest_<subtype>.py` for a single document type (e.g. `ingest_precedents.py`, `ingest_rulings.py`, `ingest_leaves.py`). Use `ingest_all_subtypes.py` when the script runs all subtypes for that court in one go. The folder already names the court (e.g. `supreme_court/`), so the file name describes *what* is ingested.
+- **Ingestion scripts (case law):** `ingest_<subtype>.py` or unified scripts (e.g. `ingest_precedents.py`, `ingest_rulings.py` with `--subtype ruling` or `--subtype leave_to_appeal`). Use `ingest_all_subtypes.py` when the script runs all subtypes for that court in one go. The folder already names the court (e.g. `supreme_court/`), so the file name describes *what* is ingested.
 - **Finlex:** `bulk_ingest.py` under `scripts/finlex_ingest/` for bulk statute ingestion.
 - **API module:** `src/api/ingest.py` is the FastAPI app for ingest endpoints (not a script; it’s an importable module).
 - **No generic `ingest.py`** in a court folder when that folder has multiple subtypes; use `ingest_all_subtypes.py` or one script per subtype so names are explicit and consistent.

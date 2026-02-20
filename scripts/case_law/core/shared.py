@@ -4,7 +4,11 @@
 """
 Shared constants and helpers for case law scripts (scrape, export, ingestion).
 Single source of truth – imported by scrape_json_pdf_drive.py, export_pdf_to_drive.py,
-and ingestion_manager.py.
+ingestion_manager.py, and the KHO-specific scripts.
+
+Supports both courts:
+  - supreme_court               (KKO – Korkein oikeus)
+  - supreme_administrative_court (KHO – Korkein hallinto-oikeus)
 """
 
 import contextlib
@@ -21,28 +25,78 @@ from src.services.drive.uploader import GoogleDriveUploader
 
 logger = setup_logger(__name__)
 
-# ── Court constant ──────────────────────────────────────────────────
+# ── Legacy KKO court constant (kept for backward-compat with existing KKO scripts) ──
+# The core KKO scripts (scrape_json_pdf_drive.py, export_pdf_to_drive.py) import this.
+# Do NOT rename — it is part of the stable KKO interface.
 COURT = "supreme_court"
 
-# ── Subtype → directory name mapping ────────────────────────────────
-# Used by ingestion_manager, scrape_json_pdf_drive, export_pdf_to_drive.
+# ── KKO subtype → local directory name ──────────────────────────────────────
+# Used by ingestion_manager (KKO path), scrape_json_pdf_drive, export_pdf_to_drive.
 SUBTYPE_DIR_MAP: dict[str | None, str] = {
     "precedent": "precedents",
     "ruling": "rulings",
     "leave_to_appeal": "leaves_to_appeal",
-    "decision": "decisions",  # extra entry used by ingestion only
+    "decision": "decisions",  # extra alias used internally
     None: "other",  # fallback for ingestion_manager
 }
 
-# ── Subtype → human-readable label (for Drive folder names) ────────
+# ── KKO subtype → Drive folder label ────────────────────────────────────────
 TYPE_LABEL_MAP: dict[str, str] = {
     "precedent": "Supreme Court Precedents",
     "ruling": "Supreme Court Rulings",
     "leave_to_appeal": "Supreme Court Leaves to Appeal",
 }
 
+# ── KHO subtype → local directory name ──────────────────────────────────────
+KHO_SUBTYPE_DIR_MAP: dict[str | None, str] = {
+    "precedent": "precedents",
+    "other": "other_decisions",
+    "brief": "brief_explanations",
+    None: "other",  # fallback
+}
 
-# ── Helpers ─────────────────────────────────────────────────────────
+# ── KHO subtype → Drive folder label ────────────────────────────────────────
+KHO_TYPE_LABEL_MAP: dict[str, str] = {
+    "precedent": "Supreme Administrative Court Precedents",
+    "other": "Supreme Administrative Court Other Decisions",
+    "brief": "Supreme Administrative Court Brief Explanations",
+}
+
+# ── Combined per-court lookup helpers ───────────────────────────────────────
+# Maps court  →  (subtype_dir_map, type_label_map)
+_COURT_MAPS: dict[str, tuple[dict, dict]] = {
+    "supreme_court": (SUBTYPE_DIR_MAP, TYPE_LABEL_MAP),
+    "supreme_administrative_court": (KHO_SUBTYPE_DIR_MAP, KHO_TYPE_LABEL_MAP),
+}
+
+
+def get_subtype_dir_map(court: str) -> dict:
+    """Return the subtype→directory mapping for the given court."""
+    return _COURT_MAPS.get(court, (SUBTYPE_DIR_MAP, TYPE_LABEL_MAP))[0]
+
+
+def get_type_label_map(court: str) -> dict:
+    """Return the subtype→Drive-folder-label mapping for the given court."""
+    return _COURT_MAPS.get(court, (SUBTYPE_DIR_MAP, TYPE_LABEL_MAP))[1]
+
+
+def resolve_json_path(court: str, year: int, subtype: str | None, project_root: Path | None = None) -> Path:
+    """Return the canonical JSON cache path for (court, year, subtype).
+
+    Example:
+        resolve_json_path("supreme_court", 2025, "precedent")
+        → data/case_law/supreme_court/precedents/2025.json
+
+        resolve_json_path("supreme_administrative_court", 2025, "other")
+        → data/case_law/supreme_administrative_court/other_decisions/2025.json
+    """
+    root = project_root or Path()
+    subtype_dir_map = get_subtype_dir_map(court)
+    subdir = subtype_dir_map.get(subtype, "other")
+    return root / "data" / "case_law" / court / subdir / f"{year}.json"
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def write_local_enabled() -> bool:
@@ -105,9 +159,9 @@ def init_drive_uploader(project_root: Path) -> GoogleDriveUploader | None:
         return None
 
 
-# ── JSON serialization helpers ───────────────────────────────────────
+# ── JSON serialization helpers ───────────────────────────────────────────────
 # Single source of truth for load/save — used by ingestion_manager,
-# export_pdf_to_drive, and scrape_json_pdf_drive.
+# export_pdf_to_drive, scrape_json_pdf_drive, and KHO-specific scripts.
 
 
 def load_documents_from_json(json_path: Path) -> list[CaseLawDocument]:

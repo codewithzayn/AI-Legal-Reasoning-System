@@ -5,10 +5,17 @@
 Standalone backup pipeline: load case law from JSON cache, convert each document to PDF,
 write to local export root, and upload to Google Drive. No scraping. Run per year or range.
 
-Usage:
+Supports both courts via --court flag (default: supreme_court for backward compatibility).
+
+Usage – KKO (Supreme Court):
   python scripts/case_law/core/export_pdf_to_drive.py --year 2025
   python scripts/case_law/core/export_pdf_to_drive.py --start 2020 --end 2026
   python scripts/case_law/core/export_pdf_to_drive.py --type precedent --year 2025
+
+Usage – KHO (Supreme Administrative Court):
+  python scripts/case_law/core/export_pdf_to_drive.py --court supreme_administrative_court --year 2025
+  python scripts/case_law/core/export_pdf_to_drive.py --court supreme_administrative_court --start 2020 --end 2026
+  python scripts/case_law/core/export_pdf_to_drive.py --court supreme_administrative_court --type precedent --year 2025
 """
 
 import argparse
@@ -20,17 +27,18 @@ from pathlib import Path
 # Suppress Google lib Python 3.10 EOL warning (no impact on Drive upload)
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*Python version.*3\\.10.*")
 
-# Project root: scripts/case_law/core/export_pdf_to_drive.py -> 3 levels up to repo root
+# Project root: scripts/case_law/core/export_pdf_to_drive.py → 3 levels up to repo root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("LOG_FORMAT", "simple")  # human-readable logs like ingest pipeline
 
 from scripts.case_law.core.shared import (
-    COURT,
-    SUBTYPE_DIR_MAP,
-    TYPE_LABEL_MAP,
+    COURT,  # legacy default = "supreme_court"
+    get_subtype_dir_map,
+    get_type_label_map,
     init_drive_uploader,
     load_documents_from_json,
+    resolve_json_path,
     upload_to_drive,
     write_local_enabled,
 )
@@ -41,22 +49,27 @@ from src.services.drive.uploader import GoogleDriveUploader
 
 logger = setup_logger(__name__)
 
+# All supported courts
+SUPPORTED_COURTS = ["supreme_court", "supreme_administrative_court"]
+
 
 def run_export(  # noqa: PLR0915
     year: int,
     subtype: str,
     export_root: Path,
+    court: str = COURT,
     drive_uploader=None,
     project_root: Path | None = None,
 ) -> tuple[int, int, int, list[str]]:
-    """Export one (year, subtype).
+    """Export one (court, year, subtype) from existing JSON → PDF → Drive.
 
     Returns (success_count, fail_count, skipped_count, failed_case_ids).
     """
     project_root = project_root or PROJECT_ROOT
-    subdir = SUBTYPE_DIR_MAP.get(subtype, "other")
-    type_label = TYPE_LABEL_MAP.get(subtype, subtype)
-    json_path = project_root / "data" / "case_law" / COURT / subdir / f"{year}.json"
+    type_label_map = get_type_label_map(court)
+    type_label = type_label_map.get(subtype, subtype)
+    json_path = resolve_json_path(court, year, subtype, project_root=project_root)
+
     if not json_path.exists():
         logger.debug("Skip %s %s (no JSON at %s)", type_label, year, json_path)
         return 0, 0, 0, []
@@ -122,7 +135,7 @@ def run_export(  # noqa: PLR0915
                 failed_ids.append(f"{doc.case_id} (write error)")
                 continue
         if drive_uploader:
-            # Safety: never upload to Drive when full_text is empty (no risk of uploading placeholder PDFs)
+            # Safety: never upload to Drive when full_text is empty
             if not (getattr(doc, "full_text", None) or "").strip():
                 logger.warning(
                     "[%s/%s] %s SKIP upload — full_text empty; PDF not uploaded to Drive",
@@ -162,7 +175,16 @@ def _parse_years(args) -> list[int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Export case law JSON cache to PDF and upload to Google Drive (no scrape)."
+        description=(
+            "Export case law JSON cache to PDF and upload to Google Drive (no scrape). "
+            "Supports both KKO and KHO via --court flag."
+        )
+    )
+    parser.add_argument(
+        "--court",
+        choices=SUPPORTED_COURTS,
+        default=COURT,  # "supreme_court" — backward-compatible default
+        help="Court to export (default: supreme_court)",
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--year", type=int, help="Single year to export (e.g. 2025)")
@@ -170,13 +192,30 @@ def main() -> int:
     parser.add_argument("--end", type=int, help="End year (use with --start)")
     parser.add_argument(
         "--type",
-        choices=list(SUBTYPE_DIR_MAP),
-        help="Limit to one subtype (precedent, ruling, leave_to_appeal)",
+        default=None,
+        help=(
+            "Limit to one subtype. KKO: precedent, ruling, leave_to_appeal. "
+            "KHO: precedent, other, brief. Omit to process all subtypes for the chosen court."
+        ),
     )
     args = parser.parse_args()
+    court = args.court
+    subtype_dir_map = get_subtype_dir_map(court)
+
+    # Validate --type for the chosen court
+    if args.type and args.type not in subtype_dir_map:
+        valid = [k for k in subtype_dir_map if k is not None]
+        parser.error(f"--type {args.type!r} is not valid for court {court!r}. Valid choices: {valid}")
+
     years = _parse_years(args)
 
-    subtypes = [args.type] if args.type else ["precedent"]
+    if args.type:
+        subtypes = [args.type]
+    elif court == "supreme_court":
+        subtypes = ["precedent"]  # KKO backward-compat default
+    else:
+        subtypes = [k for k in subtype_dir_map if k is not None]
+
     export_root_raw = (config.CASE_LAW_EXPORT_ROOT or "").strip()
     export_root = (PROJECT_ROOT / (export_root_raw or "data/case_law_export")).resolve()
     project_root_resolved = PROJECT_ROOT.resolve()
@@ -207,7 +246,14 @@ def main() -> int:
     all_failed_ids: list[str] = []
     for subtype in subtypes:
         for year in years:
-            ok, fail, skipped, failed_ids = run_export(year, subtype, export_root, drive_uploader=drive_uploader)
+            ok, fail, skipped, failed_ids = run_export(
+                year,
+                subtype,
+                export_root,
+                court=court,
+                drive_uploader=drive_uploader,
+                project_root=project_root_resolved,
+            )
             total_ok += ok
             total_fail += fail
             total_skipped += skipped
