@@ -10,7 +10,8 @@
 	kho-scrape-json-pdf-drive kho-scrape-json-pdf-drive-range \
 	kho-export-pdf-drive kho-export-pdf-drive-range kho-export-pdf-drive-type \
 	ingest-finlex \
-	verify-ingestion reingest-cases
+	verify-ingestion reingest-cases \
+	ingest-eu ingest-eu-seed ingest-eu-fi-refs ingest-echr-finland fetch-latest-curia
 
 # Default: list all commands with short descriptions
 help:
@@ -70,6 +71,13 @@ help:
 	@echo ""
 	@echo "--- Finlex (statutes) ---"
 	@echo "  make ingest-finlex       Bulk ingest Finlex statutes"
+	@echo ""
+	@echo "--- EU Case Law (CJEU, ECHR, General Court) ---"
+	@echo "  make ingest-eu           Ingest EU cases by court + year. COURT=cjeu YEAR=2024 LANG=EN"
+	@echo "  make ingest-eu-seed      Seed from existing cited_eu_cases in Finnish decisions"
+	@echo "  make ingest-eu-fi-refs   Finnish preliminary references (all CJEU cases referred by Finnish courts)"
+	@echo "  make ingest-echr-finland ECHR cases involving Finland"
+	@echo "  make fetch-latest-curia  Latest 14 days from CURIA (DAYS=14 LANG=en)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make run"
@@ -250,3 +258,24 @@ reingest-cases:
 # ------------------------------------------------------------------------------
 ingest-finlex:
 	python3 scripts/finlex_ingest/bulk_ingest.py
+
+# ------------------------------------------------------------------------------
+# EU Case Law (CJEU, ECHR, General Court)
+# ------------------------------------------------------------------------------
+EU_COURT ?= cjeu
+LANG ?= EN
+DAYS ?= 14
+ingest-eu:
+	python3 scripts/case_law/eu/ingest_eu.py --court $(EU_COURT) --year $(YEAR) --language $(LANG)
+
+ingest-eu-seed:
+	python3 scripts/case_law/eu/seed_from_citations.py
+
+ingest-eu-fi-refs:
+	python3 scripts/case_law/eu/ingest_fi_preliminary_refs.py
+
+ingest-echr-finland:
+	python3 scripts/case_law/eu/ingest_echr_finland.py
+
+fetch-latest-curia:
+	python3 scripts/case_law/eu/fetch_latest_curia.py --days $(DAYS) --language $(LANG)

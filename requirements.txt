@@ -36,13 +36,23 @@ uvicorn[standard]==0.40.0
 PyPDF2==3.0.1
 reportlab==4.2.5
 
-# Google Drive API (case law backup pipeline)
+# Google Drive API (case law backup pipeline + client ingestion)
 google-auth==2.36.0
 google-auth-oauthlib==1.2.4
 google-api-python-client==2.152.0
+
+# DOCX extraction (client document ingestion)
+python-docx==1.1.2
+
+# Microsoft auth (OneDrive client ingestion)
+msal==1.31.1
 defusedxml==0.7.1
 httpx==0.28.1
 python-json-logger==2.0.7
+
+# EU Case Law (EUR-Lex SPARQL, HUDOC HTML parsing)
+SPARQLWrapper>=2.0.0
+lxml>=5.3.0
 
 # Testing
 pytest==8.3.4

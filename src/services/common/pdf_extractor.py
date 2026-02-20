@@ -21,6 +21,37 @@ class PDFExtractor:
     def __init__(self) -> None:
         self.timeout = 30  # seconds
 
+    def extract_from_bytes(self, file_bytes: bytes, filename: str = "") -> dict[str, Any]:
+        """Extract text from PDF bytes (in-memory).
+
+        Args:
+            file_bytes: Raw PDF file bytes.
+            filename: Original filename (for logging).
+
+        Returns:
+            Dict with 'text', 'page_count', and 'char_count'.
+        """
+        from io import BytesIO
+
+        try:
+            reader = PdfReader(BytesIO(file_bytes))
+            page_count = len(reader.pages)
+            text_parts = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(page_text)
+            full_text = "\n\n".join(text_parts)
+            logger.info(
+                "Extracted %s characters from %s pages (%s)",
+                len(full_text),
+                page_count,
+                filename,
+            )
+            return {"text": full_text, "page_count": page_count, "char_count": len(full_text)}
+        except Exception as e:
+            raise Exception(f"Failed to extract text from PDF '{filename}': {e!s}") from e
+
     def extract_from_url(self, pdf_url: str) -> dict[str, Any]:
         """
         Download PDF from URL, extract text, and delete the file

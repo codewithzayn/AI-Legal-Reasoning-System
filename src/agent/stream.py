@@ -43,6 +43,30 @@ def _resolve_query_params(
     return user_query, None, None, False
 
 
+def _resolve_response_lang(user_query: str, lang: str, effective_query: str) -> str:
+    """Resolve response language from UI lang (or auto-detect)."""
+    if lang in ("en", "fi", "sv"):
+        return lang
+    if lang == "auto":
+        detect_source = user_query if len(user_query.strip()) > 5 else effective_query
+        return detect_query_language(detect_source) if detect_source.strip() else "fi"
+    return "fi"
+
+
+def _update_metadata_sink(sink: dict | None, value: dict) -> None:
+    """Copy selected graph-update keys into the metadata sink dict."""
+    if sink is None or not isinstance(value, dict):
+        return
+    if "search_results" in value:
+        sink["search_results"] = value["search_results"]
+    if value.get("relevancy_score") is not None:
+        sink["relevancy_score"] = value["relevancy_score"]
+    if value.get("relevancy_reason") is not None:
+        sink["relevancy_reason"] = value["relevancy_reason"]
+    if "retrieval_metadata" in value:
+        sink["retrieval_metadata"] = value["retrieval_metadata"]
+
+
 def _build_initial_state(
     effective_query: str,
     year_start: int | None,
@@ -51,6 +75,9 @@ def _build_initial_state(
     chat_history: list[dict] | None,
     stream_queue: asyncio.Queue[str | None],
     response_lang: str,
+    court_types: list[str] | None = None,
+    legal_domains: list[str] | None = None,
+    tenant_id: str | None = None,
 ) -> AgentState:
     """Build initial agent state for the graph."""
     return {
@@ -70,6 +97,9 @@ def _build_initial_state(
         "year_end": year_end,
         "year_clarification_answered": year_clarification_answered,
         "stream_queue": stream_queue,
+        "court_types": court_types,
+        "legal_domains": legal_domains,
+        "tenant_id": tenant_id,
     }
 
 
@@ -158,6 +188,10 @@ async def stream_query_response(
     original_query_for_year: str | None = None,
     year_range: tuple[int | None, int | None] | None = None,
     chat_history: list[dict] | None = None,
+    court_types: list[str] | None = None,
+    legal_domains: list[str] | None = None,
+    tenant_id: str | None = None,
+    metadata_sink: dict | None = None,
 ) -> AsyncIterator[str]:
     """
     Stream response from agent.
@@ -167,6 +201,9 @@ async def stream_query_response(
         lang: Language code for UI and response ("en", "fi", or "sv")
         original_query_for_year: When continuing from year clarification, the original query
         year_range: (year_start, year_end) from user's year clarification response
+        court_types: Optional list of court type filters (e.g. ["KKO", "KHO"])
+        legal_domains: Optional list of legal domain filters
+        tenant_id: Optional tenant ID for multi-tenant document isolation
 
     Yields:
         Response chunks as they're generated
@@ -179,19 +216,7 @@ async def stream_query_response(
         user_query, original_query_for_year, year_range
     )
 
-    # Language resolution rules (EN / FI / SV supported):
-    # 1. Explicit UI language setting → always use it.
-    # 2. Auto mode → detect from query, but use the *original* user_query for
-    #    detection (not effective_query), because year-range strings like
-    #    "2010-2020" or "all years" are too short/numeric to detect reliably.
-    if lang in ("en", "fi", "sv"):
-        response_lang = lang
-    elif lang == "auto":
-        # Prefer original user_query for detection; fall back to "fi"
-        detect_source = user_query if len(user_query.strip()) > 5 else effective_query
-        response_lang = detect_query_language(detect_source) if detect_source.strip() else "fi"
-    else:
-        response_lang = "fi"
+    response_lang = _resolve_response_lang(user_query, lang, effective_query)
 
     stream_queue: asyncio.Queue[str | None] = asyncio.Queue()
     initial_state = _build_initial_state(
@@ -202,6 +227,9 @@ async def stream_query_response(
         chat_history,
         stream_queue,
         response_lang,
+        court_types=court_types,
+        legal_domains=legal_domains,
+        tenant_id=tenant_id,
     )
 
     events_queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
@@ -213,6 +241,7 @@ async def stream_query_response(
                 if not isinstance(payload, dict):
                     continue
                 for key, value in payload.items():
+                    _update_metadata_sink(metadata_sink, value if isinstance(value, dict) else {})
                     await events_queue.put((key, value))
             await events_queue.put(("_done", {}))
         except Exception as e:

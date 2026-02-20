@@ -85,6 +85,17 @@ class CaseLawDocument:
     cited_government_proposals: list[str] = field(default_factory=list)
     cited_eu_cases: list[str] = field(default_factory=list)
 
+    # EU Case Law Fields
+    celex_number: str | None = None
+    eu_case_number: str | None = None  # e.g. C-311/18
+    referring_court: str | None = None
+    referring_country: str | None = None  # e.g. 'Finland'
+    advocate_general: str | None = None
+    formation: str | None = None  # e.g. 'Grand Chamber'
+    subject_matter: list[str] = field(default_factory=list)
+    language_of_case: str | None = None
+    language_variant_of_case_id: str | None = None  # case_id of the other language version
+
     # Legacy & Utils
     references: list[Reference] = field(default_factory=list)
     collective_agreements: list[dict] = field(default_factory=list)

@@ -46,7 +46,7 @@ class Config:
     # Set to false to skip Cohere rerank (use hybrid + RRF + exact-match only). Saves ~15-25s.
     RERANK_ENABLED: bool = (os.getenv("RERANK_ENABLED", "true")).strip().lower() in ("true", "1", "yes")
     # Set to false to skip relevancy check (saves ~2-5s, no score shown).
-    RELEVANCY_CHECK_ENABLED: bool = (os.getenv("RELEVANCY_CHECK_ENABLED", "false")).strip().lower() in (
+    RELEVANCY_CHECK_ENABLED: bool = (os.getenv("RELEVANCY_CHECK_ENABLED", "true")).strip().lower() in (
         "true",
         "1",
         "yes",
@@ -108,6 +108,26 @@ class Config:
     # Query length limit (chars) - reject oversize queries to avoid abuse and cost
     MAX_QUERY_LENGTH: int = int(os.getenv("MAX_QUERY_LENGTH", "2000"))
 
+    # EU Case Law (EUR-Lex CELLAR, CURIA, HUDOC)
+    EU_CASE_LAW_ENABLED: bool = (os.getenv("EU_CASE_LAW_ENABLED", "false")).strip().lower() in ("true", "1", "yes")
+    EURLEX_SPARQL_ENDPOINT: str = os.getenv(
+        "EURLEX_SPARQL_ENDPOINT", "https://publications.europa.eu/webapi/rdf/sparql"
+    )
+    EURLEX_REST_ENDPOINT: str = os.getenv("EURLEX_REST_ENDPOINT", "https://eur-lex.europa.eu/eurlex-ws/rest")
+    CURIA_BASE_URL: str = os.getenv("CURIA_BASE_URL", "https://curia.europa.eu")
+    HUDOC_API_URL: str = os.getenv("HUDOC_API_URL", "https://hudoc.echr.coe.int/app/query/results")
+
+    # Multi-tenant client document ingestion
+    LEXAI_TENANT_ID: str = os.getenv("LEXAI_TENANT_ID", "").strip()
+
+    # Google Drive OAuth for client ingestion (web flow)
+    GOOGLE_DRIVE_CLIENT_ID: str = os.getenv("GOOGLE_DRIVE_CLIENT_ID", "").strip()
+    GOOGLE_DRIVE_CLIENT_SECRET: str = os.getenv("GOOGLE_DRIVE_CLIENT_SECRET", "").strip()
+
+    # Microsoft OneDrive OAuth for client ingestion
+    MICROSOFT_CLIENT_ID: str = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
+    MICROSOFT_CLIENT_SECRET: str = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
+
 
 # Singleton instance
 config = Config()
@@ -146,7 +166,7 @@ CHAT_WELCOME_MESSAGE = "Tervetuloa! Ask me about Finnish legal documents."
 PAGE_CONFIG = {
     "page_title": APP_TITLE,
     "page_icon": APP_ICON,
-    "layout": "centered",
+    "layout": "wide",
     "initial_sidebar_state": "expanded",
 }
 

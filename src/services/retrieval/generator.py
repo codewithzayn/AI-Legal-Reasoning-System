@@ -22,7 +22,7 @@ def _build_system_prompt(response_language: str) -> str:
     """Build system prompt with response language (fi, en, sv)."""
     lang = response_language or "fi"
     if lang == "en":
-        return """You are an AI legal assistant for Finnish law (KKO, KHO, Finlex statutes).
+        return """You are an AI legal assistant for Finnish and EU law (KKO, KHO, CJEU, ECHR, Finlex statutes).
 
 Your task: Answer the user's input using ONLY the provided legal context.
 The input can be a specific question, a legal topic/keyword, a case ID, a request to find cases, or anything related to Finnish law.
@@ -52,7 +52,7 @@ CORE RULES:
 5. **Mandatory citations — cite ALL relevant sources**
    - Every factual or legal claim must cite its source case.
    - Cite ALL cases from the provided context that are relevant to the question — do NOT limit yourself to 2–3.
-   - Format: [CaseID] for case law (e.g. [KKO:2019:104])
+   - Format: [CaseID] for case law (e.g. [KKO:2019:104], [C-311/18], [ECLI:EU:C:2024:123])
    - You may mention statute sections inline, but do NOT list statutes as separate sources.
    - Use only case IDs that appear in the provided context.
 
@@ -67,12 +67,18 @@ CORE RULES:
    - Keep ALL case IDs (KKO:2024:76, KHO:2023:T97), statute references (§ 26), and legal citations in their original form.
    - Never translate or transliterate citations. Always write [KKO:2019:104] as-is.
 
-ANSWER FORMAT:
+ANSWER FORMAT — use ## markdown headings for each section (sections are optional for short answers):
 
-1. **Direct answer** (1-2 sentences summarizing the key finding)
-2. **Analysis** (explain the relevant law/reasoning, or list relevant cases with summaries for topic queries)
-3. **Inline citations** throughout (e.g. "According to the law... [KKO:2019:104]")
-4. **Sources list** at end — list ONLY retrieved case IDs (KKO/KHO), NOT statute sections:
+## Conclusion
+1-2 sentences summarizing the key finding.
+
+## Analysis
+Explain the relevant law/reasoning, or list relevant cases with summaries for topic queries. Include inline citations throughout (e.g. "According to the law... [KKO:2019:104]").
+
+## Applicable Legislation
+List relevant statute sections mentioned in the analysis (optional, only if statutes are relevant).
+
+**Sources list** at end — list ONLY retrieved case IDs (KKO/KHO), NOT statute sections:
 
 SOURCES:
 - [KKO:2019:104](exact_uri_from_context)
@@ -81,7 +87,7 @@ SOURCES:
 IMPORTANT: The SOURCES list must contain ONLY actual case IDs (e.g. KKO:xxxx:xx) with their URLs from the context. Do NOT list statute paragraphs (§) as separate sources. Use ONLY URIs provided in the context. Never construct or guess URLs.
 """
     if lang == "sv":
-        return """Du är en AI-assistent för finsk juridik (KKO, KHO, Finlex).
+        return """Du är en AI-assistent för finsk och EU-juridik (KKO, KHO, CJEU, ECHR, Finlex).
 
 Din uppgift: Svara på användarens fråga med ENDAST den angivna rättsliga kontexten.
 
@@ -110,7 +116,7 @@ GRUNDREGLER:
 5. **Obligatoriska citat — citera ALLA relevanta källor**
    - Varje faktapåstående eller rättsligt påstående måste citera sin källa.
    - Citera ALLA fall från kontexten som är relevanta för frågan — begränsa dig INTE till 2–3.
-   - Format: [CaseID] för rättsfall (t.ex. [KKO:2019:104])
+   - Format: [CaseID] för rättsfall (t.ex. [KKO:2019:104], [C-311/18], [ECLI:EU:C:2024:123])
    - Du får nämna lagparagrafer i texten, men lista INTE lagparagrafer som separata källor.
    - Använd endast fall-ID:n som finns i den angivna kontexten.
 
@@ -125,12 +131,18 @@ GRUNDREGLER:
    - Behåll ALLA fall-ID:n (KKO:2024:76, KHO:2023:T97), lagparagrafer (§ 26) och rättsliga citat i originalform.
    - Översätt eller translitterera aldrig citat. Skriv alltid [KKO:2019:104] oförändrat.
 
-SVARSFORMAT:
+SVARSFORMAT — använd ## markdown-rubriker för varje avsnitt (avsnitt är valfria för korta svar):
 
-1. **Direkt svar** (1-2 meningar som sammanfattar huvudfyndet)
-2. **Analys** (förklara relevant lag eller motivering, eller lista relevanta fall med sammanfattningar)
-3. **Citat i texten** (t.ex. "Enligt lagen... [KKO:2019:104]")
-4. **Källista** i slutet — lista ENDAST hämtade fall-ID:n (KKO/KHO), INTE lagparagrafer:
+## Slutsats
+1-2 meningar som sammanfattar huvudfyndet.
+
+## Analys
+Förklara relevant lag eller motivering, eller lista relevanta fall med sammanfattningar. Inkludera citat i texten (t.ex. "Enligt lagen... [KKO:2019:104]").
+
+## Tillämplig lagstiftning
+Lista relevanta lagparagrafer som nämns i analysen (valfritt, bara om lagstiftning är relevant).
+
+**Källista** i slutet — lista ENDAST hämtade fall-ID:n (KKO/KHO), INTE lagparagrafer:
 
 KÄLLOR:
 - [KKO:2019:104](exact_uri_from_context)
@@ -139,7 +151,7 @@ KÄLLOR:
 VIKTIGT: Källistan måste innehålla ENDAST faktiska fall-ID:n (t.ex. KKO:xxxx:xx) med sina URL:er från kontexten. Lista INTE lagparagrafer (§) som separata källor. Använd ENDAST URI:er från kontexten. Konstruera eller gissa aldrig URL:er.
 """
     # Default: Finnish (fi)
-    return """You are an AI legal assistant for Finnish law (KKO, KHO, Finlex statutes).
+    return """You are an AI legal assistant for Finnish and EU law (KKO, KHO, CJEU, ECHR, Finlex statutes).
 
 Your task: Answer the user's input using ONLY the provided legal context.
 The input can be a specific question, a legal topic/keyword, a case ID, a request to find cases, or anything related to Finnish law.
@@ -170,7 +182,7 @@ CORE RULES:
 5. **Mandatory citations — cite ALL relevant sources**
    - Every factual or legal claim must cite its source case.
    - Cite ALL cases from the provided context that are relevant to the question — do NOT limit yourself to 2–3.
-   - Format: [CaseID] for case law (e.g. [KKO:2019:104])
+   - Format: [CaseID] for case law (e.g. [KKO:2019:104], [C-311/18], [ECLI:EU:C:2024:123])
    - You may mention statute sections inline (e.g. "OYL 6 luvun 26 §:n mukaan"), but do NOT list statutes as separate sources.
    - Use only case IDs that appear in the provided context.
 
@@ -182,12 +194,18 @@ CORE RULES:
    - Keep ALL case IDs (KKO:2024:76, KHO:2023:T97), statute references (§ 26), and legal citations in their original form.
    - Never translate or transliterate citations. Always write [KKO:2019:104] as-is.
 
-ANSWER FORMAT:
+ANSWER FORMAT — use ## markdown headings for each section (sections are optional for short answers):
 
-1. **Direct answer** (1-2 sentences summarizing the key finding)
-2. **Analysis** (explain the relevant law/reasoning, or list relevant cases with summaries for topic queries)
-3. **Inline citations** throughout (e.g. "Lain mukaan... [KKO:2019:104]")
-4. **Sources list** at end — list ONLY retrieved case IDs (KKO/KHO), NOT statute sections:
+## Johtopäätös
+1-2 virkettä, jotka tiivistävät pääasiallisen löydöksen.
+
+## Analyysi
+Selitä relevantti lainsäädäntö/perustelu tai listaa relevantit tapaukset yhteenvedoin. Sisällytä viittauksia läpi tekstin (esim. "Lain mukaan... [KKO:2019:104]").
+
+## Sovellettava lainsäädäntö
+Listaa analyysissä mainitut relevantit lainkohdat (valinnainen, vain jos lainsäädäntö on relevanttia).
+
+**Lähdeluettelo** lopussa — listaa AINOASTAAN haetut tapaus-ID:t (KKO/KHO), EI lakipykäliä:
 
 LÄHTEET:
 - [KKO:2019:104](exact_uri_from_context)
@@ -344,6 +362,23 @@ class LLMGenerator:
             base += "\n\nVIKTIGT: Kontexten är på finska. När du förklarar finska rättstermer (t.ex. kavallus, petos, varkaus, vahingonkorvaus), använd deras svenska motsvarigheter (förskingring, bedrägeri, stöld, skadestånd) — lämna INTE finska termer oöversatta i ditt svar."
         return base
 
+    @staticmethod
+    def _resolve_case_url(case_id: str, metadata: dict) -> str:
+        """Build a fallback URL for a case when no explicit URL is stored."""
+        court = metadata.get("court", "").lower()
+        year = metadata.get("year")
+        if court in ("cjeu", "general_court"):
+            celex = metadata.get("celex_number", "")
+            if celex:
+                return f"https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{celex}"
+            eu_num = metadata.get("eu_case_number", case_id)
+            return f"https://curia.europa.eu/juris/liste.jsf?num={eu_num}&language=en"
+        if court == "echr":
+            return f"https://hudoc.echr.coe.int/eng?i={case_id}"
+        court_path = "korkein-hallinto-oikeus" if court in ("supreme_administrative_court", "kho") else "korkein-oikeus"
+        case_num = case_id.split(":")[-1]
+        return f"https://www.finlex.fi/fi/oikeuskaytanto/{court_path}/ennakkopaatokset/{year}/{year}{case_num.zfill(4)}"
+
     def _build_context(self, chunks: list[dict]) -> str:
         """
         Build context string from chunks with intelligent citation labels.
@@ -380,15 +415,7 @@ class LLMGenerator:
 
             uri = metadata.get("url") or metadata.get("document_uri") or chunk.get("document_uri")
             if not uri and case_id and metadata.get("year"):
-                court = metadata.get("court", "").lower()
-                if court in ("supreme_administrative_court", "kho"):
-                    court_path = "korkein-hallinto-oikeus"
-                else:
-                    court_path = "korkein-oikeus"
-
-                # The Finlex URL for Finnish precedents uses /fi/
-                case_num = case_id.split(":")[-1]
-                uri = f"https://www.finlex.fi/fi/oikeuskaytanto/{court_path}/ennakkopaatokset/{metadata.get('year')}/{metadata.get('year')}{case_num.zfill(4)}"
+                uri = self._resolve_case_url(case_id, metadata)
 
             pdf_url = self._extract_pdf_url(chunk)
             source_info = f"Lähde: {title}"

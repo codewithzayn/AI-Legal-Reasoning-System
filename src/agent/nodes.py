@@ -31,8 +31,25 @@ _generator = LLMGenerator()  # model from config.OPENAI_CHAT_MODEL (e.g. gpt-4o 
 _retrieval = HybridRetrieval()  # singleton: reuses Supabase client, embedder, reranker across searches
 
 
-# Single source: imported from src.utils.legal_keywords — covers EN, FI, SV.
-_LEGAL_TOPIC_MARKERS = LEGAL_TOPIC_KEYWORDS
+# Single source: imported from src.utils.legal_keywords (EN, FI, SV) + EU law markers from LexAI.
+_EU_LEGAL_MARKERS = (
+    "cjeu",
+    "echr",
+    "eu law",
+    "eu-tuomioistuin",
+    "euroopan",
+    "preliminary ruling",
+    "ennakkoratkaisu",
+    "directive",
+    "regulation",
+    "asetus",
+    "direktiivi",
+    "human rights",
+    "ihmisoikeu",
+    "charter",
+    "perusoikeuskirja",
+)
+_LEGAL_TOPIC_MARKERS = LEGAL_TOPIC_KEYWORDS + _EU_LEGAL_MARKERS
 
 
 def _is_obvious_legal_query(query: str) -> bool:
@@ -387,6 +404,9 @@ async def search_knowledge(state: AgentState) -> AgentState:
         response_lang = state.get("response_lang")
         year_start = state.get("year_start")
         year_end = state.get("year_end")
+        court_types = state.get("court_types")
+        legal_domains = state.get("legal_domains")
+        tenant_id = state.get("tenant_id")
         results = await _retrieval.hybrid_search_with_rerank(
             query,
             initial_limit=config.SEARCH_CANDIDATES_FOR_RERANK,
@@ -394,6 +414,9 @@ async def search_knowledge(state: AgentState) -> AgentState:
             response_lang=response_lang,
             year_start=year_start,
             year_end=year_end,
+            court_types=court_types,
+            legal_domains=legal_domains,
+            tenant_id=tenant_id,
         )
         elapsed = time.time() - start_time
         logger.info("Reranking done → %s chunks in %.1fs", len(results), elapsed)

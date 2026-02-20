@@ -209,6 +209,15 @@ class CaseLawStorage:
             "judges": doc.judges,
             "dissenting_opinion": doc.dissenting_opinion,
             "dissenting_text": doc.dissenting_text,
+            # EU case law fields
+            "celex_number": getattr(doc, "celex_number", None),
+            "eu_case_number": getattr(doc, "eu_case_number", None),
+            "referring_court": getattr(doc, "referring_court", None),
+            "referring_country": getattr(doc, "referring_country", None),
+            "advocate_general": getattr(doc, "advocate_general", None),
+            "formation": getattr(doc, "formation", None),
+            "subject_matter": getattr(doc, "subject_matter", None) or [],
+            "language_of_case": getattr(doc, "language_of_case", None),
             # Extra metadata mapping
             "title": doc.title
             or f"{doc.court_code} {doc.case_year}:{doc.case_id.split(':')[-1] if ':' in doc.case_id else ''}",

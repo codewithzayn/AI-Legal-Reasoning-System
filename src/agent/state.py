@@ -59,3 +59,10 @@ class AgentState(TypedDict):
 
     # Optional queue for streaming LLM tokens (reason node puts chunks here)
     stream_queue: object | None
+
+    # UI search filters (optional, from sidebar controls)
+    court_types: list[str] | None  # e.g. ["KKO", "KHO"]
+    legal_domains: list[str] | None  # e.g. ["Criminal", "Civil"]
+
+    # Multi-tenant: client document isolation
+    tenant_id: str | None  # from LEXAI_TENANT_ID env var or session state

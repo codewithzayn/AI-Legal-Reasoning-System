@@ -180,6 +180,11 @@ _CASE_ID_RE = re.compile(
     re.IGNORECASE,
 )
 
+# EU case ID patterns
+_EU_CASE_ID_RE = re.compile(r"\b([CT])-(\d+)/(\d{2,4})\b")
+_ECLI_EU_RE = re.compile(r"\b(ECLI:EU:[CT]:\d{4}:\d+)\b")
+_ECHR_APP_RE = re.compile(r"\bapplication\s+no\.?\s*(\d+/\d{2,4})\b", re.IGNORECASE)
+
 _expansion_llm_holder: list = []  # lazy singleton; list avoids global statement
 
 
@@ -208,6 +213,7 @@ class HybridRetrieval:
         key: str | None = None,
         embedder: EmbeddingService | None = None,
         reranker: CohereReranker | None = None,
+        tenant_id: str | None = None,
     ):
         """Initialize Supabase client, embedder, and optional reranker.
 
@@ -218,6 +224,7 @@ class HybridRetrieval:
                       the default DocumentEmbedder (OpenAI text-embedding-3-small).
             reranker: Cohere reranker instance. Created lazily on first use when
                       not provided.
+            tenant_id: Optional tenant ID for multi-tenant isolation.
         """
         self.url = url or os.getenv("SUPABASE_URL")
         self.key = key or os.getenv("SUPABASE_KEY")
@@ -229,6 +236,7 @@ class HybridRetrieval:
         self._client_lock = asyncio.Lock()
         self.embedder: EmbeddingService = embedder or DocumentEmbedder()
         self.reranker: CohereReranker | None = reranker
+        self.tenant_id: str | None = tenant_id
 
     async def _get_client(self) -> AsyncClient:
         """Lazy load async client with auto-reconnect on stale connections.
@@ -502,29 +510,53 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     # ------------------------------------------------------------------
     @staticmethod
     def extract_case_ids(query: str) -> list[str]:
-        """Extract case IDs (e.g. KKO:2022:18, KKO:1983-II-124) mentioned in the query."""
+        """Extract case IDs (Finnish + EU) mentioned in the query.
+
+        Supports: KKO:2022:18, KKO:1983-II-124, C-311/18, T-123/20,
+        ECLI:EU:C:2024:123, application no. 12345/06.
+        """
         if query is None or not isinstance(query, str):
             return []
         ids: list[str] = []
-        # Modern format: KKO:2024:76 or KKO 2024:76
+        # Finnish: KKO:2024:76 or KKO 2024:76
         for court, year, number in _CASE_ID_RE.findall(query):
             ids.append(f"{court.upper()}:{year}:{number}")
-        # Old format: KKO:1983-II-124 (with Roman numeral volume)
+        # Finnish old format: KKO:1983-II-124
         old_fmt = re.findall(r"\b(KKO|KHO)\s*[:\s]\s*(\d{4})\s*-\s*(I{1,2})\s*-\s*(\d+)\b", query, re.IGNORECASE)
         for court, year, vol, number in old_fmt:
             ids.append(f"{court.upper()}:{year}-{vol.upper()}-{number}")
+        # EU ECLI: ECLI:EU:C:2024:123
+        for ecli in _ECLI_EU_RE.findall(query):
+            ids.append(ecli)
+        # CJEU/GC case numbers: C-311/18, T-123/20
+        for prefix, num, yr in _EU_CASE_ID_RE.findall(query):
+            ids.append(f"{prefix.upper()}-{num}/{yr}")
+        # ECHR application numbers: application no. 12345/06
+        for app_no in _ECHR_APP_RE.findall(query):
+            ids.append(app_no)
         return list(dict.fromkeys(ids))  # deduplicate, preserve order
 
-    async def fetch_case_chunks(self, case_id: str) -> list[dict]:
+    async def fetch_case_chunks(self, case_id: str, tenant_id: str | None = None) -> list[dict]:
         """Fetch ALL chunks for a specific case_id directly from Supabase.
         This bypasses vector search entirely — guarantees we have the
         document's content when the user references it by ID."""
         try:
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
-            case_law_resp = await client.table("case_law").select("id").eq("case_id", case_id).limit(1).execute()
+            query = client.table("case_law").select("id").eq("case_id", case_id)
+            if effective_tenant:
+                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+            case_law_resp = await query.limit(1).execute()
             if not case_law_resp.data or len(case_law_resp.data) == 0:
-                logger.info("Direct case lookup → case %s not found in DB", case_id)
-                return []
+                # Retry with eu_case_number for EU case patterns (C-311/18, T-123/20)
+                if _EU_CASE_ID_RE.search(case_id):
+                    eu_query = client.table("case_law").select("id").eq("eu_case_number", case_id)
+                    if effective_tenant:
+                        eu_query = eu_query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+                    case_law_resp = await eu_query.limit(1).execute()
+                if not case_law_resp.data or len(case_law_resp.data) == 0:
+                    logger.info("Direct case lookup → case %s not found in DB", case_id)
+                    return []
 
             case_law_id = case_law_resp.data[0]["id"]
             response = (
@@ -573,7 +605,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     # ------------------------------------------------------------------
     # Core search methods
     # ------------------------------------------------------------------
-    async def vector_search(self, query_embedding: list[float], limit: int | None = None) -> list[dict]:
+    async def vector_search(
+        self, query_embedding: list[float], limit: int | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
         """
         Vector similarity search on case_law_sections using HNSW index.
 
@@ -583,12 +617,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         Args:
             query_embedding: Query embedding vector (1536-dim)
             limit: Number of results to return
+            tenant_id: Optional tenant ID for multi-tenant isolation.
 
         Returns:
             List of section dicts with similarity scores, normalised
             to the common format used by hybrid_search.
         """
         try:
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
             response = await client.rpc(
                 "vector_search_case_law",
@@ -596,6 +632,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                     "query_embedding": query_embedding,
                     "match_threshold": config.MATCH_THRESHOLD,
                     "match_count": limit or config.VECTOR_SEARCH_TOP_K,
+                    "p_tenant_id": effective_tenant,
                 },
             ).execute()
 
@@ -769,7 +806,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
 
         return core
 
-    async def fts_search(self, query_text: str, limit: int | None = None) -> list[dict]:
+    async def fts_search(self, query_text: str, limit: int | None = None, tenant_id: str | None = None) -> list[dict]:
         """
         Full-text search on case_law_sections using GIN index.
 
@@ -785,6 +822,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         Args:
             query_text: Search query in Finnish
             limit: Number of results to return
+            tenant_id: Optional tenant ID for multi-tenant isolation.
 
         Returns:
             List of section dicts with relevance scores, normalised
@@ -795,12 +833,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if not fts_query.strip():
                 return []
 
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
             response = await client.rpc(
                 "fts_search_case_law",
                 {
                     "query_text": fts_query,
                     "match_count": limit or config.FTS_SEARCH_TOP_K,
+                    "p_tenant_id": effective_tenant,
                 },
             ).execute()
 
@@ -829,7 +869,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.error("FTS search error: %s", e)
             return []
 
-    async def and_fts_search(self, query_text: str, limit: int | None = None) -> list[dict]:
+    async def and_fts_search(
+        self, query_text: str, limit: int | None = None, tenant_id: str | None = None
+    ) -> list[dict]:
         """AND-based FTS on case_law_sections — high-precision channel.
 
         Requires the top 3 key terms to ALL appear in the same section.
@@ -844,12 +886,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if not and_query.strip():
                 return []
 
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
             response = await client.rpc(
                 "fts_search_case_law",
                 {
                     "query_text": and_query,
                     "match_count": limit or config.FTS_SEARCH_TOP_K,
+                    "p_tenant_id": effective_tenant,
                 },
             ).execute()
 
@@ -936,7 +980,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         return merged
 
     async def search_case_law(
-        self, query_embedding: list[float], query_text: str, limit: int | None = None
+        self, query_embedding: list[float], query_text: str, limit: int | None = None, tenant_id: str | None = None
     ) -> list[dict]:
         """
         Search case law using the specific SQL function (Hybrid internally)
@@ -981,7 +1025,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.error("Case law search error: %s", e)
             return []
 
-    async def search_case_law_metadata(self, query_text: str, limit: int = 10) -> list[dict]:
+    async def search_case_law_metadata(
+        self, query_text: str, limit: int = 10, tenant_id: str | None = None
+    ) -> list[dict]:
         """Search case_law metadata columns (title, judgment, background_summary,
         decision_outcome, legal_domains, cited_cases, cited_laws, etc.) via FTS.
 
@@ -997,12 +1043,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if not fts_query.strip():
                 return []
 
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
             response = await client.rpc(
                 "search_case_law_metadata",
                 {
                     "query_text": fts_query,
                     "match_count": limit,
+                    "p_tenant_id": effective_tenant,
                 },
             ).execute()
 
@@ -1036,7 +1084,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Metadata FTS search failed (non-critical): %s", e)
             return []
 
-    async def _case_id_fallback_search(self, case_id_pattern: str, limit: int = 5) -> list[dict]:
+    async def _case_id_fallback_search(
+        self, case_id_pattern: str, limit: int = 5, tenant_id: str | None = None
+    ) -> list[dict]:
         """Fallback: find cases whose case_id matches a pattern via ILIKE.
 
         This ensures a directly requested case always appears even when FTS
@@ -1044,15 +1094,17 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         Supabase client — no DB migration required.
         """
         try:
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
             # Find matching case_law rows
-            case_resp = (
-                await client.table("case_law")
+            query = (
+                client.table("case_law")
                 .select("id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url")
                 .ilike("case_id", f"%{case_id_pattern}%")
-                .limit(limit)
-                .execute()
             )
+            if effective_tenant:
+                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+            case_resp = await query.limit(limit).execute()
             if not case_resp.data:
                 return []
 
@@ -1092,7 +1144,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Case-ID fallback search failed (non-critical): %s", e)
             return []
 
-    async def _prefix_title_search(self, query_text: str, limit: int = 10) -> list[dict]:
+    async def _prefix_title_search(self, query_text: str, limit: int = 10, tenant_id: str | None = None) -> list[dict]:
         """Find cases whose *title* matches prefix-expanded compound words.
 
         Uses direct table queries with ``to_tsquery`` (via Supabase
@@ -1109,13 +1161,16 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             return []
 
         try:
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
-            case_resp = await (
+            query = (
                 client.table("case_law")
                 .select("id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url")
                 .text_search("title", prefix_query, options={"config": "finnish"})
-                .execute()
             )
+            if effective_tenant:
+                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+            case_resp = await query.execute()
             if not case_resp.data:
                 return []
 
@@ -1174,7 +1229,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Prefix title search failed (non-critical): %s", exc)
             return []
 
-    async def _prefix_content_search(self, query_text: str, limit: int = 15) -> list[dict]:
+    async def _prefix_content_search(
+        self, query_text: str, limit: int = 15, tenant_id: str | None = None
+    ) -> list[dict]:
         """Prefix FTS on **section content** — compound-word bridge.
 
         Similar to ``_prefix_title_search`` but searches the full
@@ -1191,12 +1248,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             return []
 
         try:
+            effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
             response = await client.rpc(
                 "prefix_fts_search_case_law",
                 {
                     "query_text": prefix_query,
                     "match_count": limit,
+                    "p_tenant_id": effective_tenant,
                 },
             ).execute()
 
@@ -1226,7 +1285,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             logger.warning("Prefix content search failed (non-critical): %s", exc)
             return []
 
-    async def hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:
+    async def hybrid_search(self, query_text: str, limit: int = 20, tenant_id: str | None = None) -> list[dict]:
         """
         Hybrid Search on case_law_sections: 7 channels merged via RRF.
 
@@ -1249,6 +1308,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         Each sub-query is capped at 15 s so one slow RPC never blocks all.
         Connection errors trigger an automatic client reset and single retry.
         """
+        effective_tenant = tenant_id or self.tenant_id
         t0 = time.time()
 
         # Helper: run a search task with timeout + connection recovery (retry once after reset).
@@ -1284,33 +1344,58 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         # Phase 1: Start text-only searches + embedding generation concurrently.
         embedding_task = asyncio.create_task(_get_embedding())
         fts_task = asyncio.create_task(
-            _timed(lambda: self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_or")
+            _timed(
+                lambda: self.fts_search(query_text, limit=config.FTS_SEARCH_TOP_K, tenant_id=effective_tenant),
+                "fts_or",
+            )
         )
         and_fts_task = asyncio.create_task(
-            _timed(lambda: self.and_fts_search(query_text, limit=config.FTS_SEARCH_TOP_K), "fts_and")
+            _timed(
+                lambda: self.and_fts_search(query_text, limit=config.FTS_SEARCH_TOP_K, tenant_id=effective_tenant),
+                "fts_and",
+            )
         )
         meta_task = asyncio.create_task(
-            _timed(lambda: self.search_case_law_metadata(query_text, limit=limit), "meta_fts")
+            _timed(
+                lambda: self.search_case_law_metadata(query_text, limit=limit, tenant_id=effective_tenant),
+                "meta_fts",
+            )
         )
         # Prefix title search: bridges Finnish compound-word boundaries
         prefix_title_task = asyncio.create_task(
-            _timed(lambda: self._prefix_title_search(query_text, limit=limit), "prefix_title")
+            _timed(
+                lambda: self._prefix_title_search(query_text, limit=limit, tenant_id=effective_tenant),
+                "prefix_title",
+            )
         )
         prefix_content_task = asyncio.create_task(
-            _timed(lambda: self._prefix_content_search(query_text, limit=limit), "prefix_content")
+            _timed(
+                lambda: self._prefix_content_search(query_text, limit=limit, tenant_id=effective_tenant),
+                "prefix_content",
+            )
         )
 
         # Case-ID fallback: if query mentions a case ID, fetch directly.
         mentioned_ids = self.extract_case_ids(query_text)
         fallback_tasks = [
-            asyncio.create_task(_timed(lambda c=cid: self._case_id_fallback_search(c), f"fallback_{cid}"))
+            asyncio.create_task(
+                _timed(
+                    lambda c=cid: self._case_id_fallback_search(c, tenant_id=effective_tenant),
+                    f"fallback_{cid}",
+                )
+            )
             for cid in mentioned_ids
         ]
 
         # Phase 2: Wait for embedding, then launch vector search (HNSW).
         query_embedding = await embedding_task
         vec_task = asyncio.create_task(
-            _timed(lambda: self.vector_search(query_embedding, limit=config.VECTOR_SEARCH_TOP_K), "vec")
+            _timed(
+                lambda: self.vector_search(
+                    query_embedding, limit=config.VECTOR_SEARCH_TOP_K, tenant_id=effective_tenant
+                ),
+                "vec",
+            )
         )
 
         # Wait for all parallel searches
@@ -1377,16 +1462,19 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     # ------------------------------------------------------------------
     # Multi-query hybrid search
     # ------------------------------------------------------------------
-    async def _multi_query_hybrid_search(self, query_text: str, limit: int = 20) -> list[dict]:
+    async def _multi_query_hybrid_search(
+        self, query_text: str, limit: int = 20, tenant_id: str | None = None
+    ) -> list[dict]:
         """Run hybrid search with the original query AND 2 LLM-generated
         alternative queries, then merge all results (deduplicated by chunk id).
 
         This dramatically improves recall: chunks that one query formulation
         misses may be captured by another formulation.
         """
+        effective_tenant = tenant_id or self.tenant_id
         # 1. Generate alternative queries in parallel with the original search
         expansion_task = self.expand_query(query_text)
-        original_search_task = self.hybrid_search(query_text, limit=limit)
+        original_search_task = self.hybrid_search(query_text, limit=limit, tenant_id=effective_tenant)
 
         alternatives, original_results = await asyncio.gather(expansion_task, original_search_task)
 
@@ -1394,7 +1482,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             return original_results
 
         # 2. Run hybrid search for each alternative query concurrently
-        alt_tasks = [self.hybrid_search(alt_q, limit=limit) for alt_q in alternatives]
+        alt_tasks = [self.hybrid_search(alt_q, limit=limit, tenant_id=effective_tenant) for alt_q in alternatives]
         alt_results_list = await asyncio.gather(*alt_tasks)
 
         # 3. Merge all results, keeping the highest score per chunk id
@@ -1419,7 +1507,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         )
         return merged
 
-    async def _filter_by_language(self, results: list[dict], response_lang: str | None) -> list[dict]:
+    async def _filter_by_language(
+        self, results: list[dict], response_lang: str | None, tenant_id: str | None = None
+    ) -> list[dict]:
         """Filter results by document language when response_lang is set.
 
         Prefers documents matching the requested language. If filter yields
@@ -1461,6 +1551,54 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         return results
 
     @staticmethod
+    def _filter_by_court(results: list[dict], court_types: list[str] | None) -> list[dict]:
+        """Filter results by court type (e.g. ['KKO', 'KHO', 'CJEU', 'ECHR'])."""
+        if not court_types or not results:
+            return results
+        court_map = {
+            "KKO": {"supreme_court", "kko"},
+            "KHO": {"supreme_administrative_court", "kho"},
+            "CJEU": {"cjeu"},
+            "GC": {"general_court"},
+            "ECHR": {"echr"},
+            "EU": {"cjeu", "general_court", "echr"},
+        }
+        allowed: set[str] = set()
+        for ct in court_types:
+            allowed |= court_map.get(ct.upper(), {ct.lower()})
+
+        filtered = []
+        for r in results:
+            meta = r.get("metadata") or {}
+            court = (meta.get("court") or "").lower()
+            if not court or court in allowed:
+                filtered.append(r)
+        if filtered:
+            logger.info("Court filter (%s): %s → %s chunks", court_types, len(results), len(filtered))
+        return filtered if filtered else results
+
+    @staticmethod
+    def _filter_by_legal_domain(results: list[dict], legal_domains: list[str] | None) -> list[dict]:
+        """Filter results by legal domain keywords."""
+        if not legal_domains or not results:
+            return results
+        domain_lower = {d.lower() for d in legal_domains}
+
+        filtered = []
+        for r in results:
+            meta = r.get("metadata") or {}
+            keywords = meta.get("keywords") or []
+            if not keywords:
+                filtered.append(r)
+                continue
+            kw_lower = {str(k).lower() for k in keywords} if isinstance(keywords, list) else {str(keywords).lower()}
+            if kw_lower & domain_lower:
+                filtered.append(r)
+        if filtered:
+            logger.info("Domain filter (%s): %s → %s chunks", legal_domains, len(results), len(filtered))
+        return filtered if filtered else results
+
+    @staticmethod
     def _filter_by_year(results: list[dict], year_start: int | None, year_end: int | None) -> list[dict]:
         """Filter results to cases within [year_start, year_end] inclusive."""
         if year_start is None and year_end is None:
@@ -1499,6 +1637,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         response_lang: str | None = None,
         year_start: int | None = None,
         year_end: int | None = None,
+        court_types: list[str] | None = None,
+        legal_domains: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> list[dict]:
         """
         Full retrieval pipeline:
@@ -1508,6 +1649,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         4. Rerank with Cohere
         5. Return top final_limit chunks to LLM
         """
+        effective_tenant = tenant_id or self.tenant_id
         pipeline_start = time.time()
         # --- Step 1 & 2: Direct lookup + Search in parallel (when both apply) ---
         mentioned_ids = self.extract_case_ids(query_text)
@@ -1526,7 +1668,7 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             if not mentioned_ids:
                 return []
             logger.info("Detected case IDs in query: %s", mentioned_ids)
-            direct_tasks = [self.fetch_case_chunks(cid) for cid in mentioned_ids]
+            direct_tasks = [self.fetch_case_chunks(cid, tenant_id=effective_tenant) for cid in mentioned_ids]
             direct_results = await asyncio.gather(*direct_tasks)
             out = []
             for chunks in direct_results:
@@ -1536,8 +1678,10 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         async def _do_search():
             use_multi = config.MULTI_QUERY_ENABLED and not (config.MULTI_QUERY_SKIP_WHEN_CASE_ID and mentioned_ids)
             if use_multi:
-                return await self._multi_query_hybrid_search(search_query, limit=initial_limit)
-            return await self.hybrid_search(search_query, limit=initial_limit)
+                return await self._multi_query_hybrid_search(
+                    search_query, limit=initial_limit, tenant_id=effective_tenant
+                )
+            return await self.hybrid_search(search_query, limit=initial_limit, tenant_id=effective_tenant)
 
         for attempt in range(2):
             try:
@@ -1571,10 +1715,16 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             return []
 
         # --- Step 3b: Optional language filter (prefer docs in response language) ---
-        combined = await self._filter_by_language(combined, response_lang)
+        combined = await self._filter_by_language(combined, response_lang, tenant_id=effective_tenant)
 
         # --- Step 3c: Optional year filter (limit to case_year range) ---
         combined = self._filter_by_year(combined, year_start, year_end)
+
+        # --- Step 3d: Optional court type filter ---
+        combined = self._filter_by_court(combined, court_types)
+
+        # --- Step 3e: Optional legal domain filter ---
+        combined = self._filter_by_legal_domain(combined, legal_domains)
 
         # Log retrieved candidates before rerank (for debugging relevancy)
         logger.info(
