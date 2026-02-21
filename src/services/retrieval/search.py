@@ -185,12 +185,41 @@ _EU_CASE_ID_RE = re.compile(r"\b([CT])-(\d+)/(\d{2,4})\b")
 _ECLI_EU_RE = re.compile(r"\b(ECLI:EU:[CT]:\d{4}:\d+)\b")
 _ECHR_APP_RE = re.compile(r"\bapplication\s+no\.?\s*(\d+/\d{2,4})\b", re.IGNORECASE)
 
+_SAFE_TENANT_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+_SAFE_CASE_ID_PATTERN_RE = re.compile(r"^[A-Za-z0-9:/ \-]+$")
+
 _expansion_llm_holder: list = []  # lazy singleton; list avoids global statement
+
+
+def _validate_tenant_id(tenant_id: str) -> str:
+    """Validate tenant_id for use in PostgREST filter strings.
+
+    Tenant IDs must be alphanumeric with hyphens/underscores only
+    (UUIDs, slugs). Rejects values that could inject filter operators.
+    """
+    if not _SAFE_TENANT_ID_RE.match(tenant_id):
+        raise ValueError(f"Invalid tenant_id rejected: {tenant_id!r}")
+    return tenant_id
+
+
+def _sanitise_case_id_pattern(pattern: str) -> str:
+    """Strip characters that are unsafe for ILIKE patterns.
+
+    Allows alphanumeric, colon, slash, hyphen, space — sufficient for
+    KKO:2024:76, C-311/18, ECLI:EU:C:2024:123 patterns.
+    Rejects or strips anything else.
+    """
+    if _SAFE_CASE_ID_PATTERN_RE.match(pattern):
+        return pattern
+    cleaned = re.sub(r"[^A-Za-z0-9:/ \-]", "", pattern)
+    if not cleaned:
+        raise ValueError(f"Case ID pattern rejected after sanitisation: {pattern!r}")
+    return cleaned
 
 
 def _get_expansion_llm():
     if not _expansion_llm_holder:
-        _expansion_llm_holder.append(ChatOpenAI(model="gpt-4o-mini", temperature=0.4))
+        _expansion_llm_holder.append(ChatOpenAI(model=config.OPENAI_SUPPORT_MODEL, temperature=0.4))
     return _expansion_llm_holder[0]
 
 
@@ -232,31 +261,39 @@ class HybridRetrieval:
         if not self.url or not self.key:
             raise ValueError("Supabase URL and KEY required")
 
-        self.client: AsyncClient | None = None
-        self._client_lock = asyncio.Lock()
+        import threading
+
+        self._clients: dict[int, AsyncClient] = {}
+        self._thread_lock = threading.Lock()
         self.embedder: EmbeddingService = embedder or DocumentEmbedder()
         self.reranker: CohereReranker | None = reranker
         self.tenant_id: str | None = tenant_id
 
     async def _get_client(self) -> AsyncClient:
-        """Lazy load async client with auto-reconnect on stale connections.
+        """Lazy load async client per event loop for thread safety.
 
-        Supabase free-tier drops idle TCP connections aggressively.
-        When a request hits a dead connection we get:
-          ``unable to perform operation on <TCPTransport closed=True …>``
-        This method detects that state and creates a fresh client.
+        Streamlit runs each user session in its own thread with its own
+        event loop.  An AsyncClient bound to loop A will fail when used
+        from loop B.  We keep one client per loop id so the singleton
+        HybridRetrieval is safe across concurrent user sessions.
+
+        Also handles auto-reconnect on stale connections (Supabase
+        free-tier drops idle TCP connections aggressively).
         """
-        async with self._client_lock:
-            if self.client is None:
-                self.client = await create_async_client(self.url, self.key)
-        return self.client
+        loop_id = id(asyncio.get_running_loop())
+        if loop_id not in self._clients:
+            with self._thread_lock:
+                if loop_id not in self._clients:
+                    self._clients[loop_id] = await create_async_client(self.url, self.key)
+        return self._clients[loop_id]
 
     async def _reset_client(self) -> AsyncClient:
-        """Force-recreate the Supabase client after a connection failure."""
-        async with self._client_lock:
-            logger.warning("Resetting Supabase client (stale connection)")
-            self.client = await create_async_client(self.url, self.key)
-        return self.client
+        """Force-recreate the Supabase client for the current event loop."""
+        loop_id = id(asyncio.get_running_loop())
+        with self._thread_lock:
+            logger.warning("Resetting Supabase client (stale connection, loop=%s)", loop_id)
+            self._clients[loop_id] = await create_async_client(self.url, self.key)
+        return self._clients[loop_id]
 
     def _get_reranker(self) -> CohereReranker:
         """Lazy load reranker (only when needed)"""
@@ -545,14 +582,15 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             client = await self._get_client()
             query = client.table("case_law").select("id").eq("case_id", case_id)
             if effective_tenant:
-                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+                safe_tenant = _validate_tenant_id(effective_tenant)
+                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{safe_tenant}")
             case_law_resp = await query.limit(1).execute()
             if not case_law_resp.data or len(case_law_resp.data) == 0:
                 # Retry with eu_case_number for EU case patterns (C-311/18, T-123/20)
                 if _EU_CASE_ID_RE.search(case_id):
                     eu_query = client.table("case_law").select("id").eq("eu_case_number", case_id)
                     if effective_tenant:
-                        eu_query = eu_query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+                        eu_query = eu_query.or_(f"tenant_id.is.null,tenant_id.eq.{safe_tenant}")
                     case_law_resp = await eu_query.limit(1).execute()
                 if not case_law_resp.data or len(case_law_resp.data) == 0:
                     logger.info("Direct case lookup → case %s not found in DB", case_id)
@@ -569,7 +607,9 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             # Also get case metadata for the normalized format
             case_meta = (
                 await client.table("case_law")
-                .select("case_id, court_type, case_year, legal_domains, title, decision_outcome, url")
+                .select(
+                    "case_id, court_type, case_year, legal_domains, title, decision_outcome, url, dissenting_opinion, judges, judges_total, judges_dissenting, vote_strength, exceptions, weighted_factors, trend_direction, distinctive_facts, ruling_instruction, applied_provisions"
+                )
                 .eq("case_id", case_id)
                 .limit(1)
                 .execute()
@@ -592,6 +632,17 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "keywords": meta_row.get("legal_domains", []),
                             "decision_outcome": meta_row.get("decision_outcome", ""),
                             "url": meta_row.get("url"),
+                            "dissenting_opinion": meta_row.get("dissenting_opinion", False),
+                            "judges": meta_row.get("judges", []),
+                            "judges_total": meta_row.get("judges_total", 0),
+                            "judges_dissenting": meta_row.get("judges_dissenting", 0),
+                            "vote_strength": meta_row.get("vote_strength", ""),
+                            "exceptions": meta_row.get("exceptions", ""),
+                            "weighted_factors": meta_row.get("weighted_factors", ""),
+                            "trend_direction": meta_row.get("trend_direction", ""),
+                            "distinctive_facts": meta_row.get("distinctive_facts", ""),
+                            "ruling_instruction": meta_row.get("ruling_instruction", ""),
+                            "applied_provisions": meta_row.get("applied_provisions", ""),
                         },
                         "score": 1.0,  # max score for direct lookup
                     }
@@ -651,7 +702,19 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "year": item.get("case_year"),
                             "type": item.get("section_type"),
                             "keywords": item.get("legal_domains", []),
+                            "decision_outcome": item.get("decision_outcome", ""),
                             "url": item.get("url"),
+                            "dissenting_opinion": item.get("dissenting_opinion", False),
+                            "judges": item.get("judges", []),
+                            "judges_total": item.get("judges_total", 0),
+                            "judges_dissenting": item.get("judges_dissenting", 0),
+                            "vote_strength": item.get("vote_strength", ""),
+                            "exceptions": item.get("exceptions", ""),
+                            "weighted_factors": item.get("weighted_factors", ""),
+                            "trend_direction": item.get("trend_direction", ""),
+                            "distinctive_facts": item.get("distinctive_facts", ""),
+                            "ruling_instruction": item.get("ruling_instruction", ""),
+                            "applied_provisions": item.get("applied_provisions", ""),
                         },
                         "score": item.get("similarity", 0),
                     }
@@ -859,7 +922,19 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "year": item.get("case_year"),
                             "type": item.get("section_type"),
                             "keywords": item.get("legal_domains", []),
+                            "decision_outcome": item.get("decision_outcome", ""),
                             "url": item.get("url"),
+                            "dissenting_opinion": item.get("dissenting_opinion", False),
+                            "judges": item.get("judges", []),
+                            "judges_total": item.get("judges_total", 0),
+                            "judges_dissenting": item.get("judges_dissenting", 0),
+                            "vote_strength": item.get("vote_strength", ""),
+                            "exceptions": item.get("exceptions", ""),
+                            "weighted_factors": item.get("weighted_factors", ""),
+                            "trend_direction": item.get("trend_direction", ""),
+                            "distinctive_facts": item.get("distinctive_facts", ""),
+                            "ruling_instruction": item.get("ruling_instruction", ""),
+                            "applied_provisions": item.get("applied_provisions", ""),
                         },
                         "score": item.get("rank", 0),
                     }
@@ -911,7 +986,19 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "year": item.get("case_year"),
                             "type": item.get("section_type"),
                             "keywords": item.get("legal_domains", []),
+                            "decision_outcome": item.get("decision_outcome", ""),
                             "url": item.get("url"),
+                            "dissenting_opinion": item.get("dissenting_opinion", False),
+                            "judges": item.get("judges", []),
+                            "judges_total": item.get("judges_total", 0),
+                            "judges_dissenting": item.get("judges_dissenting", 0),
+                            "vote_strength": item.get("vote_strength", ""),
+                            "exceptions": item.get("exceptions", ""),
+                            "weighted_factors": item.get("weighted_factors", ""),
+                            "trend_direction": item.get("trend_direction", ""),
+                            "distinctive_facts": item.get("distinctive_facts", ""),
+                            "ruling_instruction": item.get("ruling_instruction", ""),
+                            "applied_provisions": item.get("applied_provisions", ""),
                         },
                         "score": item.get("rank", 0),
                     }
@@ -1016,6 +1103,17 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "keywords": item.get("legal_domains", []),
                             "decision_outcome": item.get("decision_outcome", ""),
                             "url": item.get("url"),
+                            "dissenting_opinion": item.get("dissenting_opinion", False),
+                            "judges": item.get("judges", []),
+                            "judges_total": item.get("judges_total", 0),
+                            "judges_dissenting": item.get("judges_dissenting", 0),
+                            "vote_strength": item.get("vote_strength", ""),
+                            "exceptions": item.get("exceptions", ""),
+                            "weighted_factors": item.get("weighted_factors", ""),
+                            "trend_direction": item.get("trend_direction", ""),
+                            "distinctive_facts": item.get("distinctive_facts", ""),
+                            "ruling_instruction": item.get("ruling_instruction", ""),
+                            "applied_provisions": item.get("applied_provisions", ""),
                         },
                         "score": item.get("combined_score", 0),
                     }
@@ -1071,6 +1169,17 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "keywords": item.get("legal_domains", []),
                             "decision_outcome": item.get("decision_outcome", ""),
                             "url": item.get("url"),
+                            "dissenting_opinion": item.get("dissenting_opinion", False),
+                            "judges": item.get("judges", []),
+                            "judges_total": item.get("judges_total", 0),
+                            "judges_dissenting": item.get("judges_dissenting", 0),
+                            "vote_strength": item.get("vote_strength", ""),
+                            "exceptions": item.get("exceptions", ""),
+                            "weighted_factors": item.get("weighted_factors", ""),
+                            "trend_direction": item.get("trend_direction", ""),
+                            "distinctive_facts": item.get("distinctive_facts", ""),
+                            "ruling_instruction": item.get("ruling_instruction", ""),
+                            "applied_provisions": item.get("applied_provisions", ""),
                         },
                         "score": item.get("meta_score", 0),
                     }
@@ -1095,15 +1204,18 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         """
         try:
             effective_tenant = tenant_id or self.tenant_id
+            safe_pattern = _sanitise_case_id_pattern(case_id_pattern)
             client = await self._get_client()
-            # Find matching case_law rows
             query = (
                 client.table("case_law")
-                .select("id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url")
-                .ilike("case_id", f"%{case_id_pattern}%")
+                .select(
+                    "id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url, dissenting_opinion, judges, judges_total, judges_dissenting, vote_strength, exceptions, weighted_factors, trend_direction, distinctive_facts, ruling_instruction, applied_provisions"
+                )
+                .ilike("case_id", f"%{safe_pattern}%")
             )
             if effective_tenant:
-                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+                safe_tenant = _validate_tenant_id(effective_tenant)
+                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{safe_tenant}")
             case_resp = await query.limit(limit).execute()
             if not case_resp.data:
                 return []
@@ -1133,6 +1245,17 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                                 "keywords": case_row.get("legal_domains", []),
                                 "decision_outcome": case_row.get("decision_outcome", ""),
                                 "url": case_row.get("url"),
+                                "dissenting_opinion": case_row.get("dissenting_opinion", False),
+                                "judges": case_row.get("judges", []),
+                                "judges_total": case_row.get("judges_total", 0),
+                                "judges_dissenting": case_row.get("judges_dissenting", 0),
+                                "vote_strength": case_row.get("vote_strength", ""),
+                                "exceptions": case_row.get("exceptions", ""),
+                                "weighted_factors": case_row.get("weighted_factors", ""),
+                                "trend_direction": case_row.get("trend_direction", ""),
+                                "distinctive_facts": case_row.get("distinctive_facts", ""),
+                                "ruling_instruction": case_row.get("ruling_instruction", ""),
+                                "applied_provisions": case_row.get("applied_provisions", ""),
                             },
                             "score": 0.95,  # high score for direct pattern match
                         }
@@ -1165,11 +1288,14 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
             client = await self._get_client()
             query = (
                 client.table("case_law")
-                .select("id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url")
+                .select(
+                    "id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url, dissenting_opinion, judges, judges_total, judges_dissenting, vote_strength, exceptions, weighted_factors, trend_direction, distinctive_facts, ruling_instruction, applied_provisions"
+                )
                 .text_search("title", prefix_query, options={"config": "finnish"})
             )
             if effective_tenant:
-                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{effective_tenant}")
+                safe_tenant = _validate_tenant_id(effective_tenant)
+                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{safe_tenant}")
             case_resp = await query.execute()
             if not case_resp.data:
                 return []
@@ -1218,6 +1344,17 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "keywords": case_row.get("legal_domains", []),
                             "decision_outcome": case_row.get("decision_outcome", ""),
                             "url": case_row.get("url"),
+                            "dissenting_opinion": case_row.get("dissenting_opinion", False),
+                            "judges": case_row.get("judges", []),
+                            "judges_total": case_row.get("judges_total", 0),
+                            "judges_dissenting": case_row.get("judges_dissenting", 0),
+                            "vote_strength": case_row.get("vote_strength", ""),
+                            "exceptions": case_row.get("exceptions", ""),
+                            "weighted_factors": case_row.get("weighted_factors", ""),
+                            "trend_direction": case_row.get("trend_direction", ""),
+                            "distinctive_facts": case_row.get("distinctive_facts", ""),
+                            "ruling_instruction": case_row.get("ruling_instruction", ""),
+                            "applied_provisions": case_row.get("applied_provisions", ""),
                         },
                         "score": 0.5,
                     }
@@ -1273,7 +1410,19 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                             "year": item.get("case_year"),
                             "type": item.get("section_type"),
                             "keywords": item.get("legal_domains", []),
+                            "decision_outcome": item.get("decision_outcome", ""),
                             "url": item.get("url"),
+                            "dissenting_opinion": item.get("dissenting_opinion", False),
+                            "judges": item.get("judges", []),
+                            "judges_total": item.get("judges_total", 0),
+                            "judges_dissenting": item.get("judges_dissenting", 0),
+                            "vote_strength": item.get("vote_strength", ""),
+                            "exceptions": item.get("exceptions", ""),
+                            "weighted_factors": item.get("weighted_factors", ""),
+                            "trend_direction": item.get("trend_direction", ""),
+                            "distinctive_facts": item.get("distinctive_facts", ""),
+                            "ruling_instruction": item.get("ruling_instruction", ""),
+                            "applied_provisions": item.get("applied_provisions", ""),
                         },
                         "score": item.get("rank", 0),
                     }
@@ -1510,44 +1659,13 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
     async def _filter_by_language(
         self, results: list[dict], response_lang: str | None, tenant_id: str | None = None
     ) -> list[dict]:
-        """Filter results by document language when response_lang is set.
+        """Language filter — disabled.
 
-        Prefers documents matching the requested language. If filter yields
-        zero results, returns original (no filter) to preserve recall.
+        The UI language controls the LLM response language, not which source
+        documents are retrieved.  Finnish KKO/KHO cases must always be
+        searchable regardless of the user's chosen UI language.
         """
-        if not response_lang or not results:
-            return results
-        lang = response_lang.lower()
-        case_ids = list({(r.get("metadata") or {}).get("case_id", "") for r in results})
-        case_ids = [c for c in case_ids if c]
-        if not case_ids:
-            return results
-        try:
-            client = await self._get_client()
-            resp = (
-                await client.table("case_law")
-                .select("case_id, primary_language, available_languages")
-                .in_("case_id", case_ids)
-                .execute()
-            )
-            lang_map: dict[str, bool] = {}
-            for row in resp.data or []:
-                cid = row.get("case_id", "")
-                prim = (row.get("primary_language") or "").lower()
-                avail = row.get("available_languages") or []
-                avail_lower = [str(a).lower() for a in avail] if isinstance(avail, list) else []
-                matches = (
-                    (lang == "fi" and (prim in ("finnish", "fi") or "finnish" in avail_lower))
-                    or (lang == "sv" and (prim in ("swedish", "sv") or "swedish" in avail_lower))
-                    or (lang == "en" and (prim in ("english", "en") or "english" in avail_lower))
-                )
-                lang_map[cid] = matches
-            filtered = [r for r in results if lang_map.get((r.get("metadata") or {}).get("case_id", ""), True)]
-            if filtered:
-                logger.info("Language filter (%s): %s → %s chunks", response_lang, len(results), len(filtered))
-                return filtered
-        except Exception as exc:
-            logger.warning("Language filter failed (non-critical): %s", exc)
+        logger.info("Language filter skipped (response_lang=%s) — all source languages kept", response_lang)
         return results
 
     @staticmethod

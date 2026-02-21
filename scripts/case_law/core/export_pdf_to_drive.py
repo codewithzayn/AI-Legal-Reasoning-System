@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Standalone backup pipeline: load case law from JSON cache, convert each document to PDF,
 write to local export root, and upload to Google Drive. No scraping. Run per year or range.

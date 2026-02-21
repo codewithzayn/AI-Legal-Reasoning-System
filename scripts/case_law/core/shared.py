@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Shared constants and helpers for case law scripts (scrape, export, ingestion).
 Single source of truth – imported by scrape_json_pdf_drive.py, export_pdf_to_drive.py,

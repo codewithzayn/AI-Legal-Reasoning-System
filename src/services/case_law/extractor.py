@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Case law extraction models.
 Shared Pydantic schemas used by the regex extractor and GPT-4o mini LLM fallback (hybrid_extractor).
@@ -46,6 +43,10 @@ class CaseMetadata(BaseModel):
 
     keywords: list[str] = Field(description="List of legal keywords describing the case")
     languages: list[str] = Field(description="Languages available (e.g. ['Finnish', 'Swedish'])")
+
+    judges_total: int = Field(default=0, description="Total number of judges (e.g., 5)")
+    judges_dissenting: int = Field(default=0, description="Number of dissenting judges (e.g., 1)")
+    vote_strength: str = Field(default="", description="Vote ratio as string (e.g., '4-1', '5-0')")
 
 
 class CaseSection(BaseModel):

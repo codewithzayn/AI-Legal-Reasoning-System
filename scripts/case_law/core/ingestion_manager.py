@@ -19,6 +19,14 @@ from src.config.logging_config import setup_logger
 from src.config.settings import config
 from src.services.case_law.hybrid_extractor import HybridPrecedentExtractor
 from src.services.case_law.models import CaseLawDocument, Reference
+from src.services.case_law.regex_extractor import (
+    _extract_applied_provisions_from_text,
+    _extract_distinctive_facts_from_text,
+    _extract_exceptions_from_text,
+    _extract_reasoning_excerpt,
+    _extract_ruling_instruction_from_text,
+    _extract_vote_from_text,
+)
 from src.services.case_law.scraper import CaseLawScraper
 from src.services.case_law.storage import CaseLawStorage
 
@@ -355,6 +363,10 @@ class IngestionManager:
                         error_type="extraction_error",
                         error_msg=str(e),
                     )
+            # Always try to fill vote from explicit text (e.g. "Äänestys 6-1") for KKO/KHO
+            self._apply_vote_from_text(doc)
+            # Depth analysis: exceptions and reasoning excerpt from full_text
+            self._apply_depth_analysis(doc)
         logger.info("Extraction complete %s/%s", processed_with_ai, total_docs)
 
     def _store_documents(
@@ -432,7 +444,44 @@ class IngestionManager:
                     )
         return stored_count, failed_ids
 
-    def _merge_ai_data(self, doc: CaseLawDocument, ai_data):  # noqa: C901
+    def _apply_vote_from_text(self, doc: CaseLawDocument) -> None:
+        """Populate vote_strength and judges_dissenting from explicit text (e.g. 'Äänestys 6-1'). Works for KKO/KHO without full regex extraction."""
+        if not (getattr(doc, "full_text", None) or "").strip():
+            return
+        total, dissenting, strength = _extract_vote_from_text(doc.full_text)
+        if strength:
+            doc.judges_total = total
+            doc.judges_dissenting = dissenting
+            doc.vote_strength = strength
+            logger.debug("%s | vote from text: %s", doc.case_id, strength)
+
+    def _apply_depth_analysis(self, doc: CaseLawDocument) -> None:
+        """Populate exceptions, weighted_factors, ruling_instruction, distinctive_facts, applied_provisions from full_text."""
+        if not (getattr(doc, "full_text", None) or "").strip():
+            return
+        doc.exceptions = _extract_exceptions_from_text(doc.full_text)
+        doc.weighted_factors = _extract_reasoning_excerpt(doc.full_text, max_chars=1500)
+        doc.ruling_instruction = _extract_ruling_instruction_from_text(doc.full_text)
+        doc.distinctive_facts = _extract_distinctive_facts_from_text(doc.full_text)
+        doc.applied_provisions = _extract_applied_provisions_from_text(doc.full_text)
+        if any(
+            [
+                doc.exceptions,
+                doc.weighted_factors,
+                doc.ruling_instruction,
+                doc.distinctive_facts,
+                doc.applied_provisions,
+            ]
+        ):
+            logger.debug(
+                "%s | depth: ruling=%s facts=%s provisions=%s",
+                doc.case_id,
+                len(doc.ruling_instruction),
+                len(doc.distinctive_facts),
+                len(doc.applied_provisions),
+            )
+
+    def _merge_ai_data(self, doc: CaseLawDocument, ai_data):  # noqa: C901, PLR0912
         """
         Map the Pydantic model results back to the CaseLawDocument
         """
@@ -444,6 +493,9 @@ class IngestionManager:
         doc.decision_outcome = ai_data.metadata.decision_outcome
         doc.decision_date = ai_data.metadata.date_of_issue
         doc.judges = ", ".join(ai_data.metadata.judges)
+        doc.judges_total = ai_data.metadata.judges_total
+        doc.judges_dissenting = ai_data.metadata.judges_dissenting
+        doc.vote_strength = ai_data.metadata.vote_strength
         doc.ecli = ai_data.metadata.ecli
         doc.diary_number = ai_data.metadata.diary_number
 
@@ -493,6 +545,10 @@ class IngestionManager:
                 doc.judgment = content[:2000]  # cap length for metadata column
             elif sec_type in ("background", "summary") and not doc.background_summary:
                 doc.background_summary = content[:2000]
+            elif sec_type == "dissenting":
+                doc.dissenting_opinion = True
+                if not doc.dissenting_text:
+                    doc.dissenting_text = content[:2000]
 
         # Populate descriptive title from the first line of full_text if it looks like
         # a structured title (e.g. "Seksuaalirikos - Lapsen seksuaalinen hyväksikäyttö")

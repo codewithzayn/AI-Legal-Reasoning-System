@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Unit tests for HybridRetrieval: RRF merge, case-ID extraction, diversity cap,
 exact-match boost, query classification, and RRF blend scores.

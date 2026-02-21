@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Single command: Scrape case law from Finlex → save JSON → generate PDF (ditto copy) → upload to Google Drive.
 No extraction, no Supabase. PDF content is the same as the scraped full_text (1:1 with website).

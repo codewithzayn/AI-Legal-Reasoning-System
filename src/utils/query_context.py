@@ -1,13 +1,4 @@
 """
-© 2026 Crest Advisory Group LLC. All rights reserved.
-
-PROPRIETARY AND CONFIDENTIAL
-
-This file is part of the AI Legal Reasoning System.
-Unauthorized copying, distribution, or use is strictly prohibited.
-"""
-
-"""
 Resolve user query using conversation context.
 
 When users give fragmented prompts (e.g. "range 1926 to 2000", "about fraud"),

@@ -5,44 +5,28 @@ Stores feedback to a Supabase 'feedback' table and shows
 thank-you confirmation after clicking.
 """
 
-import os
-
 import streamlit as st
 
 from src.config.translations import t
-
-
-def _get_supabase_client():
-    """Lazy-load synchronous Supabase client for feedback storage."""
-    if "feedback_supabase" not in st.session_state:
-        try:
-            from supabase import create_client
-
-            url = os.getenv("SUPABASE_URL", "")
-            key = os.getenv("SUPABASE_KEY", "")
-            if url and key:
-                st.session_state.feedback_supabase = create_client(url, key)
-            else:
-                st.session_state.feedback_supabase = None
-        except Exception:
-            st.session_state.feedback_supabase = None
-    return st.session_state.feedback_supabase
+from src.ui.supabase_client import get_supabase_client
 
 
 def store_feedback(message_content: str, query: str, rating: str, lang: str) -> bool:
     """Store feedback to Supabase. Returns True on success."""
-    client = _get_supabase_client()
+    client = get_supabase_client()
     if client is None:
         return False
     try:
-        client.table("feedback").insert(
-            {
-                "message_content": message_content[:2000],
-                "query": (query or "")[:2000],
-                "rating": rating,
-                "lang": lang,
-            }
-        ).execute()
+        row = {
+            "message_content": message_content[:2000],
+            "query": (query or "")[:2000],
+            "rating": rating,
+            "lang": lang,
+        }
+        user_id = st.session_state.get("user_id")
+        if user_id:
+            row["user_id"] = user_id
+        client.table("feedback").insert(row).execute()
         return True
     except Exception:
         return False

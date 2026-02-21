@@ -8,40 +8,70 @@ Edit this file to add or change suggested prompts.
 # Keys: "en", "fi", "sv" for language. Use same keys as translations.
 PROMPT_TEMPLATES: dict[str, list[dict[str, str]]] = {
     "en": [
-        # Year-aware examples first — teach users about year filtering proactively
-        {"label": "Fraud cases 2018–2023", "prompt": "Find KKO cases about fraud (petos) from 2018 to 2023"},
-        {"label": "Theft — all years", "prompt": "What is the penalty for theft (varkaus)? Search all years."},
-        # Specific case
-        {"label": "Summarize specific case", "prompt": "Summarize case KKO:2024:76"},
-        # Topic searches
-        {"label": "Insurance contracts", "prompt": "Tell me about insurance contracts (vakuutussopimus)"},
-        {"label": "Administrative court decisions", "prompt": "Find KHO cases about administrative law"},
-        {"label": "Damages and compensation", "prompt": "Find cases about damages (vahingonkorvaus) from 2015 to 2022"},
-        {"label": "Civil court jurisdiction", "prompt": "Tell me about civil court jurisdiction"},
+        {
+            "label": "Fraud analysis 2015\u20132024",
+            "prompt": "Analyze KKO precedents about fraud (petos) from 2015 to 2024. For each case: ruling instruction, decisive facts, provisions, vote strength, and distinctions.",
+        },
+        {
+            "label": "Prepare dismissal case",
+            "prompt": "My client was dismissed from employment. Analyze KKO precedents on grounds for dismissal (ty\u00f6sopimuksen irtisanominen). What are the decisive facts, trends, and risk assessment?",
+        },
+        {
+            "label": "Deep analysis KKO:2024:76",
+            "prompt": "Full legal analysis of KKO:2024:76: ruling instruction, decisive facts, provisions applied, precedent strength, distinctions, and how it compares to related cases.",
+        },
+        {
+            "label": "Damages risk assessment",
+            "prompt": "Analyze KKO precedents on damages (vahingonkorvaus) from 2018\u20132024. What is the trend? When does liability arise and what are the exceptions?",
+        },
+        {
+            "label": "Contract breach strategy",
+            "prompt": "My client is sued for breach of contract. Analyze relevant KKO precedents: what are the decisive factors, how strong are the precedents, and what distinguishing arguments can be made?",
+        },
     ],
     "fi": [
-        # Vuositietoiset esimerkit ensin — opettaa käyttäjälle vuosisuodatuksen
-        {"label": "Petostapaukset 2018–2023", "prompt": "Etsi KKO-tapauksia petoksesta vuosilta 2018–2023"},
-        {"label": "Varkaus — kaikki vuodet", "prompt": "Mikä on varkauden (varkaus) rangaistus? Hae kaikki vuodet."},
-        # Tietty tapaus
-        {"label": "Tiivistä tapaus", "prompt": "Tiivistä tapaus KKO:2024:76"},
-        # Aihekohtaiset haut
-        {"label": "Vakuutussopimukset", "prompt": "Kerro vakuutussopimuksista"},
-        {"label": "Hallinto-oikeuden päätökset", "prompt": "Etsi KHO-tapauksia hallinto-oikeudesta"},
-        {"label": "Vahingonkorvaus 2015–2022", "prompt": "Etsi tapauksia vahingonkorvauksesta vuosilta 2015–2022"},
-        {"label": "Siviilioikeus", "prompt": "Kerro siviilioikeuksien toimivaltasta"},
+        {
+            "label": "Petosanalyysi 2015\u20132024",
+            "prompt": "Analysoi KKO:n ennakkop\u00e4\u00e4t\u00f6kset petoksesta vuosilta 2015\u20132024. Jokaisesta tapauksesta: ratkaisuohje, ratkaisevat tosiseikat, sovelletut s\u00e4\u00e4nn\u00f6kset, \u00e4\u00e4nestystulos ja erottelut.",
+        },
+        {
+            "label": "Irtisanomistapauksen valmistelu",
+            "prompt": "P\u00e4\u00e4miest\u00e4ni on irtisanottu ty\u00f6suhteesta. Analysoi KKO:n ennakkop\u00e4\u00e4t\u00f6kset irtisanomisperusteista. Mitk\u00e4 ovat ratkaisevat tosiseikat, kehityssuunta ja riskiarvio?",
+        },
+        {
+            "label": "Syv\u00e4analyysi KKO:2024:76",
+            "prompt": "T\u00e4ysi oikeudellinen analyysi tapauksesta KKO:2024:76: ratkaisuohje, ratkaisevat tosiseikat, sovelletut s\u00e4\u00e4nn\u00f6kset, ennakkop\u00e4\u00e4t\u00f6ksen vahvuus, erottelut ja vertailu muihin tapauksiin.",
+        },
+        {
+            "label": "Vahingonkorvauksen riskiarvio",
+            "prompt": "Analysoi KKO:n ennakkop\u00e4\u00e4t\u00f6kset vahingonkorvauksesta vuosilta 2018\u20132024. Mik\u00e4 on kehityssuunta? Milloin vastuu syntyy ja mitk\u00e4 ovat poikkeukset?",
+        },
+        {
+            "label": "Sopimusrikkomusstrategia",
+            "prompt": "P\u00e4\u00e4miest\u00e4ni vastaan on nostettu kanne sopimusrikkomuksesta. Analysoi relevantit KKO:n ennakkop\u00e4\u00e4t\u00f6kset: ratkaisevat tekij\u00e4t, ennakkop\u00e4\u00e4t\u00f6sten vahvuus ja erotteluargumentit.",
+        },
     ],
     "sv": [
-        # Årsmedvetna exempel först — lär användaren om årsfiltrering
-        {"label": "Bedrägerimål 2018–2023", "prompt": "Hitta KKO-fall om bedrägeri (petos) från 2018 till 2023"},
-        {"label": "Stöld — alla år", "prompt": "Vad är straffet för stöld (varkaus)? Sök alla år."},
-        # Specifikt fall
-        {"label": "Sammanfatta fall", "prompt": "Sammanfatta fall KKO:2024:76"},
-        # Ämnessökningar
-        {"label": "Försäkringsavtal", "prompt": "Berätta om försäkringsavtal"},
-        {"label": "Förvaltningsdomstol", "prompt": "Hitta KHO-fall om förvaltningsrätt"},
-        {"label": "Skadestånd 2015–2022", "prompt": "Hitta fall om skadestånd (vahingonkorvaus) från 2015 till 2022"},
-        {"label": "Civila domstolar", "prompt": "Berätta om civila domstolars behörighet"},
+        {
+            "label": "Bedr\u00e4gerianalys 2015\u20132024",
+            "prompt": "Analysera KKO-prejudikat om bedr\u00e4geri (petos) fr\u00e5n 2015 till 2024. F\u00f6r varje fall: avg\u00f6randeinstruktion, avg\u00f6rande fakta, best\u00e4mmelser, r\u00f6ststyrka och distinktioner.",
+        },
+        {
+            "label": "F\u00f6rbered upps\u00e4gningsfall",
+            "prompt": "Min klient har blivit upps\u00e4gd. Analysera KKO-prejudikat om upps\u00e4gningsgrunder. Avg\u00f6rande fakta, trender och riskbed\u00f6mning.",
+        },
+        {
+            "label": "Djupanalys KKO:2024:76",
+            "prompt": "Full r\u00e4ttslig analys av KKO:2024:76: avg\u00f6randeinstruktion, avg\u00f6rande fakta, till\u00e4mpade best\u00e4mmelser, prejudikatets styrka, distinktioner.",
+        },
+        {
+            "label": "Skadest\u00e5ndsriskbed\u00f6mning",
+            "prompt": "Analysera KKO-prejudikat om skadest\u00e5nd fr\u00e5n 2018\u20132024. Trend? N\u00e4r uppst\u00e5r ansvar och vilka undantag finns?",
+        },
+        {
+            "label": "Avtalsbrottsstrategi",
+            "prompt": "Min klient st\u00e4ms f\u00f6r avtalsbrott. Analysera relevanta KKO-prejudikat: avg\u00f6rande faktorer, prejudikatets styrka och distinktionsargument.",
+        },
     ],
 }
 
@@ -60,150 +90,150 @@ def get_templates_for_lang(lang: str) -> list[dict[str, str]]:
 WORKFLOW_CATEGORIES: dict[str, list[dict]] = {
     "en": [
         {
-            "category": "Case Law",
-            "icon": "\U0001f4dc",
+            "category": "Case Preparation",
+            "icon": "\U0001f4cb",
             "templates": [
                 {
-                    "label": "Find precedents",
-                    "description": "Search for landmark decisions on a topic",
-                    "prompt": "Find precedent cases about fraud",
+                    "label": "Prepare fraud defense",
+                    "description": "Full case analysis: precedents, ruling instructions, risks",
+                    "prompt": "My client is charged with fraud. Analyze KKO precedents on fraud (petos) from 2015\u20132024: ruling instruction, decisive facts, vote strength, exceptions. What is the risk level?",
                 },
                 {
-                    "label": "Summarize a case",
-                    "description": "Get a structured summary of a specific case",
-                    "prompt": "Summarize case KKO:2024:76",
+                    "label": "Employment dispute analysis",
+                    "description": "Dismissal grounds, trends, and settlement assessment",
+                    "prompt": "My client was dismissed. Analyze KKO precedents on dismissal grounds (irtisanomisperuste) 2018\u20132024. Decisive facts, precedent strength, trends, and settlement recommendation.",
                 },
             ],
         },
         {
-            "category": "Analysis",
+            "category": "Precedent Analysis",
             "icon": "\U0001f50d",
             "templates": [
                 {
-                    "label": "Analyze a case",
-                    "description": "Deep analysis of facts, reasoning, and outcome",
-                    "prompt": "Analyze the legal reasoning in KKO:2024:76",
+                    "label": "Deep-dive a case",
+                    "description": "Full mandatory minimum: rule, facts, strength, distinctions",
+                    "prompt": "Full legal analysis of KKO:2024:76: ruling instruction, decisive facts, provisions, vote strength, how to distinguish my case from this precedent.",
                 },
                 {
-                    "label": "Compare provisions",
-                    "description": "Compare two legal provisions or case outcomes",
-                    "prompt": "Compare provisions on theft and embezzlement",
+                    "label": "Compare precedents",
+                    "description": "Compare two areas to find decisive differences",
+                    "prompt": "Compare KKO precedents on theft vs. embezzlement: what are the decisive distinguishing factors?",
                 },
             ],
         },
         {
-            "category": "Strategy",
+            "category": "Risk & Strategy",
             "icon": "\U0001f3af",
             "templates": [
                 {
-                    "label": "Risk assessment",
-                    "description": "Evaluate legal risks based on case law",
-                    "prompt": "What are the legal risks related to breach of contract based on recent case law?",
+                    "label": "Win probability assessment",
+                    "description": "Evaluate chances based on precedent strength and trends",
+                    "prompt": "Based on KKO precedents on damages (vahingonkorvaus) 2018\u20132024: what is the probability of success? Which precedents are strong (unanimous) vs. weak (split vote)?",
                 },
                 {
-                    "label": "Counter-arguments",
-                    "description": "Find opposing precedents and arguments",
-                    "prompt": "What counter-arguments exist against strict liability in product damage cases?",
+                    "label": "Counter-arguments & distinctions",
+                    "description": "Find weaknesses in opposing precedents",
+                    "prompt": "The opposing party cites strict liability in a product damage case. What counter-arguments and distinguishing precedents can I use?",
                 },
             ],
         },
     ],
     "fi": [
         {
-            "category": "Oikeusk\u00e4yt\u00e4nt\u00f6",
-            "icon": "\U0001f4dc",
+            "category": "Jutun valmistelu",
+            "icon": "\U0001f4cb",
             "templates": [
                 {
-                    "label": "Etsi ennakkop\u00e4\u00e4t\u00f6ksi\u00e4",
-                    "description": "Hae merkitt\u00e4vi\u00e4 p\u00e4\u00e4t\u00f6ksi\u00e4 aiheesta",
-                    "prompt": "Etsi ennakkop\u00e4\u00e4t\u00f6ksi\u00e4 petoksesta",
+                    "label": "Petossyytteen puolustus",
+                    "description": "T\u00e4ysi tapausanalyysi: ennakkop\u00e4\u00e4t\u00f6kset, ratkaisuohjeet, riskit",
+                    "prompt": "P\u00e4\u00e4miest\u00e4ni syytet\u00e4\u00e4n petoksesta. Analysoi KKO:n ennakkop\u00e4\u00e4t\u00f6kset petoksesta 2015\u20132024: ratkaisuohje, ratkaisevat tosiseikat, \u00e4\u00e4nestystulos, poikkeukset. Mik\u00e4 on riskitaso?",
                 },
                 {
-                    "label": "Tiivist\u00e4 tapaus",
-                    "description": "Saat j\u00e4sennellyn yhteenvedon tapauksesta",
-                    "prompt": "Tiivist\u00e4 tapaus KKO:2024:76",
+                    "label": "Ty\u00f6riidan analyysi",
+                    "description": "Irtisanomisperusteet, kehityssuunta ja sovintoarvio",
+                    "prompt": "P\u00e4\u00e4mieheni on irtisanottu. Analysoi KKO:n ennakkop\u00e4\u00e4t\u00f6kset irtisanomisperusteista 2018\u20132024. Ratkaisevat tosiseikat, ennakkop\u00e4\u00e4t\u00f6sten vahvuus, kehityssuunta ja sovintosuositus.",
                 },
             ],
         },
         {
-            "category": "Analyysi",
+            "category": "Ennakkop\u00e4\u00e4t\u00f6sanalyysi",
             "icon": "\U0001f50d",
             "templates": [
                 {
-                    "label": "Analysoi tapaus",
-                    "description": "Syvällinen analyysi tosiseikoista, perusteluista ja lopputuloksesta",
-                    "prompt": "Analysoi oikeudellinen p\u00e4\u00e4ttely tapauksessa KKO:2024:76",
+                    "label": "Syv\u00e4analyysi tapauksesta",
+                    "description": "Pakollinen minimi: s\u00e4\u00e4nt\u00f6, tosiseikat, vahvuus, erottelut",
+                    "prompt": "T\u00e4ysi oikeudellinen analyysi tapauksesta KKO:2024:76: ratkaisuohje, ratkaisevat tosiseikat, sovelletut s\u00e4\u00e4nn\u00f6kset, \u00e4\u00e4nestystulos, miten erotella oma tapaus.",
                 },
                 {
-                    "label": "Vertaa s\u00e4\u00e4nn\u00f6ksi\u00e4",
-                    "description": "Vertaa kahta lains\u00e4\u00e4nn\u00f6st\u00e4 tai tapausratkaisua",
-                    "prompt": "Vertaa varkauden ja kavalluksen s\u00e4\u00e4nn\u00f6ksi\u00e4",
+                    "label": "Vertaa ennakkop\u00e4\u00e4t\u00f6ksi\u00e4",
+                    "description": "Vertaa kahta aluetta l\u00f6yt\u00e4\u00e4ksesi ratkaisevat erot",
+                    "prompt": "Vertaa KKO:n ennakkop\u00e4\u00e4t\u00f6ksi\u00e4 varkaudesta ja kavalluksesta: mitk\u00e4 ovat ratkaisevat erottelutekij\u00e4t?",
                 },
             ],
         },
         {
-            "category": "Strategia",
+            "category": "Riski ja strategia",
             "icon": "\U0001f3af",
             "templates": [
                 {
-                    "label": "Riskiarviointi",
-                    "description": "Arvioi oikeudelliset riskit oikeusk\u00e4yt\u00e4nn\u00f6n perusteella",
-                    "prompt": "Mitk\u00e4 ovat sopimusrikkomukseen liittyv\u00e4t oikeudelliset riskit viimeaikaisen oikeusk\u00e4yt\u00e4nn\u00f6n perusteella?",
+                    "label": "Menestymisarvio",
+                    "description": "Arvioi mahdollisuudet ennakkop\u00e4\u00e4t\u00f6sten vahvuuden ja trendien perusteella",
+                    "prompt": "KKO:n ennakkop\u00e4\u00e4t\u00f6sten perusteella vahingonkorvauksesta 2018\u20132024: menestymisen todenn\u00e4k\u00f6isyys? Mitk\u00e4 ennakkop\u00e4\u00e4t\u00f6kset ovat vahvoja (yksimielinen) vs. heikkoja (jaettu \u00e4\u00e4nestys)?",
                 },
                 {
-                    "label": "Vasta-argumentit",
-                    "description": "Etsi vastakkaisia ennakkop\u00e4\u00e4t\u00f6ksi\u00e4 ja argumentteja",
-                    "prompt": "Mit\u00e4 vasta-argumentteja on ankaran vastuun soveltamista vastaan tuotevahinkoasioissa?",
+                    "label": "Vasta-argumentit ja erottelut",
+                    "description": "Etsi heikkouksia vastapuolen ennakkop\u00e4\u00e4t\u00f6ksist\u00e4",
+                    "prompt": "Vastapuoli vetoaa ankaraan vastuuseen tuotevahinkoasiassa. Mit\u00e4 vasta-argumentteja ja erottelevia ennakkop\u00e4\u00e4t\u00f6ksi\u00e4 voin k\u00e4ytt\u00e4\u00e4?",
                 },
             ],
         },
     ],
     "sv": [
         {
-            "category": "R\u00e4ttspraxis",
-            "icon": "\U0001f4dc",
+            "category": "Fallf\u00f6rberedelse",
+            "icon": "\U0001f4cb",
             "templates": [
                 {
-                    "label": "Hitta prejudikat",
-                    "description": "S\u00f6k efter viktiga avg\u00f6randen om ett \u00e4mne",
-                    "prompt": "Hitta prejudikat om bedr\u00e4geri",
+                    "label": "Bedr\u00e4gerif\u00f6rsvar",
+                    "description": "Full fallanalys: prejudikat, avg\u00f6randeinstruktioner, risker",
+                    "prompt": "Min klient \u00e5talas f\u00f6r bedr\u00e4geri. Analysera KKO-prejudikat 2015\u20132024: avg\u00f6randeinstruktion, avg\u00f6rande fakta, r\u00f6ststyrka, undantag. Riskniv\u00e5?",
                 },
                 {
-                    "label": "Sammanfatta fall",
-                    "description": "F\u00e5 en strukturerad sammanfattning av ett fall",
-                    "prompt": "Sammanfatta fall KKO:2024:76",
+                    "label": "Arbetskonfliktanalys",
+                    "description": "Upps\u00e4gningsgrunder, trender och f\u00f6rlikningsbed\u00f6mning",
+                    "prompt": "Min klient har blivit upps\u00e4gd. Analysera KKO-prejudikat om upps\u00e4gningsgrunder 2018\u20132024: avg\u00f6rande fakta, styrka, trend, f\u00f6rlikningsrekommendation.",
                 },
             ],
         },
         {
-            "category": "Analys",
+            "category": "Prejudikatanalys",
             "icon": "\U0001f50d",
             "templates": [
                 {
-                    "label": "Analysera fall",
-                    "description": "Djupanalys av fakta, motivering och resultat",
-                    "prompt": "Analysera det r\u00e4ttsliga resonemanget i KKO:2024:76",
+                    "label": "Djupanalys av fall",
+                    "description": "Obligatoriskt minimum: regel, fakta, styrka, distinktioner",
+                    "prompt": "Full r\u00e4ttslig analys av KKO:2024:76: avg\u00f6randeinstruktion, avg\u00f6rande fakta, best\u00e4mmelser, r\u00f6ststyrka, distinktioner.",
                 },
                 {
-                    "label": "J\u00e4mf\u00f6r best\u00e4mmelser",
-                    "description": "J\u00e4mf\u00f6r tv\u00e5 best\u00e4mmelser eller fallresultat",
-                    "prompt": "J\u00e4mf\u00f6r best\u00e4mmelser om st\u00f6ld och f\u00f6rskingring",
+                    "label": "J\u00e4mf\u00f6r prejudikat",
+                    "description": "J\u00e4mf\u00f6r tv\u00e5 omr\u00e5den f\u00f6r att hitta avg\u00f6rande skillnader",
+                    "prompt": "J\u00e4mf\u00f6r KKO-prejudikat om st\u00f6ld vs. f\u00f6rskingring: avg\u00f6rande distinktionsfaktorer?",
                 },
             ],
         },
         {
-            "category": "Strategi",
+            "category": "Risk och strategi",
             "icon": "\U0001f3af",
             "templates": [
                 {
-                    "label": "Riskbed\u00f6mning",
-                    "description": "Utv\u00e4rdera r\u00e4ttsliga risker baserat p\u00e5 r\u00e4ttspraxis",
-                    "prompt": "Vilka \u00e4r de r\u00e4ttsliga riskerna vid avtalsbrott baserat p\u00e5 nyare r\u00e4ttspraxis?",
+                    "label": "Framg\u00e5ngsbed\u00f6mning",
+                    "description": "Utv\u00e4rdera chanser baserat p\u00e5 prejudikatets styrka och trender",
+                    "prompt": "Baserat p\u00e5 KKO-prejudikat om skadest\u00e5nd 2018\u20132024: sannolikhet f\u00f6r framg\u00e5ng? Vilka prejudikat \u00e4r starka (enh\u00e4lliga) vs. svaga (splittrade)?",
                 },
                 {
-                    "label": "Motargument",
-                    "description": "Hitta motsatta prejudikat och argument",
-                    "prompt": "Vilka motargument finns mot strikt ansvar i produktskadem\u00e5l?",
+                    "label": "Motargument och distinktioner",
+                    "description": "Hitta svagheter i motpartens prejudikat",
+                    "prompt": "Motparten h\u00e4nvisar till strikt ansvar i produktskadem\u00e5l. Vilka motargument och s\u00e4rskiljande prejudikat kan jag anv\u00e4nda?",
                 },
             ],
         },

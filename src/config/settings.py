@@ -37,9 +37,9 @@ class Config:
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "10"))
     # How many candidates to fetch before rerank; then how many to send to the LLM.
     SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "50"))
-    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "12"))
-    # Max chunks per case after rerank. Higher = more context from strong cases (e.g. 4).
-    MAX_CHUNKS_PER_CASE: int = int(os.getenv("MAX_CHUNKS_PER_CASE", "4"))
+    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "20"))
+    # Max chunks per case after rerank. Lower = more unique cases for topic queries.
+    MAX_CHUNKS_PER_CASE: int = int(os.getenv("MAX_CHUNKS_PER_CASE", "3"))
     # Max documents sent to Cohere reranker. Higher = better recall, slower.
     # 50 ensures deeper candidates still get a fair reranking.
     RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "50"))
@@ -77,8 +77,12 @@ class Config:
 
     # Query-time answer generator (user asks a question). Default: cheaper/fast.
     OPENAI_CHAT_MODEL: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
-    # Max tokens for LLM response. Higher = more comprehensive answers with more citations (default 1200).
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "1200"))
+    # Lightweight model for support tasks (intent, expansion, relevancy, suggestions).
+    OPENAI_SUPPORT_MODEL: str = os.getenv("OPENAI_SUPPORT_MODEL", "gpt-4o-mini")
+    # Max tokens for LLM response. Higher = comprehensive legal analysis memos with multiple cases.
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+    # Timeout for LLM requests (seconds).
+    LLM_REQUEST_TIMEOUT: int = int(os.getenv("LLM_REQUEST_TIMEOUT", "90"))
 
     # Ingestion pipeline (extraction/chunking). Default: GPT-4o for better extraction quality.
     EXTRACTION_MODEL: str = os.getenv("EXTRACTION_MODEL", "gpt-4o")
@@ -117,7 +121,10 @@ class Config:
     CURIA_BASE_URL: str = os.getenv("CURIA_BASE_URL", "https://curia.europa.eu")
     HUDOC_API_URL: str = os.getenv("HUDOC_API_URL", "https://hudoc.echr.coe.int/app/query/results")
 
-    # Multi-tenant client document ingestion
+    # Application base URL (for OAuth redirect callbacks).
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:8501").strip().rstrip("/")
+
+    # Multi-tenant client document ingestion (legacy; overridden by auth user_id when logged in).
     LEXAI_TENANT_ID: str = os.getenv("LEXAI_TENANT_ID", "").strip()
 
     # Google Drive OAuth for client ingestion (web flow)
@@ -158,9 +165,9 @@ def validate_env_for_app() -> None:
 # UI Configuration (static values)
 # ============================================
 
-APP_TITLE = "AI Legal Reasoning System"
+APP_TITLE = "LexAI — Legal Analyst Copilot"
 APP_ICON = "⚖️"
-CHAT_WELCOME_MESSAGE = "Tervetuloa! Ask me about Finnish legal documents."
+CHAT_WELCOME_MESSAGE = "Tervetuloa! Valmistan juristeille käyttövalmista tapausaineistoa."
 
 # Streamlit Page Config
 PAGE_CONFIG = {
@@ -171,6 +178,6 @@ PAGE_CONFIG = {
 }
 
 # Chat Configuration
-MAX_CHAT_HISTORY = 50
+MAX_CHAT_HISTORY = int(os.getenv("MAX_CHAT_HISTORY", "50"))
 USER_AVATAR = "👤"
 ASSISTANT_AVATAR = "⚖️"

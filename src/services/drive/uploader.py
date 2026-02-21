@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Google Drive uploader: OAuth2 user auth (recommended) or service account auth.
 Creates folder hierarchy by name, uploads files.

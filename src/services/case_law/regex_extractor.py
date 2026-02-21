@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Regex-based extractor for Finnish Supreme Court (KKO) precedents.
 Populates the same CaseExtractionResult as the LLM extractor for cost-effective ingestion.
@@ -223,6 +220,147 @@ def _extract_judges(text: str) -> tuple[list[str], str]:
     return judges, rapporteur
 
 
+# Explicit vote count in text (Finnish "Äänestys 6-1", "Äänestys 4-2-1"; KKO/KHO)
+PATTERN_VOTE_FINNISH = re.compile(
+    r"Äänestys\s+(\d+)\s*-\s*(\d+)(?:\s*-\s*(\d+))?",
+    re.IGNORECASE,
+)
+PATTERN_VOTE_ENGLISH = re.compile(
+    r"(?:Vote|Voting)\s+(\d+)\s*[-–]\s*(\d+)(?:\s*[-–]\s*(\d+))?",
+    re.IGNORECASE,
+)
+
+# KKO/KHO Finnish judges line: "Asian ovat ratkaisseet oikeusneuvokset X, Y (eri mieltä), Z ja W."
+# Captures the block of judge names (and titles) until Esittelijä/Rapporteur or end of sentence.
+PATTERN_JUDGES_LINE_FINNISH = re.compile(
+    r"Asian\s+ovat\s+ratkaisseet\s+(?:oikeusneuvokset|lainoppineet\s+hallinto-oikeustuomarit|[\w\s\-]+?)\s+(.+?)(?=\.\s*Esittelijä|\.\s*Rapporteur|\.\s*$|\n\n)",
+    re.IGNORECASE | re.DOTALL,
+)
+# Match one judge segment: "Name (eri mieltä)" or "Name" (name = letters, spaces, hyphens)
+ERI_MIELTA = re.compile(r"\(eri\s+mieltä\)", re.IGNORECASE)
+
+
+def _extract_vote_from_judges_line_finnish(text: str) -> tuple[int, int, str]:
+    """Extract vote from Finnish judges line (Asian ovat ratkaisseet ... Name (eri mieltä) ...).
+
+    Returns: (judges_total, judges_dissenting, vote_strength_str). Empty vote_strength if not found.
+    """
+    m = PATTERN_JUDGES_LINE_FINNISH.search(text)
+    if not m:
+        return 0, 0, ""
+    block = m.group(1).strip()
+    if not block or len(block) > 2000:
+        return 0, 0, ""
+    # Split by ", " and " ja " to get segments (each segment is one judge, possibly with "(eri mieltä)")
+    segments = re.split(r",\s*|\s+ja\s+", block)
+    total = 0
+    dissenting = 0
+    for raw_seg in segments:
+        cleaned = raw_seg.strip()
+        if not cleaned or len(cleaned) < 4:
+            continue
+        if re.search(r"esittelijä|rapporteur|legal\s+advisor", cleaned, re.IGNORECASE):
+            continue
+        total += 1
+        if ERI_MIELTA.search(cleaned):
+            dissenting += 1
+    if total == 0:
+        return 0, 0, ""
+    majority = total - dissenting
+    vote_str = f"{majority}-{dissenting}" if dissenting > 0 else f"{total}-0"
+    return total, dissenting, vote_str
+
+
+_PATTERN_OLD_JUDGES_LINE = re.compile(
+    r"Ratkaisuun\s+osallistuneet\s*:\s*(.+?)(?:\n\n|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_vote_from_old_judges_line(text: str) -> tuple[int, int, str]:
+    """Extract vote from old-format judge line: 'Ratkaisuun osallistuneet: oikeusneuvokset X, Y ja Z'."""
+    m = _PATTERN_OLD_JUDGES_LINE.search(text)
+    if not m:
+        return 0, 0, ""
+    block = m.group(1).strip()
+    if not block or len(block) > 2000:
+        return 0, 0, ""
+    segments = re.split(r",\s*|\s+(?:ja|sekä)\s+", block)
+    total = 0
+    for raw_seg in segments:
+        cleaned = raw_seg.strip()
+        if not cleaned or len(cleaned) < 3:
+            continue
+        if re.search(r"esittelijä|rapporteur|presidentti|ylimääräi", cleaned, re.IGNORECASE):
+            total += 1
+            continue
+        total += 1
+    has_dissenting = bool(re.search(r"Eri mieltä olev", text, re.IGNORECASE))
+    dissenting_count = 0
+    if has_dissenting:
+        dissent_sections = re.findall(r"(?:Ylimääräinen\s+)?[Oo]ikeusneuvos\s+\w+\s*:", text)
+        dissenting_count = max(1, len(dissent_sections))
+    if total == 0:
+        return 0, 0, ""
+    majority = total - dissenting_count
+    if majority < 1:
+        majority = total
+        dissenting_count = 0
+    vote_str = f"{majority}-{dissenting_count}" if dissenting_count > 0 else f"{total}-0"
+    return total, dissenting_count, vote_str
+
+
+def _extract_vote_from_text(text: str) -> tuple[int, int, str]:
+    """Extract vote count from full text: explicit 'Äänestys 6-1' or Finnish judges line.
+
+    Returns: (judges_total, judges_dissenting, vote_strength_str).
+    Empty string vote_strength if no pattern found.
+    """
+    if not (text or "").strip():
+        return 0, 0, ""
+    for pattern in (PATTERN_VOTE_FINNISH, PATTERN_VOTE_ENGLISH):
+        m = pattern.search(text)
+        if m:
+            n1, n2 = int(m.group(1)), int(m.group(2))
+            n3 = int(m.group(3)) if m.lastindex >= 3 and m.group(3) else 0
+            if n3 > 0:
+                total = n1 + n2 + n3
+                dissenting = n2
+                vote_str = f"{n1}-{n2}-{n3}"
+            else:
+                total = n1 + n2
+                dissenting = n2
+                vote_str = f"{n1}-{n2}"
+            return total, dissenting, vote_str
+    # Fallback 1: KKO/KHO Finnish judges line (Asian ovat ratkaisseet ... (eri mieltä))
+    total, dissenting, vote_str = _extract_vote_from_judges_line_finnish(text)
+    if vote_str:
+        return total, dissenting, vote_str
+    # Fallback 2: old-format judges line (Ratkaisuun osallistuneet: ...)
+    return _extract_vote_from_old_judges_line(text)
+
+
+def _calculate_vote_strength(judges: list[str], has_dissenting: bool) -> tuple[int, int, str]:
+    """Calculate vote strength from judges list and dissenting status.
+
+    Returns: (judges_total, judges_dissenting, vote_strength_str)
+    Example: (5, 1, "4-1") for a 5-judge case with 1 dissenting
+    """
+    judges_total = len(judges) if judges else 0
+    if judges_total == 0:
+        return 0, 0, ""
+
+    # If there's a dissenting section, assume at least 1 judge dissented
+    judges_dissenting = 1 if has_dissenting else 0
+
+    # Calculate majority count
+    judges_majority = judges_total - judges_dissenting
+
+    vote_strength = f"{judges_total}-0" if judges_dissenting == 0 else f"{judges_majority}-{judges_dissenting}"
+
+    return judges_total, judges_dissenting, vote_strength
+
+
 # Optional: date with 2-digit year (e.g. "1.1.59", "18.12.24") for older documents
 PATTERN_DATE_DMYY_2DIGIT = re.compile(
     r"(?:Date of issue|Antopäivä)\s*\n\s*(\d{1,2})\.(\d{1,2})\.(\d{2})\b",
@@ -269,6 +407,280 @@ def _year_from_case_id(case_id: str) -> str:
     return ""
 
 
+# Exception/limitation/distinction phrases (Finnish + English)
+EXCEPTION_PHRASES = (
+    r"Poikkeuksena\s+(?:tilanteissa|tapauksissa)?\s*,?\s*(?:jossa|joissa|kun)?[^.]{10,280}\.",
+    r"Pois\s+lukien\s+(?:tapaukset|tilanteet|kun)?[^.]{10,280}\.",
+    r"Vaikka\s+yleensä[^.]{10,280}\.",
+    r"Kuitenkin\s+(?:jos|mikäli|siinä tapauksessa|silloin)[^.]{10,280}\.",
+    r"Ellei\s+toisin\s+(?:mainita|sovita|säädetä|osoiteta)[^.]{5,200}\.",
+    r"Poikkeavasti\s+[^.]{10,280}\.",
+    r"Toisin\s+kuin\s+(?:tapauksessa|asiassa|edellä)[^.]{10,280}\.",
+    r"Tämä\s+(?:sääntö|periaate|tulkinta)\s+ei\s+(?:kuitenkaan\s+)?(?:sovellu|koske|päde)[^.]{10,280}\.",
+    r"Edellä\s+(?:lausuttu|todettu|sanottu)\s+ei\s+(?:kuitenkaan\s+)?(?:koske|tarkoita|merkitse)[^.]{10,280}\.",
+    r"Siltä\s+osin\s+kuin[^.]{10,280}\.",
+    r"Edellytyksenä\s+(?:on|oli|kuitenkin)[^.]{10,280}\.",
+    r"Rajoituksena\s+[^.]{10,280}\.",
+    r"Tästä\s+(?:säännöstä|periaatteesta)\s+(?:voidaan\s+)?poiketa[^.]{10,280}\.",
+    r"(?:Exception|Exceptions?)\s+(?:to\s+)?(?:this\s+rule|above)[^.]{10,200}\.",
+    r"Unless\s+otherwise\s+(?:stated|provided)[^.]{5,200}\.",
+    r"(?:Tätä\s+ennakkotapausta\s+ei\s+sovellu|Ennakkotapaus\s+on\s+rajoitettu|This\s+precedent\s+does\s+not\s+apply)[^.]{5,220}\.",
+    r"(?:ei\s+kuitenkaan\s+(?:sovellu|sovelleta|koske|tarkoita|merkitse|riitä))[^.]{10,280}\.",
+)
+PATTERN_EXCEPTIONS = re.compile("|".join(f"({p})" for p in EXCEPTION_PHRASES), re.IGNORECASE | re.DOTALL)
+
+# Decisive-facts phrases (what was decisive for the outcome)
+DISTINCTIVE_FACT_PHRASES = (
+    r"Asiassa\s+on\s+(?:selvää|riidatonta|selvitetty)\s+(?:ettei|että|,?\s*että)[^.]{10,280}\.",
+    r"Tosiseikkojen\s+perusteella[^.]{10,280}\.",
+    r"Ratkaisevaa\s+(?:oli|on|asian\s+(?:arvioinnissa|ratkaisussa))[^.]{10,280}\.",
+    r"Asian\s+olosuhteet\s+osoittavat[^.]{10,280}\.",
+    r"(?:Korkein\s+oikeus|KKO)\s+(?:toteaa|katsoo|katsoi)\s*,?\s+(?:että|ettei)[^.]{10,400}\.",
+    r"(?:Korkein\s+oikeus|KKO)\s+(?:pitää|piti)\s+(?:tätä\s+)?(?:asiaa\s+)?(?:arvioitaessa\s+)?(?:olennaisena|merkityksellisenä|ratkaisevana)[^.]{10,280}\.",
+    r"Asiassa\s+(?:on|oli)\s+(?:arvioitava|ratkaistava|kysymys\s+siitä)[^.]{10,400}\.",
+    r"Keskeistä\s+(?:arvioinnissa|asian\s+ratkaisemisessa|on)[^.]{10,280}\.",
+    r"Merkityksellistä\s+(?:on|oli|tässä\s+asiassa)[^.]{10,280}\.",
+    r"Huomioon\s+(?:ottaen|on\s+otettava)[^.]{10,280}\.",
+    r"Näillä\s+perusteilla[^.]{10,280}\.",
+    r"Edellä\s+(?:selostetuilla|mainituilla|todet(?:uilla|uin))\s+perusteilla[^.]{10,280}\.",
+    r"Kokonaisarvioinnissa[^.]{10,280}\.",
+    r"(?:Decisive|Determinative)\s+for\s+(?:the\s+outcome|the\s+decision)[^.]{10,200}\.",
+    r"The\s+(?:key|decisive)\s+facts?\s+(?:were|was)[^.]{10,200}\.",
+)
+PATTERN_DISTINCTIVE_FACTS = re.compile("|".join(f"({p})" for p in DISTINCTIVE_FACT_PHRASES), re.IGNORECASE | re.DOTALL)
+MAX_DISTINCTIVE_FACTS_CHARS = 1500
+MAX_RULING_INSTRUCTION_CHARS = 600
+MAX_APPLIED_PROVISIONS_CHARS = 800
+
+# Max total length for combined exceptions string (avoid huge payloads)
+MAX_EXCEPTIONS_TOTAL_CHARS = 2000
+
+
+def _extract_exceptions_from_text(text: str) -> str:
+    """Extract exception/limitation phrases from full_text for legal analysis. Returns single string, phrases separated by ' | '."""
+    if not (text or "").strip():
+        return ""
+    collected: list[str] = []
+    total_len = 0
+    for m in PATTERN_EXCEPTIONS.finditer(text):
+        phrase = m.group(0).strip()
+        if len(phrase) < 20 or phrase in collected:
+            continue
+        if total_len + len(phrase) + 3 > MAX_EXCEPTIONS_TOTAL_CHARS:
+            break
+        collected.append(phrase)
+        total_len += len(phrase) + 3
+    return " | ".join(collected) if collected else ""
+
+
+_FALLBACK_REASONING_PATTERNS = [
+    re.compile(r"^(?:KORKEIN\s+OIKEUS|KKO)\s*$", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"^(?:Korkeimman\s+oikeuden\s+(?:ratkaisu|päätös|kannanotto))\s*$", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"(?:KKO\s+(?:p|t)\.\s*\d)", re.IGNORECASE),
+]
+
+
+def _extract_reasoning_excerpt(text: str, max_chars: int = 1500) -> str:
+    """Extract the start of the Reasoning/Perustelut section as a placeholder for weighted factors.
+    Falls back to 'KORKEIN OIKEUS' section for older cases."""
+    if not (text or "").strip():
+        return ""
+    for section_name, pattern in SECTION_HEADERS:
+        if section_name != "reasoning":
+            continue
+        m = pattern.search(text)
+        if not m:
+            continue
+        start = m.end()
+        rest = text[start:]
+        next_start = len(rest)
+        for other_name, other_pattern in SECTION_HEADERS:
+            if other_name == "reasoning":
+                continue
+            other_m = other_pattern.search(rest)
+            if other_m and other_m.start() < next_start:
+                next_start = other_m.start()
+        excerpt = rest[:next_start].strip()
+        excerpt = re.sub(r"\s+", " ", excerpt)[:max_chars]
+        return excerpt
+
+    # Fallback for older cases: look for "KORKEIN OIKEUS" / "KKO p." sections
+    for fallback_pat in _FALLBACK_REASONING_PATTERNS:
+        m = fallback_pat.search(text)
+        if m:
+            start = m.end()
+            rest = text[start:]
+            # Find end: dissenting section, judges line, or end of text
+            end_m = re.search(
+                r"(?:Eri mieltä olev|Ratkaisuun osallistuneet|Asian ovat ratkaisseet)",
+                rest,
+                re.IGNORECASE,
+            )
+            end_pos = end_m.start() if end_m else len(rest)
+            excerpt = rest[:end_pos].strip()
+            excerpt = re.sub(r"\s+", " ", excerpt)[:max_chars]
+            if len(excerpt) > 40:
+                return excerpt
+
+    return ""
+
+
+def _extract_ruling_instruction_from_text(text: str) -> str:
+    """Extract brief ruling instruction from Judgment/Tuomiolauselma section (first sentences).
+    Falls back to the case abstract (first paragraph after keywords block) for older cases."""
+    if not (text or "").strip():
+        return ""
+    for section_name, pattern in SECTION_HEADERS:
+        if section_name != "judgment":
+            continue
+        m = pattern.search(text)
+        if not m:
+            continue
+        start = m.end()
+        rest = text[start:]
+        next_start = len(rest)
+        for other_name, other_pattern in SECTION_HEADERS:
+            if other_name == "judgment":
+                continue
+            other_m = other_pattern.search(rest)
+            if other_m and other_m.start() < next_start:
+                next_start = other_m.start()
+        block = rest[:next_start].strip()
+        block = re.sub(r"\s+", " ", block)[:MAX_RULING_INSTRUCTION_CHARS]
+        return block
+
+    # Fallback for older KKO cases: extract the abstract paragraph
+    # (text between ECLI/metadata block and first section header like "ASIAN KÄSITTELY" or "KORKEIN OIKEUS")
+    abstract_m = re.search(
+        r"(?:ECLI[^\n]*\n+|Diaarinumero\s*\n[^\n]+\n+|Kopioi ECLI-linkki\s*\n+)"
+        r"((?:[^\n]+\n){1,6})",
+        text,
+    )
+    if abstract_m:
+        candidate = abstract_m.group(1).strip()
+        candidate = re.sub(r"\s+", " ", candidate)
+        if len(candidate) > 30:
+            return candidate[:MAX_RULING_INSTRUCTION_CHARS]
+
+    # Fallback 2: look for the first substantive paragraph after keywords
+    kw_end = KEYWORDS_END.search(text)
+    if kw_end:
+        after_kw = text[kw_end.end() :]
+        paragraphs = re.split(r"\n\s*\n", after_kw, maxsplit=5)
+        for para in paragraphs:
+            clean = re.sub(r"\s+", " ", para).strip()
+            if len(clean) > 40 and not re.match(
+                r"^\d{4}$|^ECLI|^Tapausvuosi|^Antopäivä|^Diaarinumero|^Taltio|^Kieliversiot", clean
+            ):
+                return clean[:MAX_RULING_INSTRUCTION_CHARS]
+
+    return ""
+
+
+def _extract_distinctive_facts_from_text(text: str) -> str:
+    """Extract decisive-facts phrases for jurist (which facts were decisive)."""
+    if not (text or "").strip():
+        return ""
+    collected: list[str] = []
+    total_len = 0
+    for m in PATTERN_DISTINCTIVE_FACTS.finditer(text):
+        phrase = m.group(0).strip()
+        if len(phrase) < 15 or phrase in collected:
+            continue
+        if total_len + len(phrase) + 3 > MAX_DISTINCTIVE_FACTS_CHARS:
+            break
+        collected.append(phrase)
+        total_len += len(phrase) + 3
+    return " | ".join(collected) if collected else ""
+
+
+_PATTERN_FI_SECTION_REF = re.compile(
+    r"(\d+)\s*(?:luvun\s+)?(\d+[a-z]?)\s*§(?::n|:ssä|:ää)?",
+    re.IGNORECASE,
+)
+_PATTERN_FI_LAW_SECTION = re.compile(
+    r"(?:lain|laki)\s+(\d+)\s*§(?::n|:ssä|:ää)?",
+    re.IGNORECASE,
+)
+_PATTERN_NAMED_LAW_SECTION = re.compile(
+    r"((?:työsopimus|vahingonkorvaus|rikos|oikeudenkäymiskaaren|konkurssi|ulosotto|osakeyhtiö|asunto-osakeyhtiö|maa-?kaari|kauppa-?kaari|perintö-?kaari|avioliitto|lapsenhuolto|julkis(?:uus)?|hallintolainkäyttö|hallinto|vero(?:tusmenettelylain)?|kuluttajansuoja|tuotevastuulain|vakuutussopimuslain|maankäyttö|ympäristönsuojelu|jäte|vesilain|metsä|kalastus|rakennus|tieliikenne|potilasvakuutus|liikennevakuutus|tapaturma(?:vakuutus)?|työtapaturma|eläke|työaika|vuosiloma|yhdenvertaisuus|tasa-arvo|henkilötieto|työsuojelu|tilintarkastus|arvopaperimarkkina|luottolaitostoiminta|sijoituspalvelu|maksukyvyttömyys|saneeraus|velkajärjestely)(?:lain|laki)?)(?:\s+(\d+)\s*(?:luvun?\s+)?)?(\d+[a-z]?)\s*§",
+    re.IGNORECASE,
+)
+_PATTERN_TSL = re.compile(
+    r"(?:TSL|työsopimuslain?)\s+(\d+)\s*(?:luvun?\s+)(\d+[a-z]?)\s*§",
+    re.IGNORECASE,
+)
+_PATTERN_OKL = re.compile(
+    r"(?:oikeudenkäymiskaaren|OK)\s+(\d+)\s*(?:luvun?\s+)(\d+[a-z]?)\s*§",
+    re.IGNORECASE,
+)
+_PATTERN_PLAIN_SECTION = re.compile(
+    r"(\d+)\s*§(?::n|:ssä|:ää)?\s+(\d+)\s*(?:mom(?:entti|entin)?|kohd)",
+    re.IGNORECASE,
+)
+_PATTERN_HE_REF = re.compile(
+    r"(?:HE|hallituksen\s+esitys)\s+(\d+/\d+\s*vp)",
+    re.IGNORECASE,
+)
+
+
+def _scan_provision_refs(block: str) -> list[str]:
+    """Run all provision-pattern regexes against *block* and return raw ref strings."""
+    refs: list[str] = []
+    for m in PATTERN_RL.finditer(block):
+        refs.append(f"RL {m.group(1)} luku {m.group(2)} §")
+    for m in PATTERN_LAW_CHAPTER.finditer(block):
+        refs.append(f"Luku {m.group(1)} § {m.group(2)}")
+    for m in _PATTERN_TSL.finditer(block):
+        refs.append(f"TSL {m.group(1)} luku {m.group(2)} §")
+    for m in _PATTERN_OKL.finditer(block):
+        refs.append(f"OK {m.group(1)} luku {m.group(2)} §")
+    for m in _PATTERN_NAMED_LAW_SECTION.finditer(block):
+        chapter = m.group(2) or ""
+        label = f"{m.group(1)} {chapter} luku {m.group(3)} §" if chapter else f"{m.group(1)} {m.group(3)} §"
+        refs.append(label)
+    for m in _PATTERN_FI_SECTION_REF.finditer(block):
+        refs.append(f"{m.group(1)} luku {m.group(2)} §")
+    for m in _PATTERN_FI_LAW_SECTION.finditer(block):
+        refs.append(f"lain {m.group(1)} §")
+    for m in _PATTERN_HE_REF.finditer(block):
+        refs.append(f"HE {m.group(1)}")
+    return refs
+
+
+def _extract_applied_provisions_from_text(text: str) -> str:
+    """Extract statute/provision refs from reasoning section (what provisions KKO applied)."""
+    if not (text or "").strip():
+        return ""
+    reasoning_block = ""
+    for section_name, pattern in SECTION_HEADERS:
+        if section_name != "reasoning":
+            continue
+        m = pattern.search(text)
+        if not m:
+            continue
+        start = m.end()
+        rest = text[start:]
+        next_start = len(rest)
+        for other_name, other_pattern in SECTION_HEADERS:
+            if other_name == "reasoning":
+                continue
+            other_m = other_pattern.search(rest)
+            if other_m and other_m.start() < next_start:
+                next_start = other_m.start()
+        reasoning_block = rest[:next_start]
+        break
+
+    if not reasoning_block:
+        kko_m = re.search(
+            r"^(?:KORKEIN\s+OIKEUS|Korkeimman\s+oikeuden\s+ratkaisu)\s*$", text, re.IGNORECASE | re.MULTILINE
+        )
+        reasoning_block = text[kko_m.end() :] if kko_m else text
+
+    refs = list(dict.fromkeys(_scan_provision_refs(reasoning_block)))[:30]
+    return ", ".join(refs)[:MAX_APPLIED_PROVISIONS_CHARS]
+
+
 def _extract_metadata_block(text: str, case_id: str) -> CaseMetadata:
     header = text[:4000]
 
@@ -294,6 +706,20 @@ def _extract_metadata_block(text: str, case_id: str) -> CaseMetadata:
     elif re.search(r"remanded|palautetaan", text, re.IGNORECASE):
         decision_outcome = "case_remanded"
 
+    # Check for dissenting section
+    has_dissenting = bool(
+        re.search(
+            r"Statement of (?:a )?dissenting member|Eri mieltä olevan jäsenen lausunto|Eri mieltä olevien jäsenten lausunnot",
+            text,
+            re.IGNORECASE | re.MULTILINE,
+        )
+    )
+
+    # Prefer explicit vote in text (e.g. "Äänestys 6-1", "4-2-1") over inferred from judges list
+    judges_total, judges_dissenting, vote_strength = _extract_vote_from_text(text)
+    if not vote_strength:
+        judges_total, judges_dissenting, vote_strength = _calculate_vote_strength(judges, has_dissenting)
+
     # Year: from header "Case year" or from case_id (e.g. KKO:1959:II-110) so we never emit invalid "-01-01"
     effective_year = (
         case_year.strip()
@@ -312,6 +738,9 @@ def _extract_metadata_block(text: str, case_id: str) -> CaseMetadata:
         rapporteur=rapporteur or "Unknown",
         keywords=keywords,
         languages=["Finnish", "Swedish"],
+        judges_total=judges_total,
+        judges_dissenting=judges_dissenting,
+        vote_strength=vote_strength,
     )
 
 

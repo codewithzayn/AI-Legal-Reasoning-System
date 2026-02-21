@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Unit tests for scripts/case_law/core/shared.py: JSON load/save round-trip,
 write_local_enabled helper, and SUBTYPE_DIR_MAP constants.

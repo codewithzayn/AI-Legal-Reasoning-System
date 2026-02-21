@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Hybrid precedent extractor: regex first, LLM fallback (model from config.EXTRACTION_MODEL, default gpt-4o).
 Ensures no empty sections and no missing chunks; returns CaseExtractionResult.

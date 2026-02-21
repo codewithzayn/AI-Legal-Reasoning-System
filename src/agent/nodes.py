@@ -26,7 +26,7 @@ logger = setup_logger(__name__)
 
 # Reusable singletons to prevent excessive background task creation,
 # avoid re-creating clients/connections on every search, and reduce latency.
-_llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+_llm_mini = ChatOpenAI(model=config.OPENAI_SUPPORT_MODEL, temperature=0, request_timeout=config.LLM_REQUEST_TIMEOUT)
 _generator = LLMGenerator()  # model from config.OPENAI_CHAT_MODEL (e.g. gpt-4o for deeper legal analysis)
 _retrieval = HybridRetrieval()  # singleton: reuses Supabase client, embedder, reranker across searches
 
@@ -187,6 +187,11 @@ async def analyze_intent(state: AgentState) -> AgentState:
     state["stage"] = "analyze"
     query = state["query"]
     messages = state.get("messages") or []
+
+    if len(query) > config.MAX_QUERY_LENGTH:
+        state["response"] = t("query_too_long", state.get("response_lang") or "fi", max=config.MAX_QUERY_LENGTH)
+        state["intent"] = "error"
+        return state
 
     if not state.get("original_query"):
         state["original_query"] = query

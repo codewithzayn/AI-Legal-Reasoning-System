@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL
-#
 # Runs on every push to main (e.g. after a PR merge).
 # Streamlit Cloud deploys from main automatically; this workflow can run
 # tests or checks. Your app: https://ai-legal-reasoning-system.streamlit.app/

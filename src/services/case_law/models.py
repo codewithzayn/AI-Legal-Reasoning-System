@@ -1,13 +1,4 @@
 """
-© 2026 Crest Advisory Group LLC. All rights reserved.
-
-PROPRIETARY AND CONFIDENTIAL
-
-This file is part of the AI Legal Reasoning System.
-Unauthorized copying, distribution, or use is strictly prohibited.
-"""
-
-"""
 Case Law Domain Models
 
 Pure data structures with no external dependencies. Extracted from scraper.py
@@ -107,6 +98,17 @@ class CaseLawDocument:
     # Content sections
     abstract: str = ""
     judges: str = ""
+    judges_total: int = 0
+    judges_dissenting: int = 0
+    vote_strength: str = ""
+
+    # Depth analysis (exceptions, reasoning excerpt, trend, decisive facts, ruling instruction, provisions)
+    exceptions: str = ""
+    weighted_factors: str = ""
+    trend_direction: str = ""
+    distinctive_facts: str = ""
+    ruling_instruction: str = ""
+    applied_provisions: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

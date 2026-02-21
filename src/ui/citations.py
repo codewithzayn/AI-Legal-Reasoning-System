@@ -5,12 +5,22 @@ Parses the SOURCES/LAHTEET/KALLOR block from LLM responses and renders
 them as styled HTML badge-links inline and as source cards below the answer.
 """
 
+import base64
+import html
 import re
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 from src.config.translations import t
+
+
+def _safe_url(url: str) -> str:
+    """Validate URL scheme — allow only http/https to prevent javascript: XSS."""
+    if url and url.startswith(("http://", "https://")):
+        return html.escape(url, quote=True)
+    return ""
+
 
 # Regex to split response text from the sources block.
 # Matches SOURCES:, LAHTEET:, KALLOR:, KILDER: (with optional heading markup)
@@ -68,27 +78,34 @@ def parse_response_and_sources(response: str) -> tuple[str, list[dict[str, str]]
 
 
 def _linkify_inline_citations(text: str, url_map: dict[str, str], theme: dict | None = None) -> str:
-    """Replace [KKO:2024:76] patterns in answer text with styled HTML badge-links."""
+    """Replace [KKO:2024:76] patterns in answer text with styled HTML badge-links.
+
+    Text is HTML-escaped first to prevent XSS from LLM output, then
+    citation patterns (which survive escaping) are replaced with safe
+    badge HTML.
+    """
+    escaped_text = html.escape(text)
     if not url_map:
-        return text
+        return escaped_text
 
     accent = (theme or {}).get("accent", "#2563eb")
 
     def _replace_cite(m: re.Match) -> str:
-        cite = m.group(0)  # e.g. [KKO:2024:76]
-        case_id = cite[1:-1]  # strip brackets
-        url = url_map.get(case_id, "")
+        cite = m.group(0)
+        case_id = cite[1:-1]
+        safe_case_id = html.escape(case_id)
+        safe_url = _safe_url(url_map.get(case_id, ""))
         badge_style = (
             f"display:inline-block;background:{accent}18;color:{accent};"
             f"border:1px solid {accent}40;border-radius:4px;"
             f"padding:1px 6px;font-size:0.82em;font-weight:600;"
             f"text-decoration:none;white-space:nowrap;"
         )
-        if url and url.startswith("http"):
-            return f'<a href="{url}" target="_blank" style="{badge_style}">{case_id}</a>'
-        return f'<span style="{badge_style}">{case_id}</span>'
+        if safe_url:
+            return f'<a href="{safe_url}" target="_blank" style="{badge_style}">{safe_case_id}</a>'
+        return f'<span style="{badge_style}">{safe_case_id}</span>'
 
-    return _INLINE_CITE_RE.sub(_replace_cite, text)
+    return _INLINE_CITE_RE.sub(_replace_cite, escaped_text)
 
 
 def _render_source_cards(
@@ -138,23 +155,24 @@ def _render_source_cards(
         if isinstance(keywords, list):
             keywords = ", ".join(keywords[:3])
 
-        # Build card content
+        safe_case_id = html.escape(case_id)
+        safe_url = _safe_url(url)
         title_html = (
-            f'<a href="{url}" target="_blank" style="color:{accent};font-weight:600;'
-            f'text-decoration:none;font-size:0.88rem;">{case_id}</a>'
-            if url and url.startswith("http")
-            else f'<span style="color:{accent};font-weight:600;font-size:0.88rem;">{case_id}</span>'
+            f'<a href="{safe_url}" target="_blank" style="color:{accent};font-weight:600;'
+            f'text-decoration:none;font-size:0.88rem;">{safe_case_id}</a>'
+            if safe_url
+            else f'<span style="color:{accent};font-weight:600;font-size:0.88rem;">{safe_case_id}</span>'
         )
 
         meta_parts = []
         if court:
-            meta_parts.append(court.upper() if len(court) <= 4 else court)
+            meta_parts.append(html.escape(court.upper() if len(court) <= 4 else court))
         if year:
-            meta_parts.append(str(year))
+            meta_parts.append(html.escape(str(year)))
         if keywords:
-            meta_parts.append(str(keywords))
+            meta_parts.append(html.escape(str(keywords)))
         meta_html = (
-            f'<div style="font-size:0.78rem;color:#64748b;margin-top:2px;">{" · ".join(meta_parts)}</div>'
+            f'<div style="font-size:0.78rem;color:#64748b;margin-top:2px;">{" &middot; ".join(meta_parts)}</div>'
             if meta_parts
             else ""
         )
@@ -225,7 +243,9 @@ def _render_confidence_badge(message_idx: int, lang: str, theme: dict | None = N
         f"{label} ({score}/5)</span>"
     )
     if reason:
-        badge_html += f'<span style="font-size:0.78rem;color:#64748b;margin-left:4px;">— {reason}</span>'
+        badge_html += (
+            f'<span style="font-size:0.78rem;color:#64748b;margin-left:4px;">&mdash; {html.escape(reason)}</span>'
+        )
     badge_html += "</div>"
 
     st.markdown(badge_html, unsafe_allow_html=True)
@@ -268,8 +288,8 @@ def render_assistant_message(
         linkified = _linkify_inline_citations(answer_text, url_map, theme)
         st.markdown(linkified, unsafe_allow_html=True)
 
-    # Copy button
-    _render_copy_button(answer_text, lang, message_idx)
+    # Copy button: use full response so user gets the whole answer (including sources block)
+    _render_copy_button(response, lang, message_idx)
 
     # Confidence badge
     _render_confidence_badge(message_idx, lang, theme)
@@ -280,11 +300,14 @@ def render_assistant_message(
 
 
 def _render_copy_button(text: str, lang: str, message_idx: int) -> None:
-    """Render a small copy-to-clipboard button using JS."""
-    # Escape text for JS string
-    escaped = text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
-    copy_label = t("copy_response", lang)
-    copied_label = t("copied", lang)
+    """Render a small copy-to-clipboard button.
+
+    The payload is base64-encoded and decoded in JS to prevent
+    </script> breakout attacks from LLM output.
+    """
+    copy_label = html.escape(t("copy_response", lang))
+    copied_label = html.escape(t("copied", lang))
+    b64_payload = base64.b64encode(text.encode("utf-8")).decode("ascii")
 
     components.html(
         f"""
@@ -297,17 +320,25 @@ def _render_copy_button(text: str, lang: str, message_idx: int) -> None:
                 \U0001f4cb {copy_label}
             </button>
         </div>
+        <div id="copy-data-{message_idx}" data-b64="{b64_payload}" style="display:none;"></div>
         <script>
-        function copyText_{message_idx}() {{
-            var text = `{escaped}`;
-            navigator.clipboard.writeText(text).then(function() {{
-                var btn = document.getElementById('copy-btn-{message_idx}');
-                btn.textContent = '\u2705 {copied_label}';
-                setTimeout(function() {{
-                    btn.innerHTML = '\U0001f4cb {copy_label}';
-                }}, 2000);
-            }});
-        }}
+        (function() {{
+            var b64 = document.getElementById('copy-data-{message_idx}').dataset.b64;
+            var payload = decodeURIComponent(escape(atob(b64)));
+            window.copyText_{message_idx} = function() {{
+                navigator.clipboard.writeText(payload).then(function() {{
+                    var btn = document.getElementById('copy-btn-{message_idx}');
+                    if (btn) {{
+                        btn.textContent = '\u2705 {copied_label}';
+                        setTimeout(function() {{
+                            btn.innerHTML = '\U0001f4cb {copy_label}';
+                        }}, 2000);
+                    }}
+                }}).catch(function(err) {{
+                    console.error('Copy failed', err);
+                }});
+            }};
+        }})();
         </script>
         """,
         height=36,

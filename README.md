@@ -33,7 +33,7 @@ Finnish Response with Citations
 
 **Document Processing**
 - **Finlex (API):** Documented Open Data API -- statutes, XML (Akoma Ntoso), section-based chunking.
-- **Case law (no API):** Court websites -- scraping (Playwright) + regex/LLM extraction for precedents. See [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+- **Case law (no API):** Court websites -- scraping (Playwright) + regex/LLM extraction for precedents.
 - **PDF/Drive backup:** Convert case law to PDF and upload to Google Drive for archival.
 
 **Search & Retrieval**
@@ -120,7 +120,7 @@ make test
 make help
 ```
 
-See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for project structure and conventions.
+See `docs/` for more documentation.
 
 ## Project Structure
 

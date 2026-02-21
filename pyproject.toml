@@ -38,7 +38,7 @@ ignore = [
     "RUF012",  # mutable class attributes (common in dataclasses)
     "RUF013",  # implicit Optional (common pattern in this codebase)
     "SIM113",  # enumerate-for-loop (false positive when loop uses range with step)
-    "T201",    # print() allowed in CLI/scripts (use logger for services)
+
     "PLR2004", # magic value comparison (too strict for this codebase)
     "PLR0913", # too many function arguments (relaxed: max set below)
     "RET504",  # unnecessary assignment before return (readability preference)

@@ -1,13 +1,4 @@
 """
-© 2026 Crest Advisory Group LLC. All rights reserved.
-
-PROPRIETARY AND CONFIDENTIAL
-
-This file is part of the AI Legal Reasoning System.
-Unauthorized copying, distribution, or use is strictly prohibited.
-"""
-
-"""
 Input language detection for multilingual routing.
 
 Maps langdetect ISO 639-1 codes to our supported response languages (en, fi, sv).

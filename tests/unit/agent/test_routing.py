@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Unit tests for agent routing logic: route_intent, route_search_result,
 and the _is_obvious_legal_query fast-path helper.

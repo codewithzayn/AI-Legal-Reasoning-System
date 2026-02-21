@@ -1,13 +1,4 @@
 """
-© 2026 Crest Advisory Group LLC. All rights reserved.
-
-PROPRIETARY AND CONFIDENTIAL
-
-This file is part of the AI Legal Reasoning System.
-Unauthorized copying, distribution, or use is strictly prohibited.
-"""
-
-"""
 Multilingual legal glossary for query expansion.
 
 Maps legal terms across Finnish, English, and Swedish to improve

@@ -11,8 +11,6 @@ os.environ.setdefault("LOG_FORMAT", "simple")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 warnings.filterwarnings("ignore", message=".*(PyTorch|TensorFlow|Flax).*")
 
-import re
-
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -23,6 +21,7 @@ from src.agent.stream import stream_query_response
 from src.config.prompt_templates import get_templates_for_lang, get_workflow_categories
 from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR, config, validate_env_for_app
 from src.config.translations import LANGUAGE_OPTIONS, t
+from src.ui.auth import get_current_user_email, get_current_user_id, is_authenticated, render_auth_page, sign_out
 from src.ui.chat_pdf_export import generate_chat_pdf
 from src.ui.citations import render_assistant_message
 from src.ui.conversation_store import delete_conversation, list_conversations, load_conversation, save_conversation
@@ -96,28 +95,17 @@ def _get_lang() -> str:
     return st.session_state.get("lang", "en")
 
 
-def _markdown_to_safe_html(text: str) -> str:
-    """Convert minimal markdown (links, bold, newlines) to HTML for fixed-size container. Sanitizes hrefs to http/https only."""
-    if not text or not text.strip():
-        return ""
-    s = text.strip()
-    # Escaping for HTML
-    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def _build_pdf_filename(query: str, prefix: str = "lexai_analysis") -> str:
+    """Build a descriptive PDF filename from the user's query."""
+    import re
+    from datetime import datetime as _dt
 
-    # Links: [text](url) - only allow http/https
-    def _link_repl(m):
-        label, url = m.group(1), m.group(2)
-        if url.startswith(("http://", "https://")):
-            return f'<a href="{url}">{label}</a>'
-        return label
-
-    s = re.sub(r"\[([^\]]*)\]\((https?://[^\)]+)\)", _link_repl, s)
-    # Bold: **text**
-    s = re.sub(r"\*\*([^\*]+)\*\*", r"<strong>\1</strong>", s)
-    s = re.sub(r"\*([^\*]+)\*", r"<em>\1</em>", s)
-    # Paragraphs / newlines
-    lines = [f"<p>{ln}</p>" if ln.strip() else "<br/>" for ln in s.split("\n")]
-    return "\n".join(lines)
+    slug = re.sub(r"[^\w\s-]", "", query[:60]).strip().replace(" ", "_")
+    slug = re.sub(r"_+", "_", slug).strip("_").lower()
+    date_str = _dt.now().strftime("%Y%m%d")
+    if slug:
+        return f"{prefix}_{slug}_{date_str}.pdf"
+    return f"{prefix}_{date_str}.pdf"
 
 
 def _get_theme() -> dict:
@@ -152,6 +140,66 @@ def _inject_scroll_to_bottom() -> None:
         """,
         height=0,
         scrolling=False,
+    )
+
+
+def _inject_toggle_fix() -> None:
+    """Force toggle visibility via JS with !important inline styles to beat CSS."""
+    is_dark = st.session_state.get("dark_mode", False)
+    track_off = "#475569" if is_dark else "#b0bec5"
+    track_on = "#60a5fa" if is_dark else "#2563eb"
+    thumb_color = "#e2e8f0" if is_dark else "#ffffff"
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            var doc = window.parent.document;
+            function s(el, prop, val) {{ el.style.setProperty(prop, val, 'important'); }}
+            function styleToggle(container) {{
+                var el = container.querySelector('[role="checkbox"]')
+                      || container.querySelector('label > div');
+                if (!el) return;
+                var on = el.getAttribute('aria-checked') === 'true';
+                s(el, 'background', on ? '{track_on}' : '{track_off}');
+                s(el, 'background-color', on ? '{track_on}' : '{track_off}');
+                s(el, 'border', 'none');
+                s(el, 'border-radius', '999px');
+                s(el, 'min-width', '46px');
+                s(el, 'width', '46px');
+                s(el, 'height', '26px');
+                s(el, 'position', 'relative');
+                s(el, 'cursor', 'pointer');
+                s(el, 'display', 'flex');
+                s(el, 'align-items', 'center');
+                s(el, 'padding', '3px');
+                s(el, 'box-sizing', 'border-box');
+                var ch = el.children;
+                for (var i = 0; i < ch.length; i++) {{
+                    s(ch[i], 'background', '{thumb_color}');
+                    s(ch[i], 'background-color', '{thumb_color}');
+                    s(ch[i], 'border-radius', '50%');
+                    s(ch[i], 'width', '20px');
+                    s(ch[i], 'height', '20px');
+                    s(ch[i], 'min-width', '20px');
+                    s(ch[i], 'min-height', '20px');
+                    s(ch[i], 'box-shadow', '0 1px 4px rgba(0,0,0,0.4)');
+                    s(ch[i], 'flex-shrink', '0');
+                    s(ch[i], 'margin-left', on ? 'auto' : '0');
+                }}
+            }}
+            function fixAll() {{
+                doc.querySelectorAll('[data-testid="stToggle"]').forEach(styleToggle);
+            }}
+            fixAll();
+            setTimeout(fixAll, 100);
+            setTimeout(fixAll, 500);
+            new MutationObserver(fixAll).observe(doc.body, {{
+                childList: true, subtree: true, attributes: true
+            }});
+        }})();
+        </script>
+        """,
+        height=0,
     )
 
 
@@ -200,21 +248,196 @@ def _inject_custom_css() -> None:
     dark_overrides = ""
     if is_dark:
         dark_overrides = f"""
-            /* ── Dark mode global overrides ──────────────────── */
-            .stApp, .main, [data-testid="stAppViewContainer"] {{
+            /* ── D1: Root app background ── */
+            .stApp {{
                 background-color: {theme["bg"]} !important;
                 color: {theme["text"]} !important;
             }}
-            .stMarkdown, .stMarkdown p, .stMarkdown li, .stMarkdown h1,
-            .stMarkdown h2, .stMarkdown h3, .stCaption, .stText {{
+
+            /* ── D2: Layout wrappers → dark bg ── */
+            .main, .main > div, .main > div > div,
+            [data-testid="stAppViewContainer"],
+            [data-testid="stAppViewContainer"] > div,
+            [data-testid="stAppViewContainer"] > div > div,
+            [data-testid="stAppViewContainer"] > div > div > div,
+            .block-container, .block-container > div,
+            .block-container > div > div, .block-container > div > div > div,
+            [data-testid="stVerticalBlock"],
+            [data-testid="stVerticalBlock"] > div,
+            [data-testid="stVerticalBlock"] > div > div,
+            [data-testid="stHorizontalBlock"],
+            [data-testid="stHorizontalBlock"] > div,
+            [data-testid="stHorizontalBlock"] > div > div,
+            div[data-testid="column"],
+            div[data-testid="column"] > div,
+            div[data-testid="column"] > div > div,
+            .element-container,
+            .element-container > div,
+            .element-container > div > div,
+            .stButton, .stButton > div,
+            header[data-testid="stHeader"] {{
+                background-color: {theme["bg"]} !important;
+                background: {theme["bg"]} !important;
+            }}
+            /* ── D2b: Bottom input bar wrappers ── */
+            [data-testid="stBottom"],
+            [data-testid="stBottom"] > div,
+            [data-testid="stBottom"] > div > div,
+            [data-testid="stBottom"] > div > div > div,
+            [data-testid="stChatInput"],
+            [data-testid="stChatInput"] > div {{
+                background: {theme["bg"]} !important;
+                background-color: {theme["bg"]} !important;
+            }}
+
+            /* ── D3: ALL text → light color ── */
+            .stApp p, .stApp li, .stApp h1, .stApp h2, .stApp h3, .stApp h4,
+            .stApp label, .stApp a,
+            .stMarkdown, .stMarkdown p, .stMarkdown span,
+            .stCaption, .stText,
+            [data-testid="stWidgetLabel"],
+            [data-testid="stWidgetLabel"] p {{
                 color: {theme["text"]} !important;
+            }}
+
+            /* ── D4: Sidebar ── */
+            [data-testid="stSidebar"] {{
+                background: {theme["sidebar_bg"]} !important;
+            }}
+            [data-testid="stSidebar"] > div,
+            [data-testid="stSidebar"] > div > div,
+            [data-testid="stSidebar"] > div > div > div,
+            [data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+            [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div,
+            [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div > div,
+            [data-testid="stSidebar"] .element-container,
+            [data-testid="stSidebar"] .element-container > div,
+            [data-testid="stSidebar"] .element-container > div > div,
+            [data-testid="stSidebar"] .stButton,
+            [data-testid="stSidebar"] .stButton > div,
+            [data-testid="stSidebar"] .stDownloadButton,
+            [data-testid="stSidebar"] .stDownloadButton > div {{
+                background: transparent !important;
+                background-color: transparent !important;
+            }}
+
+            /* ── D5: Elements with own background ── */
+            [data-testid="stChatMessage"] {{
+                background: {theme["surface"]} !important;
+            }}
+            [data-testid="stChatMessage"] div,
+            [data-testid="stChatMessage"] .stMarkdown,
+            [data-testid="stChatMessage"] .stMarkdown div,
+            [data-testid="stChatMessage"] .element-container,
+            [data-testid="stChatMessage"] .element-container div,
+            [data-testid="stChatMessage"] [data-testid="stVerticalBlock"],
+            [data-testid="stChatMessage"] [data-testid="stVerticalBlock"] div,
+            [data-testid="stChatMessage"] [data-testid="stHorizontalBlock"],
+            [data-testid="stChatMessage"] [data-testid="stHorizontalBlock"] div,
+            [data-testid="stChatMessage"] div[data-testid="column"],
+            [data-testid="stChatMessage"] div[data-testid="column"] div {{
+                background: transparent !important;
+                background-color: transparent !important;
+            }}
+            /* Download buttons inside chat */
+            [data-testid="stChatMessage"] .stDownloadButton,
+            [data-testid="stChatMessage"] .stDownloadButton div,
+            [data-testid="stChatMessage"] .stButton,
+            [data-testid="stChatMessage"] .stButton div {{
+                background: transparent !important;
+                background-color: transparent !important;
+            }}
+            .stDownloadButton > button {{
+                background: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            .welcome-card {{
+                background: {theme["welcome_bg"]} !important;
+            }}
+            .main-header {{
+                background: linear-gradient(135deg, #1e3a5f 0%, #2d4a73 50%, #3d5a80 100%) !important;
             }}
             [data-testid="stExpander"] {{
                 background: {theme["surface"]} !important;
                 border-color: {theme["border"]} !important;
             }}
-            [data-testid="stExpander"] summary, [data-testid="stExpander"] p {{
+            [data-testid="stBottom"] {{
+                background: linear-gradient(to top, {theme["bg"]} 0%, {theme["surface"]} 100%) !important;
+            }}
+
+            /* ── D6: Buttons ── */
+            .stButton > button[kind="secondary"] {{
+                background: {theme["surface"]} !important;
+                background-color: {theme["surface"]} !important;
                 color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            .stButton > button[kind="primary"] {{
+                background: linear-gradient(135deg, {theme["accent"]} 0%, {theme["primary"]} 100%) !important;
+            }}
+
+            /* ── D7: Inputs ── */
+            [data-testid="stChatInput"] textarea {{
+                background: {theme["input_bg"]} !important;
+                background-color: {theme["input_bg"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            [data-testid="stTextArea"] textarea, textarea {{
+                background: {theme["input_bg"]} !important;
+                background-color: {theme["input_bg"]} !important;
+                color: {theme["text"]} !important;
+                -webkit-text-fill-color: {theme["text"]} !important;
+            }}
+
+            /* ── D8: Selectbox / Dropdowns — fully styled ── */
+            [data-testid="stSelectbox"] {{
+                background: transparent !important;
+            }}
+            [data-testid="stSelectbox"] > div,
+            [data-testid="stSelectbox"] > div > div,
+            [data-testid="stSelectbox"] div[data-baseweb],
+            [data-testid="stSelectbox"] div[data-baseweb] > div {{
+                background: {theme["surface"]} !important;
+                background-color: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            [data-testid="stSelectbox"] input {{
+                color: {theme["text"]} !important;
+                -webkit-text-fill-color: {theme["text"]} !important;
+            }}
+            [data-testid="stSelectbox"] svg {{
+                fill: {theme["text"]} !important;
+            }}
+            [data-testid="stSelectbox"] span {{
+                color: {theme["text"]} !important;
+            }}
+            /* Dropdown popup (renders as portal outside widget tree) */
+            [role="listbox"],
+            [role="listbox"] > div,
+            [data-baseweb="popover"],
+            [data-baseweb="popover"] > div,
+            [data-baseweb="popover"] > div > div,
+            [data-baseweb="menu"],
+            [data-baseweb="menu"] > div,
+            ul[role="listbox"],
+            ul[role="listbox"] > li {{
+                background-color: {theme["surface"]} !important;
+                background: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            [role="option"] {{
+                background-color: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            [role="option"]:hover, [role="option"][aria-selected="true"] {{
+                background-color: {theme["accent_soft"]} !important;
+            }}
+
+            /* ── D9: Send button in chat input ── */
+            [data-testid="stChatInput"] button {{
+                background: linear-gradient(135deg, {theme["accent"]} 0%, {theme["primary"]} 100%) !important;
             }}
         """
 
@@ -230,7 +453,7 @@ def _inject_custom_css() -> None:
                 padding: 1.25rem 1rem 6rem 1rem;
             }}
 
-            /* ── Chat bubbles: consistent width, height fits content ─── */
+            /* ── Chat bubbles ────────────────────────────────── */
             [data-testid="stChatMessage"] {{
                 padding: 0.875rem 1rem;
                 border-radius: 14px;
@@ -239,9 +462,7 @@ def _inject_custom_css() -> None:
                 border-left: 4px solid {theme["accent"]};
                 background: {theme["surface"]} !important;
                 transition: box-shadow 0.2s ease;
-                min-width: min(100%, 680px);
-                width: 100%;
-                box-sizing: border-box;
+                min-height: 8rem;
             }}
             [data-testid="stChatMessage"]:hover {{
                 box-shadow: 0 2px 12px {theme["accent_soft"]};
@@ -251,53 +472,6 @@ def _inject_custom_css() -> None:
                 line-height: 1.65;
                 color: {theme["text"]};
             }}
-            /* Assistant message content: markdown links and structure */
-            [data-testid="stChatMessage"] a {{
-                color: {theme["accent"]};
-                text-decoration: none;
-                border-bottom: 1px solid transparent;
-            }}
-            [data-testid="stChatMessage"] a:hover {{
-                border-bottom-color: {theme["accent"]};
-            }}
-            [data-testid="stChatMessage"] ul, [data-testid="stChatMessage"] ol {{
-                margin: 0.5rem 0 0.75rem 1.25rem;
-                padding-left: 1rem;
-            }}
-            [data-testid="stChatMessage"] li {{
-                margin-bottom: 0.25rem;
-            }}
-            /* Content area: width full, height fits content */
-            .assistant-content-fixed {{
-                min-width: 100%;
-                width: 100%;
-                display: block;
-                padding: 0.25rem 0;
-                box-sizing: border-box;
-            }}
-            /* Thinking/analyzing phase: compact, height fits text */
-            .assistant-thinking {{
-                color: #64748b;
-                font-size: 0.9375rem;
-                padding: 0.25rem 0;
-            }}
-            /* Rendered response (markdown-as-HTML) inside fixed container */
-            .assistant-response {{
-                font-size: 0.9375rem;
-                line-height: 1.65;
-            }}
-            .assistant-response p {{ margin: 0.5rem 0 0.75rem 0; }}
-            .assistant-response a {{
-                color: {theme["accent"]};
-                text-decoration: none;
-                border-bottom: 1px solid transparent;
-            }}
-            .assistant-response a:hover {{ border-bottom-color: {theme["accent"]}; }}
-            .assistant-response ul, .assistant-response ol {{
-                margin: 0.5rem 0 0.75rem 1.25rem;
-                padding-left: 1rem;
-            }}
-            .assistant-response li {{ margin-bottom: 0.25rem; }}
 
             /* ── Sticky bottom input bar ─────────────────────── */
             [data-testid="stBottom"] {{
@@ -412,6 +586,23 @@ def _inject_custom_css() -> None:
                 font-size: 0.875rem;
                 line-height: 1.45;
             }}
+            .main-header .header-user {{
+                margin-left: auto;
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                flex-shrink: 0;
+            }}
+            .header-user-email {{
+                color: rgba(255,255,255,0.85);
+                font-size: 0.8rem;
+                font-weight: 500;
+                background: rgba(255,255,255,0.12);
+                padding: 0.3rem 0.75rem;
+                border-radius: 20px;
+                white-space: nowrap;
+                letter-spacing: 0.01em;
+            }}
 
             /* ── Welcome card ────────────────────────────────── */
             .welcome-card {{
@@ -448,10 +639,29 @@ def _inject_custom_css() -> None:
             [data-testid="stSidebar"] [data-testid="stSelectbox"] {{
                 border-radius: 8px;
             }}
-            /* ── Prompt guide expander ───────────────────────── */
-            .prompt-guide {{
-                color: {theme["text"]};
-                font-size: 0.875rem;
+
+            /* ── Dropdown popup — always readable in both modes ── */
+            [role="listbox"],
+            [role="listbox"] > div,
+            [data-baseweb="popover"],
+            [data-baseweb="popover"] > div,
+            [data-baseweb="popover"] > div > div,
+            [data-baseweb="menu"],
+            [data-baseweb="menu"] > div,
+            ul[role="listbox"],
+            ul[role="listbox"] > li {{
+                background-color: {theme["surface"]} !important;
+                background: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            [role="option"] {{
+                background-color: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            [role="option"]:hover,
+            [role="option"][aria-selected="true"] {{
+                background-color: {theme["accent_soft"]} !important;
+                color: {theme["text"]} !important;
             }}
 
             /* ── Typing indicator animation ──────────────────── */
@@ -479,6 +689,11 @@ def _inject_custom_css() -> None:
                     padding: 1rem 1.125rem;
                     border-radius: 12px;
                     margin-bottom: 0.625rem;
+                    flex-wrap: wrap;
+                }}
+                .header-user-email {{
+                    font-size: 0.7rem;
+                    padding: 0.2rem 0.5rem;
                 }}
                 .main-header .header-text h1 {{ font-size: 1.125rem; }}
                 .main-header .header-text .subtitle {{ font-size: 0.8125rem; }}
@@ -500,7 +715,7 @@ def _inject_custom_css() -> None:
                     padding: 0.75rem 0.875rem;
                     border-radius: 12px;
                 }}
-                [data-testid="stChatMessage"] p, .assistant-response {{ font-size: 0.875rem; }}
+                [data-testid="stChatMessage"] p {{ font-size: 0.875rem; }}
                 .welcome-card {{ padding: 1.125rem 1rem; border-radius: 12px; }}
             }}
 
@@ -512,6 +727,49 @@ def _inject_custom_css() -> None:
             /* ── Desktop (>= 1024px) ────────────────────────── */
             @media (min-width: 1024px) {{
                 .block-container {{ max-width: min(1100px, 90vw); }}
+            }}
+
+            /* ── Toggle switch — visible thumb in both modes ──── */
+            [data-testid="stToggle"] label > div,
+            [data-testid="stToggle"] [role="checkbox"],
+            [data-testid="stToggle"] button {{
+                background-color: {"#b0bec5" if not is_dark else "#475569"} !important;
+                border: none !important;
+                border-radius: 999px !important;
+                min-width: 46px !important;
+                width: 46px !important;
+                height: 26px !important;
+                position: relative !important;
+                cursor: pointer !important;
+                transition: background-color 0.2s ease !important;
+            }}
+            [data-testid="stToggle"] [aria-checked="true"],
+            [data-testid="stToggle"] label > div[aria-checked="true"],
+            [data-testid="stToggle"] button[aria-checked="true"] {{
+                background-color: {theme["accent"]} !important;
+            }}
+            [data-testid="stToggle"] [role="checkbox"] > div,
+            [data-testid="stToggle"] [role="checkbox"] > div > div,
+            [data-testid="stToggle"] [role="checkbox"] span,
+            [data-testid="stToggle"] label > div > div,
+            [data-testid="stToggle"] label > div > div > div,
+            [data-testid="stToggle"] label > div > span,
+            [data-testid="stToggle"] button > div,
+            [data-testid="stToggle"] button > div > div,
+            [data-testid="stToggle"] button > span {{
+                background: {"#e2e8f0" if is_dark else "#ffffff"} !important;
+                background-color: {"#e2e8f0" if is_dark else "#ffffff"} !important;
+                border-radius: 50% !important;
+                width: 20px !important;
+                height: 20px !important;
+                min-width: 20px !important;
+                min-height: 20px !important;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.35) !important;
+            }}
+
+            /* ── Sidebar caption readability ─────────────────── */
+            [data-testid="stSidebar"] .stCaption {{
+                opacity: 0.85 !important;
             }}
 
             /* ── Hide Streamlit branding ─────────────────────── */
@@ -594,19 +852,8 @@ def _render_action_buttons(response: str, original_query: str, lang: str, messag
 
 
 def _is_year_clarification_message(msg: str, lang: str) -> bool:
-    """True if msg is (or contains) the year clarification question (any language).
-
-    Stored messages may include stream status prefixes like '🔍 Searching...\n\n'
-    before the clarification text. We strip those before checking.
-    """
+    """True if msg is (or contains) the year clarification question (any language)."""
     content = (msg or "").strip()
-    # Remove leading status lines (emoji + status word + ellipsis)
-    content = re.sub(
-        r"^[\U0001F300-\U0001FFFF\U00002702-\U000027B0\U0001F004\U0001F0CF\u2600-\u26FF]+\s.*?\n+",
-        "",
-        content,
-        flags=re.DOTALL,
-    ).strip()
     return any(t("year_clarification", code).strip() in content for code in ("en", "fi", "sv"))
 
 
@@ -668,7 +915,7 @@ def _process_prompt(prompt: str) -> None:
     with st.chat_message("user", avatar=USER_AVATAR):
         st.write(prompt)
 
-    # Typing indicator (LexAI)
+    # Typing indicator
     typing_placeholder = st.empty()
     typing_placeholder.markdown(
         f'<div style="padding: 0.5rem;"><span class="typing-dot"></span>'
@@ -742,7 +989,7 @@ def _handle_oauth_callback() -> None:
         return
 
     provider = state  # state param carries the provider name
-    redirect_uri = st.session_state.get("oauth_redirect_uri", "http://localhost:8501")
+    redirect_uri = st.session_state.get("oauth_redirect_uri", config.APP_BASE_URL)
 
     try:
         # Get the right connector and exchange code
@@ -790,10 +1037,19 @@ def main():
         st.session_state.lang = "fi"
     if "dark_mode" not in st.session_state:
         st.session_state.dark_mode = False
-    if "tenant_id" not in st.session_state:
-        st.session_state.tenant_id = os.getenv("LEXAI_TENANT_ID", "").strip() or None
 
-    # Handle OAuth callback before any rendering
+    # Auth gate: show login page if not authenticated
+    if not is_authenticated():
+        render_auth_page(st.session_state.lang)
+        return
+
+    # Set user_id and tenant_id from authenticated user
+    user_id = get_current_user_id()
+    st.session_state.user_id = user_id
+    if "tenant_id" not in st.session_state or st.session_state.tenant_id is None:
+        st.session_state.tenant_id = user_id
+
+    # Handle OAuth callback before any rendering (Drive/OneDrive)
     _handle_oauth_callback()
 
     lang = _get_lang()
@@ -806,9 +1062,14 @@ def main():
     )
 
     _inject_custom_css()
+    _inject_toggle_fix()
     _inject_keyboard_shortcuts()
 
-    # LexAI branded header with scales icon
+    # LexAI branded header with scales icon + user email top-right
+    import html as _html
+
+    user_email = get_current_user_email() or ""
+    escaped_email = _html.escape(user_email)
     st.markdown(
         f"""
         <div class="main-header">
@@ -820,28 +1081,32 @@ def main():
                 <h1>{t("sidebar_app_name", lang)} — {t("header_title", lang)}</h1>
                 <p class="subtitle">{t("header_subtitle", lang)}</p>
             </div>
+            <div class="header-user">
+                <span class="header-user-email">{escaped_email}</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
     # Language selector in main page (top-right aligned)
+    def _on_main_lang_change():
+        label = st.session_state.main_lang_selector
+        st.session_state.lang = LANGUAGE_OPTIONS.get(label, st.session_state.lang)
+
     lang_labels = list(LANGUAGE_OPTIONS.keys())
     lang_values = list(LANGUAGE_OPTIONS.values())
     current_idx = lang_values.index(lang) if lang in lang_values else 0
     cols = st.columns([5, 1])
     with cols[1]:
-        selected_label = st.selectbox(
+        st.selectbox(
             t("language", lang),
             lang_labels,
             index=current_idx,
             key="main_lang_selector",
             label_visibility="collapsed",
+            on_change=_on_main_lang_change,
         )
-        new_lang = LANGUAGE_OPTIONS[selected_label]
-        if new_lang != lang:
-            st.session_state.lang = new_lang
-            st.rerun()
 
     if "pending_template" not in st.session_state:
         st.session_state.pending_template = None
@@ -880,7 +1145,7 @@ def _render_chat_or_welcome(chat_history: list, lang: str) -> None:
                     st.write(message["content"])
                     last_user_query = message["content"]
                 elif is_last_assistant:
-                    # Last assistant message: answer on left, source panel on right (LexAI)
+                    # Last assistant message: answer on left, source panel on right
                     from src.ui.citations import _render_source_cards, parse_response_and_sources
 
                     col_answer, col_sources = st.columns([3, 1])
@@ -890,6 +1155,23 @@ def _render_chat_or_welcome(chat_history: list, lang: str) -> None:
                     with col_sources:
                         _, sources = parse_response_and_sources(message["content"])
                         _render_source_cards(sources, idx, lang, theme)
+
+                    # Download response as PDF
+                    response_pdf = generate_chat_pdf(
+                        [
+                            {"role": "user", "content": last_user_query},
+                            {"role": "assistant", "content": message["content"]},
+                        ],
+                        title=t("export_pdf_title", lang),
+                    )
+                    pdf_filename = _build_pdf_filename(last_user_query)
+                    st.download_button(
+                        label=f"\U0001f4e5 {t('export_pdf', lang)}",
+                        data=response_pdf,
+                        file_name=pdf_filename,
+                        mime="application/pdf",
+                        key=f"dl_pdf_{idx}",
+                    )
 
                     render_feedback_buttons(message["content"], last_user_query, lang, idx)
                 else:
@@ -920,6 +1202,7 @@ def _render_input_area(lang: str) -> None:
             value=st.session_state.pending_template,
             height=120,
             key="pending_template_input",
+            max_chars=config.MAX_QUERY_LENGTH,
         )
         col1, col2 = st.columns(2)
         with col1:
@@ -1028,42 +1311,49 @@ def _clear_session_caches() -> None:
         del st.session_state[k]
 
 
-def _render_sidebar_footer(lang: str, chat_history: list) -> None:
-    """Render keyboard shortcuts and message count in sidebar."""
-    st.markdown("---")
-    with st.expander(f"\u2328\ufe0f {t('shortcuts_heading', lang)}", expanded=False):
-        st.caption(t("shortcut_clear", lang))
-        st.caption(t("shortcut_focus", lang))
-    st.markdown("---")
-    user_count = sum(1 for m in chat_history if m.get("role") == "user")
-    st.caption(t("messages_count", lang, count=user_count))
-    st.caption(t("input_hint", lang))
+def _render_sidebar_chat_actions(lang: str, chat_history: list) -> None:
+    """Render PDF export, clear-chat, and new-conversation buttons."""
+    if chat_history:
+        first_user_query = next(
+            (m["content"] for m in chat_history if m.get("role") == "user" and m.get("content")),
+            "",
+        )
+        pdf_bytes = generate_chat_pdf(chat_history, title=t("export_pdf_title", lang))
+        sidebar_pdf_name = _build_pdf_filename(first_user_query, prefix="lexai_chat")
+        st.download_button(
+            label=f"\U0001f4e5 {t('export_pdf', lang)}",
+            data=pdf_bytes,
+            file_name=sidebar_pdf_name,
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+    if st.button(t("clear_chat", lang), use_container_width=True, type="secondary"):
+        clear_chat_history()
+        st.session_state.current_conversation_id = None
+        _clear_session_caches()
+        st.rerun()
+
+    if chat_history and st.button(f"\u2795 {t('new_conversation', lang)}", use_container_width=True, type="secondary"):
+        clear_chat_history()
+        st.session_state.current_conversation_id = None
+        _clear_session_caches()
+        st.rerun()
 
 
 def _render_sidebar(lang: str, chat_history: list) -> None:
     with st.sidebar:
-        # ── Branding ──
         st.markdown(f"**\u2696\ufe0f {t('sidebar_app_name', lang)}**")
         st.caption(t("sidebar_tagline", lang))
+
+        user_email = get_current_user_email()
+        if user_email:
+            st.caption(t("auth_welcome_user", lang, email=user_email))
+            if st.button(t("auth_logout", lang), key="logout_btn", use_container_width=True, type="secondary"):
+                sign_out()
+                st.rerun()
         st.markdown("---")
 
-        # ── Prompt guide (HEAD) ──
-        with st.expander(t("prompt_guide_title", lang), expanded=False):
-            st.markdown(
-                f"""
-                <div class="prompt-guide">
-                <ul style="margin:0.25rem 0;padding-left:1.25rem;font-size:0.875rem;line-height:1.6;color:#475569;">
-                <li>{t("prompt_guide_tip1", lang)}</li>
-                <li>{t("prompt_guide_tip2", lang)}</li>
-                <li>{t("prompt_guide_tip3", lang)}</li>
-                <li>{t("prompt_guide_tip4", lang)}</li>
-                </ul>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        # ── Dark mode toggle (LexAI) ──
         dark_mode = st.toggle(
             t("dark_mode", lang),
             value=st.session_state.get("dark_mode", False),
@@ -1073,7 +1363,6 @@ def _render_sidebar(lang: str, chat_history: list) -> None:
             st.session_state.dark_mode = dark_mode
             st.rerun()
 
-        # ── Verbose / detailed view toggle (LexAI) ──
         verbose_mode = st.toggle(
             t("verbose_mode", lang),
             value=st.session_state.get("verbose_mode", False),
@@ -1085,7 +1374,6 @@ def _render_sidebar(lang: str, chat_history: list) -> None:
 
         st.markdown("---")
 
-        # ── Templates ──
         st.markdown(f"**{t('templates_heading', lang)}**")
         st.caption(t("templates_hint", lang))
         template_lang = "en" if lang == "auto" else lang
@@ -1104,63 +1392,41 @@ def _render_sidebar(lang: str, chat_history: list) -> None:
                 st.rerun()
         st.markdown("---")
 
-        # ── Document Ingestion ──
         render_ingestion_sidebar(lang, st.session_state.get("tenant_id"))
-
-        # ── Search Filters ──
         _render_sidebar_filters(lang)
         st.markdown("---")
 
-        # ── Language selector ──
+        def _on_sidebar_lang_change():
+            label = st.session_state.lang_selector
+            st.session_state.lang = LANGUAGE_OPTIONS.get(label, st.session_state.lang)
+
         lang_labels = list(LANGUAGE_OPTIONS.keys())
         lang_values = list(LANGUAGE_OPTIONS.values())
         current_idx = lang_values.index(lang) if lang in lang_values else 0
-        selected_label = st.selectbox(
+        st.selectbox(
             t("language", lang),
             lang_labels,
             index=current_idx,
             key="lang_selector",
+            on_change=_on_sidebar_lang_change,
         )
-        new_lang = LANGUAGE_OPTIONS[selected_label]
-        if new_lang != lang:
-            st.session_state.lang = new_lang
-            st.rerun()
 
         st.markdown("---")
 
-        # ── Export Chat as PDF ──
-        if chat_history:
-            pdf_bytes = generate_chat_pdf(chat_history, title=t("export_pdf_title", lang))
-            st.download_button(
-                label=f"\U0001f4e5 {t('export_pdf', lang)}",
-                data=pdf_bytes,
-                file_name="lexai_chat.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-
-        # ── Clear chat ──
-        if st.button(t("clear_chat", lang), use_container_width=True, type="secondary"):
-            clear_chat_history()
-            st.session_state.current_conversation_id = None
-            _clear_session_caches()
-            st.rerun()
-
-        # ── New conversation ──
-        if chat_history and st.button(
-            f"\u2795 {t('new_conversation', lang)}", use_container_width=True, type="secondary"
-        ):
-            clear_chat_history()
-            st.session_state.current_conversation_id = None
-            _clear_session_caches()
-            st.rerun()
+        _render_sidebar_chat_actions(lang, chat_history)
 
         st.markdown("---")
-
-        # ── Conversation History ──
         _render_sidebar_conversations(lang)
 
-        _render_sidebar_footer(lang, chat_history)
+        st.markdown("---")
+        with st.expander(f"\u2328\ufe0f {t('shortcuts_heading', lang)}", expanded=False):
+            st.caption(t("shortcut_clear", lang))
+            st.caption(t("shortcut_focus", lang))
+
+        st.markdown("---")
+        user_count = sum(1 for m in chat_history if m.get("role") == "user")
+        st.caption(t("messages_count", lang, count=user_count))
+        st.caption(t("input_hint", lang))
 
 
 if __name__ == "__main__":

@@ -19,11 +19,14 @@ def _generate_suggestions(query: str, response: str, lang: str) -> list[str]:
         from langchain_core.messages import HumanMessage, SystemMessage
         from langchain_openai import ChatOpenAI
 
+        from src.config.settings import config
+
         llm = ChatOpenAI(
-            model="gpt-4o-mini",
+            model=config.OPENAI_SUPPORT_MODEL,
             temperature=0.7,
             max_tokens=200,
             api_key=os.getenv("OPENAI_API_KEY"),
+            request_timeout=config.LLM_REQUEST_TIMEOUT,
         )
 
         lang_instruction = {

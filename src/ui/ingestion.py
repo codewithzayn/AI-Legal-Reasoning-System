@@ -439,4 +439,6 @@ def _get_connector(provider: str):
 
 def _get_redirect_uri() -> str:
     """Get the redirect URI for OAuth flows (Streamlit URL)."""
-    return st.session_state.get("oauth_redirect_uri", "http://localhost:8501")
+    from src.config.settings import config
+
+    return st.session_state.get("oauth_redirect_uri", config.APP_BASE_URL)

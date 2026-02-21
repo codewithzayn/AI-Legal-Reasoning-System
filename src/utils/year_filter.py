@@ -1,13 +1,4 @@
 """
-© 2026 Crest Advisory Group LLC. All rights reserved.
-
-PROPRIETARY AND CONFIDENTIAL
-
-This file is part of the AI Legal Reasoning System.
-Unauthorized copying, distribution, or use is strictly prohibited.
-"""
-
-"""
 Year range extraction for case-law search filtering.
 
 Parses user queries and clarification responses for year ranges

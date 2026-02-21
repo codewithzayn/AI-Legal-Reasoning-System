@@ -1,13 +1,4 @@
 """
-© 2026 Crest Advisory Group LLC. All rights reserved.
-
-PROPRIETARY AND CONFIDENTIAL
-
-This file is part of the AI Legal Reasoning System.
-Unauthorized copying, distribution, or use is strictly prohibited.
-"""
-
-"""
 LLM-based year scope interpretation.
 
 Uses the AI to understand user intent for year filtering instead of hardcoded phrases.
@@ -18,12 +9,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 from src.utils.retry import retry_async, with_retry
 from src.utils.year_filter import extract_year_range
 
 logger = setup_logger(__name__)
 
-_llm_mini = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+_llm_mini = ChatOpenAI(model=config.OPENAI_SUPPORT_MODEL, temperature=0, request_timeout=config.LLM_REQUEST_TIMEOUT)
 
 # Year scope: "ask" = clarify, "all" = no filter, "specific" = use extracted range
 _YEAR_SCOPE_SYSTEM = """You interpret the user's intent regarding which years of court decisions to search.

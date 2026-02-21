@@ -1,6 +1,3 @@
-# © 2026 Crest Advisory Group LLC. All rights reserved.
-# PROPRIETARY AND CONFIDENTIAL. Unauthorized copying, distribution, or use is strictly prohibited.
-
 """
 Case law PDF export: convert CaseLawDocument to a professionally formatted PDF
 that mirrors the Finlex website layout (metadata header, section headings,
@@ -17,49 +14,15 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 
 from src.config.logging_config import setup_logger
 from src.services.case_law.models import CaseLawDocument
+from src.services.case_law.pdf_shared import escape_for_reportlab, register_and_get_fonts
 
 logger = setup_logger(__name__)
 
-
-# ---------------------------------------------------------------------------
-#  Font registration (Finnish-safe: DejaVu + Bold variant)
-# ---------------------------------------------------------------------------
-
-_FONT = "Helvetica"
-_FONT_BOLD = "Helvetica-Bold"
-_FONT_ITALIC = "Helvetica-Oblique"
-
-
-def _register_fonts() -> None:
-    """Register DejaVuSans + Bold if available (supports Finnish ä, ö, Å)."""
-    global _FONT, _FONT_BOLD, _FONT_ITALIC  # noqa: PLW0603
-    font_dirs = [
-        "/usr/share/fonts/truetype/dejavu",
-        "/usr/share/fonts/dejavu",
-    ]
-    for font_dir in font_dirs:
-        regular = Path(font_dir) / "DejaVuSans.ttf"
-        bold = Path(font_dir) / "DejaVuSans-Bold.ttf"
-        oblique = Path(font_dir) / "DejaVuSans-Oblique.ttf"
-        if regular.exists():
-            pdfmetrics.registerFont(TTFont("DejaVuSans", str(regular)))
-            _FONT = "DejaVuSans"
-            if bold.exists():
-                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", str(bold)))
-                _FONT_BOLD = "DejaVuSans-Bold"
-            if oblique.exists():
-                pdfmetrics.registerFont(TTFont("DejaVuSans-Oblique", str(oblique)))
-                _FONT_ITALIC = "DejaVuSans-Oblique"
-            return
-
-
-_register_fonts()
+_FONT, _FONT_BOLD, _FONT_ITALIC = register_and_get_fonts()
 
 # ---------------------------------------------------------------------------
 #  Color constants
@@ -341,23 +304,6 @@ def _classify_line(line: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-#  Escape helper
-# ---------------------------------------------------------------------------
-
-
-def _escape(s: str) -> str:
-    """Escape for ReportLab Paragraph (XML-style; prevents injection in PDF content)."""
-    return (
-        (s or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
-
-
-# ---------------------------------------------------------------------------
 #  Horizontal rule helper
 # ---------------------------------------------------------------------------
 
@@ -377,15 +323,15 @@ def _build_header(case_id: str, meta: dict, styles: dict) -> list:
     story = []
 
     # Title
-    story.append(Paragraph(_escape(case_id), styles["title"]))
+    story.append(Paragraph(escape_for_reportlab(case_id), styles["title"]))
     story.append(Spacer(1, 4))
 
     # Keywords
     keywords = meta.get("keywords", [])
     if keywords:
-        story.append(Paragraph(_escape("Asiasanat / Keywords"), styles["meta_label"]))
+        story.append(Paragraph(escape_for_reportlab("Asiasanat / Keywords"), styles["meta_label"]))
         for kw in keywords:
-            story.append(Paragraph(_escape(kw), styles["meta_value"]))
+            story.append(Paragraph(escape_for_reportlab(kw), styles["meta_value"]))
         story.append(Spacer(1, 4))
 
     # Metadata key-value pairs
@@ -398,7 +344,7 @@ def _build_header(case_id: str, meta: dict, styles: dict) -> list:
     ]
     for label, value in meta_rows:
         if value:
-            text = f"<b>{_escape(label)}:</b>  {_escape(value)}"
+            text = f"<b>{escape_for_reportlab(label)}:</b>  {escape_for_reportlab(value)}"
             story.append(Paragraph(text, styles["meta_value"]))
 
     story.append(Spacer(1, 2))
@@ -434,7 +380,7 @@ def _render_body(body_lines: list[str], styles: dict, story: list) -> None:
             return
         joined = " ".join(current_block)
         if joined.strip():
-            story.append(Paragraph(_escape(joined), styles.get(current_type, styles["body"])))
+            story.append(Paragraph(escape_for_reportlab(joined), styles.get(current_type, styles["body"])))
 
     for line in body_lines:
         stripped = line.strip()
@@ -450,7 +396,7 @@ def _render_body(body_lines: list[str], styles: dict, story: list) -> None:
             flush()
             current_block = []
             label = stripped.upper() if line_type == "section_heading" else stripped
-            story.append(Paragraph(_escape(label), styles[line_type]))
+            story.append(Paragraph(escape_for_reportlab(label), styles[line_type]))
             current_type = "body"
             continue
 
@@ -460,14 +406,14 @@ def _render_body(body_lines: list[str], styles: dict, story: list) -> None:
             if not seen_judge:
                 story.append(_hr())
                 seen_judge = True
-            story.append(Paragraph(_escape(stripped), styles["judge_line"]))
+            story.append(Paragraph(escape_for_reportlab(stripped), styles["judge_line"]))
             current_type = "body"
             continue
 
         if line_type == "law_ref":
             flush()
             current_block = []
-            story.append(Paragraph(_escape(stripped), styles["law_ref"]))
+            story.append(Paragraph(escape_for_reportlab(stripped), styles["law_ref"]))
             current_type = "body"
             continue
 
@@ -512,20 +458,23 @@ def doc_to_placeholder_pdf(doc: CaseLawDocument | None) -> bytes:
         bottomMargin=18 * mm,
     )
     story = [
-        Paragraph(_escape(case_id), styles["title"]),
+        Paragraph(escape_for_reportlab(case_id), styles["title"]),
         Spacer(1, 12),
         Paragraph(
-            _escape("Content not available. Full text was empty at export. Re-scrape this case to populate content."),
+            escape_for_reportlab(
+                "Content not available. Full text was empty at export. Re-scrape this case to populate content."
+            ),
             styles["body"],
         ),
         Spacer(1, 8),
         Paragraph(
-            _escape("Sisältö puuttuu. Tallenna uudelleen tai aja uudelleen kaavinta tälle tapaukselle."), styles["body"]
+            escape_for_reportlab("Sisältö puuttuu. Tallenna uudelleen tai aja uudelleen kaavinta tälle tapaukselle."),
+            styles["body"],
         ),
     ]
     if url:
         story.append(Spacer(1, 10))
-        story.append(Paragraph(f"Source: {_escape(url)}", styles["footer_note"]))
+        story.append(Paragraph(f"Source: {escape_for_reportlab(url)}", styles["footer_note"]))
     doc_template.build(story)
     return buffer.getvalue()
 
@@ -573,7 +522,7 @@ def doc_to_pdf(doc: CaseLawDocument | None) -> bytes:
     url = getattr(doc, "url", "") or ""
     if url:
         story.append(Spacer(1, 10))
-        story.append(Paragraph(f"Source: {_escape(url)}", styles["footer_note"]))
+        story.append(Paragraph(f"Source: {escape_for_reportlab(url)}", styles["footer_note"]))
 
     doc_template.build(story)
     return buffer.getvalue()

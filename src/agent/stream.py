@@ -275,11 +275,26 @@ def stream_query_response_sync(
     original_query_for_year: str | None = None,
     year_range: tuple[int | None, int | None] | None = None,
     chat_history: list[dict] | None = None,
+    court_types: list[str] | None = None,
+    legal_domains: list[str] | None = None,
+    tenant_id: str | None = None,
+    metadata_sink: dict | None = None,
 ) -> Iterator[str]:
     """
     Synchronous wrapper for stream_query_response so Streamlit can iterate
     without async. Runs the async generator in a background thread and yields
     chunks on the main thread.
+
+    Args:
+        user_query: User's question
+        lang: Language code for UI and response ("en", "fi", or "sv")
+        original_query_for_year: When continuing from year clarification, the original query
+        year_range: (year_start, year_end) from user's year clarification response
+        chat_history: Previous conversation messages
+        court_types: Optional list of court type filters (e.g. ["KKO", "KHO"])
+        legal_domains: Optional list of legal domain filters
+        tenant_id: Multi-tenant ID for filtering documents
+        metadata_sink: Dictionary to store metadata from response
     """
     chunk_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -294,6 +309,10 @@ def stream_query_response_sync(
                     original_query_for_year=original_query_for_year,
                     year_range=year_range,
                     chat_history=chat_history,
+                    court_types=court_types,
+                    legal_domains=legal_domains,
+                    tenant_id=tenant_id,
+                    metadata_sink=metadata_sink,
                 ):
                     chunk_queue.put(chunk)
                 chunk_queue.put(None)

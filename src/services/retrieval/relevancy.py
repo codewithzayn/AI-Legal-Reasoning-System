@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
+from src.config.settings import config
 from src.utils.retry import retry_async
 
 logger = setup_logger(__name__)
@@ -91,7 +92,7 @@ async def check_relevancy(query: str, answer: str) -> dict:
     if not compact:
         return {"score": 0, "reason": "Tyhjä vastaus."}
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, max_tokens=150)
+    llm = ChatOpenAI(model=config.OPENAI_SUPPORT_MODEL, temperature=0, max_tokens=150)
     user_content = f"KYSYMYS:\n{query}\n\nVASTAUKSEN TIivistelmä / ote:\n{compact}"
 
     try:

@@ -13,6 +13,21 @@ from SPARQLWrapper import JSON, SPARQLWrapper
 from src.config.logging_config import setup_logger
 from src.config.settings import config
 
+_SAFE_SPARQL_VALUE_RE = re.compile(r"^[A-Za-z0-9:/_\-. ]+$")
+
+
+def _sanitise_sparql_literal(value: str) -> str:
+    """Escape a string for safe embedding in a SPARQL string literal.
+
+    Rejects values containing characters that could break out of a
+    quoted SPARQL string (double-quotes, backslashes, angle brackets,
+    curly braces, semicolons, newlines).
+    """
+    if _SAFE_SPARQL_VALUE_RE.match(value):
+        return value
+    raise ValueError(f"Unsafe SPARQL literal rejected: {value!r}")
+
+
 logger = setup_logger(__name__)
 
 # CDM ontology SPARQL prefix block
@@ -72,8 +87,12 @@ class EurLexClient:
             return self._search_by_celex(celex_numbers, language)
 
         court_filter = self._court_filter(court)
-        year_filter = f"FILTER(YEAR(?date) = {year})" if year else ""
-        country_filter = f'FILTER(CONTAINS(STR(?referring_ms), "{referring_country}"))' if referring_country else ""
+        year_filter = f"FILTER(YEAR(?date) = {int(year)})" if year else ""
+        country_filter = (
+            f'FILTER(CONTAINS(STR(?referring_ms), "{_sanitise_sparql_literal(referring_country)}"))'
+            if referring_country
+            else ""
+        )
 
         query = f"""{_SPARQL_PREFIXES}
 SELECT DISTINCT ?celex ?title ?date ?ecli ?case_number WHERE {{
@@ -99,7 +118,7 @@ LIMIT {limit}
 
     def _search_by_celex(self, celex_numbers: list[str], language: str) -> list[dict]:
         """Fetch metadata for specific CELEX numbers."""
-        filter_expr = " || ".join(f'STR(?celex) = "{c}"' for c in celex_numbers)
+        filter_expr = " || ".join(f'STR(?celex) = "{_sanitise_sparql_literal(c)}"' for c in celex_numbers)
         query = f"""{_SPARQL_PREFIXES}
 SELECT DISTINCT ?celex ?title ?date ?ecli ?case_number WHERE {{
   ?work cdm:resource_legal_id_celex ?celex .
@@ -188,7 +207,7 @@ SELECT DISTINCT ?celex ?title ?date ?ecli ?case_number WHERE {{
 SELECT ?celex ?title ?date ?ecli ?case_number
        ?ag ?formation ?subject ?ref_court ?ref_country WHERE {{
   ?work cdm:resource_legal_id_celex ?celex .
-  FILTER(STR(?celex) = "{celex_number}")
+  FILTER(STR(?celex) = "{_sanitise_sparql_literal(celex_number)}")
   OPTIONAL {{ ?work cdm:work_date_document ?date . }}
   OPTIONAL {{ ?work cdm:case-law_ecli ?ecli . }}
   OPTIONAL {{ ?work cdm:resource_legal_number_natural ?case_number . }}
@@ -231,7 +250,7 @@ SELECT DISTINCT ?celex ?title ?date ?ecli ?case_number ?ref_court WHERE {{
   ?work cdm:work_date_document ?date .
   ?work cdm:case-law_preliminary_ruling_referring_ms ?ref_ms .
   FILTER(CONTAINS(STR(?ref_ms), "FIN"))
-  FILTER(YEAR(?date) >= {year_start} && YEAR(?date) <= {year_end})
+  FILTER(YEAR(?date) >= {int(year_start)} && YEAR(?date) <= {int(year_end)})
   OPTIONAL {{ ?work cdm:case-law_ecli ?ecli . }}
   OPTIONAL {{ ?work cdm:resource_legal_number_natural ?case_number . }}
   OPTIONAL {{ ?work cdm:case-law_preliminary_ruling_referring_court ?ref_court . }}

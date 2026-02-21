@@ -407,7 +407,7 @@ FROM (
         LEFT(split_part(s.content, E'\n', 1), 300) AS first_line
     FROM case_law_sections s
     JOIN case_law cl ON cl.id = s.case_law_id
-    WHERE s.section_type IN ('background', 'summary', 'other')
+    WHERE s.section_type IN ('background', 'summary', 'other')AI_Legal_System_Development_Plan_EN.pdf
       AND s.content IS NOT NULL AND s.content != ''
       AND s.content LIKE '% - %'
       AND (cl.title ~ '^[A-Z]{2,4}\s?\d{4}:\d+' OR cl.title IS NULL OR cl.title = '')

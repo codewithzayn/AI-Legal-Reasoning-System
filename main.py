@@ -39,7 +39,8 @@ async def run_cli_async():
         try:
             # Use asyncio.to_thread for blocking input if needed, but input() is blocking main thread anyway.
             # Simple input() is fine for CLI demo.
-            print("You: ", end="", flush=True)
+            sys.stdout.write("You: ")
+            sys.stdout.flush()
             query = await asyncio.to_thread(sys.stdin.readline)
             query = query.strip()
 
@@ -48,10 +49,11 @@ async def run_cli_async():
                 break
             if not query:
                 continue
-            logger.info("\nAssistant: ")
+            sys.stdout.write("\nAssistant: ")
             async for chunk in stream_query_response(query):
-                print(chunk, end="", flush=True)
-            logger.info("\n")
+                sys.stdout.write(chunk)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
         except KeyboardInterrupt:
             logger.info("\nGoodbye!")
             break

@@ -1,67 +1,29 @@
 """
 Chat history PDF export for LexAI.
 
-Generates a professional PDF of the conversation using ReportLab,
-reusing font registration and escape patterns from pdf_export.py.
+Generates a professional PDF of the conversation using ReportLab.
+Uses shared font and escape helpers from services.case_law.pdf_shared.
 """
 
 from datetime import datetime
 from io import BytesIO
-from pathlib import Path
 
 from reportlab.lib.colors import HexColor
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
 
-# Font setup (same as pdf_export.py)
-_FONT = "Helvetica"
-_FONT_BOLD = "Helvetica-Bold"
+from src.services.case_law.pdf_shared import escape_for_reportlab, register_and_get_fonts
 
-
-def _register_fonts() -> None:
-    """Register DejaVuSans if available (Finnish character support)."""
-    global _FONT, _FONT_BOLD  # noqa: PLW0603
-    font_dirs = [
-        "/usr/share/fonts/truetype/dejavu",
-        "/usr/share/fonts/dejavu",
-    ]
-    for font_dir in font_dirs:
-        regular = Path(font_dir) / "DejaVuSans.ttf"
-        bold = Path(font_dir) / "DejaVuSans-Bold.ttf"
-        if regular.exists():
-            pdfmetrics.registerFont(TTFont("DejaVuSans", str(regular)))
-            _FONT = "DejaVuSans"
-            if bold.exists():
-                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", str(bold)))
-                _FONT_BOLD = "DejaVuSans-Bold"
-            return
-
-
-_register_fonts()
+_FONT, _FONT_BOLD, _ = register_and_get_fonts()
 
 _PRIMARY = HexColor("#1e3a5f")
 _ACCENT = HexColor("#2563eb")
 _DARK = HexColor("#222222")
 _GREY = HexColor("#666666")
-_LIGHT_BG = HexColor("#f8fafc")
 _HR_COLOR = HexColor("#e2e8f0")
-
-
-def _escape(s: str) -> str:
-    """Escape for ReportLab Paragraph XML."""
-    return (
-        (s or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
 
 
 def _build_styles() -> dict[str, ParagraphStyle]:
@@ -112,6 +74,24 @@ def _build_styles() -> dict[str, ParagraphStyle]:
             textColor=_DARK,
             alignment=TA_LEFT,
         ),
+        "section_heading": ParagraphStyle(
+            "SectionHeading",
+            fontName=_FONT_BOLD,
+            fontSize=11,
+            leading=14,
+            spaceBefore=8,
+            spaceAfter=4,
+            textColor=_PRIMARY,
+        ),
+        "case_heading": ParagraphStyle(
+            "CaseHeading",
+            fontName=_FONT_BOLD,
+            fontSize=10,
+            leading=13,
+            spaceBefore=6,
+            spaceAfter=2,
+            textColor=_ACCENT,
+        ),
         "footer": ParagraphStyle(
             "Footer",
             fontName=_FONT,
@@ -121,6 +101,36 @@ def _build_styles() -> dict[str, ParagraphStyle]:
             alignment=TA_CENTER,
         ),
     }
+
+
+_SECTION_KEYWORDS = frozenset(
+    {
+        "legal position summary",
+        "precedent analysis",
+        "trend & development",
+        "trend and development",
+        "practical implications",
+        "applicable legislation",
+        "oikeudellinen yhteenveto",
+        "ennakkopäätösanalyysi",
+        "kehityssuunta",
+        "käytännön vaikutukset",
+        "sovellettava lainsäädäntö",
+    }
+)
+
+_CASE_ID_PREFIXES = ("KKO:", "KHO:", "ECLI:")
+
+
+def _pick_paragraph_style(text: str, styles: dict) -> ParagraphStyle:
+    """Choose the right PDF style based on line content."""
+    stripped = text.lstrip("#").strip()
+    lower = stripped.lower()
+    if text.startswith("#") or lower in _SECTION_KEYWORDS:
+        return styles["section_heading"]
+    if stripped.startswith(_CASE_ID_PREFIXES):
+        return styles["case_heading"]
+    return styles["message"]
 
 
 def generate_chat_pdf(messages: list[dict], title: str = "LexAI Chat Export") -> bytes:
@@ -148,9 +158,9 @@ def generate_chat_pdf(messages: list[dict], title: str = "LexAI Chat Export") ->
     story: list = []
 
     # Header
-    story.append(Paragraph(_escape(title), styles["title"]))
+    story.append(Paragraph(escape_for_reportlab(title), styles["title"]))
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    story.append(Paragraph(_escape(f"Generated: {timestamp}"), styles["subtitle"]))
+    story.append(Paragraph(escape_for_reportlab(f"Generated: {timestamp}"), styles["subtitle"]))
     story.append(HRFlowable(width="100%", thickness=1, color=_HR_COLOR, spaceBefore=4, spaceAfter=8))
 
     # Messages
@@ -165,11 +175,13 @@ def generate_chat_pdf(messages: list[dict], title: str = "LexAI Chat Export") ->
         else:
             story.append(Paragraph("\u2696\ufe0f LexAI", styles["assistant_label"]))
 
-        # Split long content into paragraphs
         for raw_para in content.split("\n"):
             para = raw_para.strip()
-            if para:
-                story.append(Paragraph(_escape(para), styles["message"]))
+            if not para:
+                continue
+            style = _pick_paragraph_style(para, styles)
+            display = para.lstrip("#").strip() if para.startswith("#") else para
+            story.append(Paragraph(escape_for_reportlab(display), style))
 
         story.append(HRFlowable(width="100%", thickness=0.5, color=_HR_COLOR, spaceBefore=4, spaceAfter=4))
 
@@ -177,7 +189,7 @@ def generate_chat_pdf(messages: list[dict], title: str = "LexAI Chat Export") ->
     story.append(Spacer(1, 12))
     story.append(
         Paragraph(
-            _escape(f"LexAI - Finnish Legal AI Assistant | {timestamp}"),
+            escape_for_reportlab(f"LexAI - Finnish Legal AI Assistant | {timestamp}"),
             styles["footer"],
         )
     )

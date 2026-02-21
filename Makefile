@@ -45,6 +45,7 @@ help:
 	@echo "  make verify-json-full-text  Scan precedent JSON for empty full_text; print fix commands."
 	@echo "  make check-ingestion-status  Show Supabase ingestion status (per year). Optional: YEAR=..."
 	@echo "  make sync-ingestion-status   Update tracking.processed_cases from case_law (sync DB). Optional: YEAR=..."
+	@echo "  make backfill-vote-strength  Backfill vote_strength/judges_dissenting from JSON. Optional: COURT= START= END="
 	@echo "  make verify-ingestion     Find cases with 0 sections or 0 references. Optional: YEAR=... START=... END=..."
 	@echo "  make verify-ingestion YEAR=1983 FIX=1   Re-ingest all 0-section cases for that year"
 	@echo "  make reingest-cases YEAR=1983 CASE_IDS='KKO:1983-II-124 KKO:1983-II-125'   Re-ingest specific case IDs"
@@ -163,6 +164,12 @@ check-ingestion-status:
 # Sync case_law_ingestion_tracking.processed_cases from actual case_law count (fixes out-of-sync tracking)
 sync-ingestion-status:
 	python3 scripts/case_law/core/check_ingestion_status.py --sync $(if $(YEAR),--year $(YEAR),)
+
+# Backfill vote_strength/judges_dissenting in case_law from existing JSON (no full re-ingestion)
+backfill-vote-strength:
+	python3 scripts/case_law/core/backfill_vote_strength.py $(if $(COURT),--court $(COURT),) $(if $(START),--start $(START),) $(if $(END),--end $(END),)
+backfill-vote-strength-dry:
+	python3 scripts/case_law/core/backfill_vote_strength.py --dry-run $(if $(COURT),--court $(COURT),) $(if $(START),--start $(START),) $(if $(END),--end $(END),)
 
 ingest-rulings:
 	python3 scripts/case_law/supreme_court/ingest_rulings.py --year $(YEAR)
