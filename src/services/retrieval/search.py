@@ -42,6 +42,26 @@ def _is_connection_error(exc: BaseException) -> bool:
     )
 
 
+_EXPANSION_REFUSAL_MARKERS = (
+    "valitettavasti",
+    "sorry",
+    "i cannot",
+    "en voi",
+    "i can't",
+    "not a legal",
+    "ei liity oikeudellisiin",
+    "ole hyvä ja anna",
+    "please provide",
+    "tyvärr",
+)
+
+
+def _is_expansion_refusal(text: str) -> bool:
+    """True when the expansion LLM refused instead of producing a real query."""
+    lower = text.strip().lower()
+    return any(marker in lower for marker in _EXPANSION_REFUSAL_MARKERS)
+
+
 # ---------------------------------------------------------------------------
 # Finnish stop words — stripped from FTS queries so only substantive
 # legal terms remain.  When combined with to_tsquery OR (|) mode
@@ -309,20 +329,23 @@ class HybridRetrieval:
         """Generate 2 targeted legal query variants for better recall."""
         system_prompt = """Olet suomalaisen oikeuden hakuasiantuntija. Luo kaksi vaihtoehtoista hakukyselyä.
 
+KRIITTINEN SÄÄNTÖ: Vaihtoehtoisten kyselyjen TÄYTYY koskea SAMAA oikeudellista aihetta kuin alkuperäinen kysely. ÄLÄ vaihda aihealuetta.
+
 Luo:
-1. **Lakitekninen versio**: Käytä lakipykäliä, virallisia termejä (edellytykset, soveltamisala, toimivalta, vastuu)
+1. **Lakitekninen versio**: Käytä lakipykäliä, virallisia termejä (edellytykset, soveltamisala, tunnusmerkistö, vastuu)
 2. **Tapausperusteinen versio**: Mitä tosiasiallisia tilanteita tai kysymyksiä tämä koskee?
 
 Säännöt:
-- Pidä pykäläviittaukset (esim. OYL 5:21, RL 10:3)
+- Pidä pykäläviittaukset (esim. RL 36:1, VahKorvL 5:1)
+- Molemmat versiot TÄYTYY liittyä alkuperäisen kyselyn oikeudelliseen aiheeseen
 - Jos kysymys on "milloin/missä tapauksessa", varmista että molemmat versiot etsivät EDELLYTYKSIÄ
 - Vastaa VAIN kahdella kyselyllä, yksi per rivi
 - Älä selitä
 
 Esimerkki:
-Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
-1. OYL yhtiökokouksen määrääminen tuomioistuimen päätöksellä edellytykset
-2. Millä perusteella tuomioistuin voi velvoittaa yhtiön kutsumaan koolle yhtiökokouksen"""
+Alkuperäinen: "KKO:n ennakkopäätökset vahingonkorvauksesta"
+1. VahKorvL vahingonkorvausvastuu edellytykset tuottamus syy-yhteys KKO
+2. Missä tapauksissa vahingonkorvausvelvollisuus syntyy sopimusrikkomuksessa tai sopimuksenulkoisesti"""
         try:
             response = await retry_async(
                 lambda: _get_expansion_llm().ainvoke(
@@ -333,11 +356,13 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
                 )
             )
             lines = [ln.strip().lstrip("0123456789.-) ") for ln in response.content.strip().splitlines() if ln.strip()]
-            alternatives = [ln for ln in lines if ln][:2]
+            alternatives = [ln for ln in lines if ln and not _is_expansion_refusal(ln)][:2]
             if alternatives:
                 logger.info("Multi-query expansion → %s alternatives", len(alternatives))
                 for i, alt in enumerate(alternatives, 1):
                     logger.info("  alt-%s: %s", i, alt)
+            else:
+                logger.info("Multi-query expansion → 0 usable alternatives (filtered refusals)")
             return alternatives
         except (OSError, ValueError) as e:
             logger.warning("Multi-query expansion failed (non-critical): %s", e)
@@ -1286,16 +1311,13 @@ Alkuperäinen: "Milloin yhtiökokous voidaan määrätä pidettäväksi?"
         try:
             effective_tenant = tenant_id or self.tenant_id
             client = await self._get_client()
-            query = (
-                client.table("case_law")
-                .select(
-                    "id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url, dissenting_opinion, judges, judges_total, judges_dissenting, vote_strength, exceptions, weighted_factors, trend_direction, distinctive_facts, ruling_instruction, applied_provisions"
-                )
-                .text_search("title", prefix_query, options={"config": "finnish"})
+            select_builder = client.table("case_law").select(
+                "id, case_id, court_type, case_year, title, legal_domains, decision_outcome, url, dissenting_opinion, judges, judges_total, judges_dissenting, vote_strength, exceptions, weighted_factors, trend_direction, distinctive_facts, ruling_instruction, applied_provisions"
             )
             if effective_tenant:
                 safe_tenant = _validate_tenant_id(effective_tenant)
-                query = query.or_(f"tenant_id.is.null,tenant_id.eq.{safe_tenant}")
+                select_builder = select_builder.or_(f"tenant_id.is.null,tenant_id.eq.{safe_tenant}")
+            query = select_builder.text_search("title", prefix_query, options={"config": "finnish"})
             case_resp = await query.execute()
             if not case_resp.data:
                 return []

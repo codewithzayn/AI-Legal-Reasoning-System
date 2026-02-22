@@ -32,6 +32,9 @@ class ClientDocumentStorage:
         chunks: list[dict],
         content_hash: str,
         source_provider: str = "upload",
+        extraction_confidence: float = 0.85,
+        completeness_score: float = 0.80,
+        requires_review: bool = False,
     ) -> int:
         """Store a client document and its chunks.
 
@@ -44,6 +47,9 @@ class ClientDocumentStorage:
                     'section_number', 'metadata'.
             content_hash: SHA-256 hash for idempotency.
             source_provider: 'upload', 'google_drive', or 'onedrive'.
+            extraction_confidence: Quality score of extraction (0.0-1.0).
+            completeness_score: Completeness of extracted data (0.0-1.0).
+            requires_review: True if document has quality issues.
 
         Returns:
             case_law row ID.
@@ -89,7 +95,7 @@ class ClientDocumentStorage:
             case_law_id = result.data[0]["id"]
             logger.info("Created case_law row: %s (id=%s)", case_id, case_law_id)
 
-        # Insert chunks into case_law_sections
+        # Insert chunks into case_law_sections with CLIENT DOCUMENT MARKER
         sections_data = []
         for chunk in chunks:
             sections_data.append(
@@ -100,6 +106,7 @@ class ClientDocumentStorage:
                     "section_title": chunk.get("section_number", ""),
                     "embedding": chunk.get("embedding"),
                     "tenant_id": tenant_id,
+                    "is_client_document": True,  # PHASE 2: MARK AS CLIENT DOC
                 }
             )
 
@@ -110,7 +117,8 @@ class ClientDocumentStorage:
                 self._client.table("case_law_sections").insert(batch).execute()
             logger.info("Inserted %s sections for %s", len(sections_data), case_id)
 
-        # Track in client_documents
+        # Track in client_documents (PHASE 1 & 2: with quality metrics)
+        doc_status = "pending_review" if requires_review else "completed"
         self._client.table("client_documents").insert(
             {
                 "tenant_id": tenant_id,
@@ -118,10 +126,13 @@ class ClientDocumentStorage:
                 "source_file_id": file_id,
                 "file_name": file_name,
                 "file_type": file_ext,
-                "status": "completed",
+                "status": doc_status,
                 "content_hash": content_hash,
                 "chunks_stored": len(chunks),
                 "case_law_id": case_law_id,
+                "extraction_confidence": extraction_confidence,
+                "completeness_score": completeness_score,
+                "requires_review": requires_review,
             }
         ).execute()
 

@@ -63,6 +63,19 @@ class IngestionManager:
         extract_str = " + extract" if use_ai else " (regex only)"
         logger.info("🚀 Starting Ingestion: %s %s%s%s", self.court.upper(), year, subtype_str, extract_str)
 
+        # Guard: refuse to re-ingest a year that already completed successfully
+        # unless the caller explicitly passes force_scrape=True.
+        if not force_scrape and self._is_already_completed(year, subtype):
+            stored = self._count_stored_cases(year, subtype)
+            logger.info(
+                "⏭  SKIP: %s %s/%s already completed (%s cases in DB). Pass --force to re-ingest.",
+                self.court.upper(),
+                year,
+                subtype or "ALL",
+                stored,
+            )
+            return []
+
         # 1. Resolve paths & load/scrape
         json_file, no_json_cache = self._resolve_json_path(year, subtype)
         tracking_id = self._init_tracking(year, subtype)
@@ -410,19 +423,14 @@ class IngestionManager:
                 case_uuid = self.storage.store_case(doc)
                 if case_uuid:
                     stored_count += 1
-                    self._track_status(
-                        year=year,
-                        status="in_progress",
-                        total=total_to_store,
-                        processed=stored_count,
-                        last_case=doc.case_id,
-                        tracking_id=tracking_id,
-                        subtype=subtype,
-                    )
+                    # Atomically increment the counter so a crash between the
+                    # case_law insert and this write cannot leave stale state.
+                    self._bump_progress(tracking_id, doc.case_id)
                 else:
                     # store_case returned None (e.g. invalid date, schema error)
                     logger.warning("[%s/%s] %s | STORE RETURNED NONE", i, total_to_store, doc.case_id)
                     failed_ids.append(f"{doc.case_id} (storage returned None)")
+                    self._bump_failed(tracking_id)
                     if tracking_id:
                         self._track_error(
                             tracking_id=tracking_id,
@@ -434,6 +442,7 @@ class IngestionManager:
             except Exception as e:
                 logger.error("[%s/%s] %s | STORAGE FAILED: %s", i, total_to_store, doc.case_id, e)
                 failed_ids.append(f"{doc.case_id} (storage error: {e})")
+                self._bump_failed(tracking_id)
                 if tracking_id:
                     self._track_error(
                         tracking_id=tracking_id,
@@ -652,26 +661,47 @@ class IngestionManager:
             return await scraper.fetch_year(self.court, year, subtype=subtype)
 
     def _init_tracking(self, year: int, subtype: str) -> str | None:
-        """Initialize tracking entry and return ID"""
+        """Initialize (or resume) tracking entry and return ID.
+
+        On restart after a crash the previous run may have left the row in
+        "in_progress" with stale counters.  We reconcile processed_cases with
+        the actual count already stored in case_law so that the progress bar
+        and completion logic reflect reality instead of starting from zero.
+        """
         if not self.sb_client:
             return None
 
         try:
-            # Check if exists
             existing = (
                 self.sb_client.table("case_law_ingestion_tracking")
-                .select("id")
+                .select("id,status,processed_cases")
                 .match({"court_type": self.court, "decision_type": subtype or "unknown", "year": year})
                 .execute()
             )
 
             if existing.data:
                 tracking_id = existing.data[0]["id"]
+                prev_status = existing.data[0].get("status", "")
+
+                # Reconcile: count documents already successfully stored in case_law
+                # so a resumed run shows accurate progress rather than starting at 0.
+                reconciled = self._count_stored_cases(year, subtype)
+                if reconciled and prev_status in ("in_progress", "failed", "partial"):
+                    logger.info(
+                        "Resuming ingestion for %s %s/%s — %s cases already in DB",
+                        self.court,
+                        year,
+                        subtype or "ALL",
+                        reconciled,
+                    )
+
                 self.sb_client.table("case_law_ingestion_tracking").update(
                     {
                         "status": "in_progress",
                         "started_at": datetime.now().isoformat(),
                         "last_updated": datetime.now().isoformat(),
+                        # Write reconciled count so progress is accurate from the first update
+                        "processed_cases": reconciled,
                     }
                 ).eq("id", tracking_id).execute()
                 return tracking_id
@@ -682,6 +712,7 @@ class IngestionManager:
                 "year": year,
                 "status": "in_progress",
                 "total_cases": 0,
+                "processed_cases": 0,
                 "started_at": datetime.now().isoformat(),
             }
             res = self.sb_client.table("case_law_ingestion_tracking").insert(data).execute()
@@ -690,6 +721,52 @@ class IngestionManager:
         except Exception as e:
             logger.error("Failed to init tracking: %s", e)
         return None
+
+    def _is_already_completed(self, year: int, subtype: str | None) -> bool:
+        """Return True if this court/year/subtype has a 'completed' tracking row.
+
+        Used as a guard in ingest_year to prevent accidental re-ingestion.
+        Returns False on any DB error so ingestion can always proceed safely.
+        """
+        if not self.sb_client:
+            return False
+        try:
+            resp = (
+                self.sb_client.table("case_law_ingestion_tracking")
+                .select("status")
+                .match({"court_type": self.court, "decision_type": subtype or "unknown", "year": year})
+                .execute()
+            )
+            if resp.data:
+                return resp.data[0].get("status") == "completed"
+        except Exception as e:
+            logger.warning("Could not check completion status: %s", e)
+        return False
+
+    def _count_stored_cases(self, year: int, subtype: str | None) -> int:
+        """Count how many case_law rows for this court + year are already in the DB.
+
+        Used during crash-recovery reconciliation so that the tracking table
+        reflects the real DB state rather than the stale pre-crash counter.
+        Returns 0 on any error so it never blocks the ingestion run.
+        """
+        if not self.sb_client:
+            return 0
+        try:
+            query = (
+                self.sb_client.table("case_law")
+                .select("id", count="exact")
+                .eq("court_type", self.court)
+                .eq("case_year", year)
+            )
+            # Narrow by decision_type when subtype is known
+            if subtype and subtype != "unknown":
+                query = query.eq("decision_type", subtype)
+            resp = query.execute()
+            return resp.count or 0
+        except Exception as e:
+            logger.warning("Could not reconcile tracking count: %s", e)
+            return 0
 
     def _update_tracking_total(self, tracking_id: str, total: int):
         """Update total cases count"""
@@ -714,11 +791,42 @@ class IngestionManager:
         tracking_id: str = None,
         subtype: str = None,
     ):
-        """Update ingestion status. total = full year count; processed = in Supabase; failed = this run."""
+        """Update ingestion status. total = full year count; processed = in Supabase; failed = this run.
+
+        For terminal states (completed / partial / failed) use the atomic
+        finalize_ingestion_tracking RPC so completed_at and status are written
+        in one statement.  For in_progress updates (called per-document during
+        a run) individual _bump_progress / _bump_failed calls are used instead,
+        so this method is now only called at the start and end of a run.
+        """
         if not self.sb_client:
             return
 
         try:
+            is_terminal = status in ("completed", "partial", "failed")
+
+            if is_terminal and tracking_id:
+                # Use the atomic finalize RPC when the migration has been applied
+                try:
+                    self.sb_client.rpc(
+                        "finalize_ingestion_tracking",
+                        {
+                            "p_tracking_id": tracking_id,
+                            "p_status": status,
+                            "p_total_cases": total if total > 0 else None,
+                        },
+                    ).execute()
+                    # Also persist failed count (not covered by finalize RPC)
+                    if failed > 0:
+                        self.sb_client.table("case_law_ingestion_tracking").update(
+                            {"failed_cases": failed, "last_updated": datetime.now().isoformat()}
+                        ).eq("id", tracking_id).execute()
+                    return
+                except Exception:
+                    pass  # Migration not yet applied — fall through to legacy path
+
+            # Legacy fallback: plain UPDATE (used for non-terminal status updates
+            # and deployments without the atomic migration)
             data = {
                 "status": status,
                 "processed_cases": processed,
@@ -729,7 +837,7 @@ class IngestionManager:
                 data["total_cases"] = total
             if last_case:
                 data["last_processed_case"] = last_case
-            if status in ("completed", "partial", "failed"):
+            if is_terminal:
                 data["completed_at"] = datetime.now().isoformat()
 
             if tracking_id:
@@ -741,6 +849,55 @@ class IngestionManager:
 
         except Exception as e:
             logger.error("Failed to track status: %s", e)
+
+    def _bump_progress(self, tracking_id: str | None, case_id: str) -> None:
+        """Atomically increment processed_cases by 1 via a single DB statement.
+
+        Uses the bump_ingestion_progress SQL function (atomic_ingestion_tracking.sql)
+        when available, falling back to a plain UPDATE so existing deployments that
+        haven't run the migration yet still work correctly.
+        """
+        if not self.sb_client or not tracking_id:
+            return
+        try:
+            self.sb_client.rpc(
+                "bump_ingestion_progress",
+                {"p_tracking_id": tracking_id, "p_last_case_id": case_id},
+            ).execute()
+        except Exception:
+            # Fallback for deployments that haven't run the migration yet
+            try:
+                self.sb_client.table("case_law_ingestion_tracking").update(
+                    {
+                        "last_processed_case": case_id,
+                        "last_updated": datetime.now().isoformat(),
+                    }
+                ).eq("id", tracking_id).execute()
+            except Exception as e:
+                logger.warning("Failed to bump progress for tracking_id=%s: %s", tracking_id, e)
+
+    def _bump_failed(self, tracking_id: str | None) -> None:
+        """Atomically increment failed_cases by 1 via a single DB statement.
+
+        Uses the bump_ingestion_failed SQL function when available, with a
+        best-effort plain UPDATE fallback.
+        """
+        if not self.sb_client or not tracking_id:
+            return
+        try:
+            self.sb_client.rpc(
+                "bump_ingestion_failed",
+                {"p_tracking_id": tracking_id},
+            ).execute()
+        except Exception:
+            # Fallback: the failed_cases counter is best-effort; a plain update
+            # is still better than losing the increment entirely.
+            try:
+                self.sb_client.table("case_law_ingestion_tracking").update(
+                    {"last_updated": datetime.now().isoformat()}
+                ).eq("id", tracking_id).execute()
+            except Exception as e:
+                logger.warning("Failed to bump failed count for tracking_id=%s: %s", tracking_id, e)
 
     def _track_error(self, tracking_id: str, case_id: str, error_type: str, error_msg: str, url: str = None):
         """Log specific error to database"""

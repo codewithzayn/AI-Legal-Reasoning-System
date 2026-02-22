@@ -5,7 +5,7 @@ Each node represents a processing stage in the workflow
 
 import time
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from src.config.logging_config import setup_logger
@@ -52,6 +52,39 @@ _EU_LEGAL_MARKERS = (
 _LEGAL_TOPIC_MARKERS = LEGAL_TOPIC_KEYWORDS + _EU_LEGAL_MARKERS
 
 
+_GREETING_PATTERNS = frozenset(
+    {
+        "hello",
+        "hi",
+        "hey",
+        "hei",
+        "moi",
+        "hej",
+        "terve",
+        "moro",
+        "thanks",
+        "thank you",
+        "kiitos",
+        "tack",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "huomenta",
+        "iltaa",
+        "god morgon",
+        "who are you",
+        "kuka olet",
+        "vem är du",
+    }
+)
+
+
+def _is_greeting_or_thanks(query: str) -> bool:
+    """True for short greetings/thanks that should never trigger legal search."""
+    q = query.strip().lower().rstrip("!?.,")
+    return q in _GREETING_PATTERNS or len(q) <= 3
+
+
 def _is_obvious_legal_query(query: str) -> bool:
     """Fast path: skip LLM when query is clearly a legal question."""
     if not query or len(query.strip()) < 3:
@@ -66,6 +99,30 @@ def _has_legal_topic_keyword(query: str) -> bool:
         return False
     q = query.strip().lower()
     return any(m in q for m in _LEGAL_TOPIC_MARKERS)
+
+
+def _parse_intent_from_llm(raw: str) -> str:
+    """Extract a valid intent from potentially noisy LLM output.
+
+    Handles common variations: multi-line responses, quoted category names,
+    numbered prefixes (``1. legal_search``), and partial matches.
+    """
+    first_line = raw.strip().split("\n")[0].strip().lower()
+    first_line = first_line.strip("'\"` ")
+
+    valid_intents = {"legal_search", "general_chat", "clarification"}
+    if first_line in valid_intents:
+        return first_line
+
+    for intent in valid_intents:
+        if intent in first_line:
+            return intent
+
+    chat_synonyms = ("general", "chat", "greeting", "greet")
+    if any(s in first_line for s in chat_synonyms):
+        return "general_chat"
+
+    return "legal_search"
 
 
 def _query_may_be_follow_up(query: str, messages: list) -> bool:
@@ -197,6 +254,18 @@ async def analyze_intent(state: AgentState) -> AgentState:
         state["original_query"] = query
         state["search_attempts"] = 0
 
+    # 0. Fast exit for greetings — never waste LLM calls or search on "hello"
+    if _is_greeting_or_thanks(query):
+        logger.info("Intent: general_chat (greeting fast-path)")
+        return {
+            "intent": "general_chat",
+            "stage": "analyze",
+            "original_query": state.get("original_query", query),
+            "search_attempts": 0,
+            "year_start": None,
+            "year_end": None,
+        }
+
     # 1. FIRST: honour any already-resolved year clarification.
     #    Must run BEFORE the follow-up resolver so that short year replies
     #    (e.g. "2010-2020", "all") are not mutated into a legal search query.
@@ -217,8 +286,8 @@ async def analyze_intent(state: AgentState) -> AgentState:
     if obvious_result:
         return obvious_result
 
-    # 3. LLM Intent Analysis (Fallback)
-    logger.info("Analyzing intent...")
+    # 4. LLM Intent Analysis (Fallback)
+    logger.info("Analyzing intent via LLM...")
 
     system_prompt = """Classify the user's input into exactly one category:
     1. 'legal_search': Questions about Finnish law, court cases, penalties, rights, or legal definitions. Include ANY query that mentions a legal topic (fraud, contract, theft, consequences, damages, etc.).
@@ -226,16 +295,16 @@ async def analyze_intent(state: AgentState) -> AgentState:
     3. 'clarification': ONLY when there is NO identifiable legal subject at all (e.g. "What is the penalty?" with no context, "Does it apply?").
 
     If the user mentions a legal topic (fraud, petos, contract, theft, consequences, etc.), ALWAYS use legal_search. Do NOT ask for clarification when a legal topic is clear.
-    Return ONLY the category name.
+    Return ONLY the category name on a single line, nothing else.
     """
 
     try:
         response = await retry_async(
             lambda: _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
         )
-        intent = response.content.strip().lower()
-        if intent not in ["legal_search", "general_chat", "clarification"]:
-            intent = "legal_search"
+        raw_intent = response.content or ""
+        intent = _parse_intent_from_llm(raw_intent)
+        logger.info("LLM raw intent: %s → parsed: %s", raw_intent.strip()[:60], intent)
         if intent == "clarification" and _has_legal_topic_keyword(query):
             intent = "legal_search"
 
@@ -349,9 +418,17 @@ async def ask_clarification(state: AgentState) -> AgentState:
 
     try:
         prompt = _clarification_prompt(lang)
-        response = await retry_async(
-            lambda: _llm_mini.ainvoke([SystemMessage(content=prompt), HumanMessage(content=query)])
-        )
+        msgs = [SystemMessage(content=prompt)]
+        # Include recent conversation for context-aware clarification
+        for m in (state.get("messages") or [])[-6:]:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "user":
+                msgs.append(HumanMessage(content=content))
+            elif role == "assistant":
+                msgs.append(AIMessage(content=content))
+        msgs.append(HumanMessage(content=query))
+        response = await retry_async(lambda: _llm_mini.ainvoke(msgs))
         state["response"] = response.content
     except Exception:
         state["response"] = _clarification_fallback(lang)
@@ -387,9 +464,17 @@ async def general_chat(state: AgentState) -> AgentState:
 
     try:
         system_prompt = _general_chat_prompt(lang)
-        response = await retry_async(
-            lambda: _llm_mini.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=query)])
-        )
+        msgs = [SystemMessage(content=system_prompt)]
+        # Include recent conversation so the LLM can reference prior exchanges
+        for m in (state.get("messages") or [])[-6:]:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "user":
+                msgs.append(HumanMessage(content=content))
+            elif role == "assistant":
+                msgs.append(AIMessage(content=content))
+        msgs.append(HumanMessage(content=query))
+        response = await retry_async(lambda: _llm_mini.ainvoke(msgs))
         state["response"] = response.content
     except Exception:
         state["response"] = _general_chat_fallback(lang)
@@ -506,6 +591,35 @@ def _llm_error_fallback(lang: str) -> str:
     return fallbacks.get(lang, fallbacks["fi"])
 
 
+def _detect_client_doc_analysis(state: AgentState, results: list) -> bool:
+    """True when results contain client documents and the query references them."""
+    query_text = state.get("original_query", state["query"])
+    has_client_docs = any(r.get("case_id", "").startswith("CLIENT:") for r in results)
+    mentions_own = any(
+        p in query_text.lower() for p in ["my document", "my case", "my contract", "analyze this", "compare my"]
+    )
+    if has_client_docs and mentions_own:
+        logger.info("Detected CLIENT DOCUMENT ANALYSIS mode")
+    return has_client_docs and mentions_own
+
+
+async def _run_relevancy_check(state: AgentState, response: str) -> None:
+    """Run optional relevancy scoring and store results in state."""
+    is_error_response = response.startswith(("Pahoittelut", "Sorry", "Förlåt"))
+    if not config.RELEVANCY_CHECK_ENABLED or not response or is_error_response:
+        state["relevancy_score"] = None
+        state["relevancy_reason"] = None
+        return
+    try:
+        rel = await check_relevancy(state["query"], response)
+        state["relevancy_score"] = float(rel["score"])
+        state["relevancy_reason"] = rel.get("reason") or ""
+    except Exception as rel_err:
+        logger.warning("Relevancy check failed: %s", rel_err)
+        state["relevancy_score"] = None
+        state["relevancy_reason"] = None
+
+
 async def reason_legal(state: AgentState) -> AgentState:
     """
     Node 3: Legal reasoning with LLM (Async)
@@ -530,14 +644,13 @@ async def reason_legal(state: AgentState) -> AgentState:
     start_time = time.time()
     logger.info("Generating response from %s chunks...", len(results))
 
-    # Use the original (user-visible) query for case-ID extraction and LLM framing.
-    # The reformulated query is for retrieval only — the user should see answers
-    # phrased around what *they* actually asked.
     display_query = state.get("original_query") or state["query"]
-
     focus_case_ids = HybridRetrieval.extract_case_ids(display_query) if display_query else []
     if focus_case_ids:
         logger.info("Focus case(s) for answer: %s", focus_case_ids)
+
+    is_client_doc_analysis = _detect_client_doc_analysis(state, results)
+
     try:
         stream_queue = state.get("stream_queue")
         if stream_queue is not None:
@@ -549,6 +662,7 @@ async def reason_legal(state: AgentState) -> AgentState:
                     focus_case_ids=focus_case_ids or None,
                     response_language=lang,
                     conversation_history=state.get("messages") or None,
+                    is_client_doc_analysis=is_client_doc_analysis,
                 ):
                     response_parts.append(chunk)
                     await stream_queue.put(chunk)
@@ -563,25 +677,12 @@ async def reason_legal(state: AgentState) -> AgentState:
                 focus_case_ids=focus_case_ids or None,
                 response_language=lang,
                 conversation_history=state.get("messages") or None,
+                is_client_doc_analysis=is_client_doc_analysis,
             )
             state["response"] = response
         elapsed = time.time() - start_time
         logger.info("Response ready in %.1fs", elapsed)
-
-        # Relevancy check (optional, adds ~2-5s; set RELEVANCY_CHECK_ENABLED=true to enable)
-        is_error_response = response and response.startswith(("Pahoittelut", "Sorry", "Förlåt"))
-        if config.RELEVANCY_CHECK_ENABLED and response and not is_error_response:
-            try:
-                rel = await check_relevancy(state["query"], response)
-                state["relevancy_score"] = float(rel["score"])
-                state["relevancy_reason"] = rel.get("reason") or ""
-            except Exception as rel_err:
-                logger.warning("Relevancy check failed: %s", rel_err)
-                state["relevancy_score"] = None
-                state["relevancy_reason"] = None
-        else:
-            state["relevancy_score"] = None
-            state["relevancy_reason"] = None
+        await _run_relevancy_check(state, response)
     except Exception as e:
         logger.error("LLM error: %s", e)
         state["error"] = f"LLM generation failed: {e!s}"

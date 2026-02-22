@@ -36,10 +36,10 @@ class Config:
     FTS_SEARCH_TOP_K: int = int(os.getenv("FTS_SEARCH_TOP_K", "25"))
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "10"))
     # How many candidates to fetch before rerank; then how many to send to the LLM.
-    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "50"))
-    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "20"))
+    SEARCH_CANDIDATES_FOR_RERANK: int = int(os.getenv("SEARCH_CANDIDATES_FOR_RERANK", "75"))
+    CHUNKS_TO_LLM: int = int(os.getenv("CHUNKS_TO_LLM", "30"))
     # Max chunks per case after rerank. Lower = more unique cases for topic queries.
-    MAX_CHUNKS_PER_CASE: int = int(os.getenv("MAX_CHUNKS_PER_CASE", "3"))
+    MAX_CHUNKS_PER_CASE: int = int(os.getenv("MAX_CHUNKS_PER_CASE", "2"))
     # Max documents sent to Cohere reranker. Higher = better recall, slower.
     # 50 ensures deeper candidates still get a fair reranking.
     RERANK_MAX_DOCS: int = int(os.getenv("RERANK_MAX_DOCS", "50"))
@@ -112,6 +112,12 @@ class Config:
     # Query length limit (chars) - reject oversize queries to avoid abuse and cost
     MAX_QUERY_LENGTH: int = int(os.getenv("MAX_QUERY_LENGTH", "2000"))
 
+    # Document Upload Limits (client document ingestion)
+    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
+    MAX_UPLOAD_SIZE_BYTES: int = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    # Timeout for document ingestion per file (seconds). Extraction + embedding can be slow for large docs.
+    INGESTION_TIMEOUT_SECONDS: int = int(os.getenv("INGESTION_TIMEOUT_SECONDS", "300"))
+
     # EU Case Law (EUR-Lex CELLAR, CURIA, HUDOC)
     EU_CASE_LAW_ENABLED: bool = (os.getenv("EU_CASE_LAW_ENABLED", "false")).strip().lower() in ("true", "1", "yes")
     EURLEX_SPARQL_ENDPOINT: str = os.getenv(
@@ -120,6 +126,9 @@ class Config:
     EURLEX_REST_ENDPOINT: str = os.getenv("EURLEX_REST_ENDPOINT", "https://eur-lex.europa.eu/eurlex-ws/rest")
     CURIA_BASE_URL: str = os.getenv("CURIA_BASE_URL", "https://curia.europa.eu")
     HUDOC_API_URL: str = os.getenv("HUDOC_API_URL", "https://hudoc.echr.coe.int/app/query/results")
+
+    # Session lifetime (seconds). Default: 1 hour. Controls cookie max-age and idle timer.
+    SESSION_LIFETIME_SECONDS: int = int(os.getenv("SESSION_LIFETIME_SECONDS", "3600"))
 
     # Application base URL (for OAuth redirect callbacks).
     APP_BASE_URL: str = os.getenv("APP_BASE_URL", "http://localhost:8501").strip().rstrip("/")
@@ -159,6 +168,76 @@ def validate_env_for_app() -> None:
         cohere_key = os.getenv("COHERE_API_KEY", "").strip()
         if not cohere_key:
             raise SystemExit("RERANK_ENABLED=true but COHERE_API_KEY is missing. Set it or disable rerank.")
+
+
+def _validate_api_keys() -> list[str]:
+    """Check conditional API key requirements."""
+    errors: list[str] = []
+    if config.USE_AI_EXTRACTION and not os.getenv("OPENAI_API_KEY", "").strip():
+        errors.append("USE_AI_EXTRACTION=true requires OPENAI_API_KEY to be set.")
+    if config.RERANK_ENABLED and not os.getenv("COHERE_API_KEY", "").strip():
+        errors.append("RERANK_ENABLED=true requires COHERE_API_KEY to be set.")
+    if config.EU_CASE_LAW_ENABLED and not config.EURLEX_SPARQL_ENDPOINT:
+        errors.append("EU_CASE_LAW_ENABLED=true requires EURLEX_SPARQL_ENDPOINT to be set.")
+    return errors
+
+
+def _validate_numeric_ranges() -> list[str]:
+    """Check that numeric config values are within valid ranges."""
+    errors: list[str] = []
+    if not (0.0 < config.MATCH_THRESHOLD < 1.0):
+        errors.append(f"MATCH_THRESHOLD={config.MATCH_THRESHOLD} is out of range (0, 1).")
+    positive_fields = {
+        "CHUNK_SIZE": config.CHUNK_SIZE,
+        "CHUNK_MIN_SIZE": config.CHUNK_MIN_SIZE,
+        "VECTOR_SEARCH_TOP_K": config.VECTOR_SEARCH_TOP_K,
+        "FTS_SEARCH_TOP_K": config.FTS_SEARCH_TOP_K,
+        "RERANK_TOP_K": config.RERANK_TOP_K,
+        "CHUNKS_TO_LLM": config.CHUNKS_TO_LLM,
+        "LLM_MAX_TOKENS": config.LLM_MAX_TOKENS,
+        "LLM_REQUEST_TIMEOUT": config.LLM_REQUEST_TIMEOUT,
+        "EMBEDDING_DIMENSIONS": config.EMBEDDING_DIMENSIONS,
+        "MAX_QUERY_LENGTH": config.MAX_QUERY_LENGTH,
+        "MAX_UPLOAD_SIZE_MB": config.MAX_UPLOAD_SIZE_MB,
+        "INGESTION_TIMEOUT_SECONDS": config.INGESTION_TIMEOUT_SECONDS,
+    }
+    for name, value in positive_fields.items():
+        if value <= 0:
+            errors.append(f"{name}={value} must be > 0.")
+    if config.CHUNK_OVERLAP < 0:
+        errors.append(f"CHUNK_OVERLAP={config.CHUNK_OVERLAP} must be >= 0.")
+    if config.CHUNK_MIN_SIZE >= config.CHUNK_SIZE:
+        errors.append(f"CHUNK_MIN_SIZE={config.CHUNK_MIN_SIZE} must be < CHUNK_SIZE={config.CHUNK_SIZE}.")
+    return errors
+
+
+def _validate_cross_field() -> list[str]:
+    """Check cross-field constraints (model names, rerank/chunk limits)."""
+    errors: list[str] = []
+    for field, value in [
+        ("OPENAI_CHAT_MODEL", config.OPENAI_CHAT_MODEL),
+        ("OPENAI_SUPPORT_MODEL", config.OPENAI_SUPPORT_MODEL),
+        ("EXTRACTION_MODEL", config.EXTRACTION_MODEL),
+        ("EMBEDDING_MODEL", config.EMBEDDING_MODEL),
+    ]:
+        if not value or not value.strip():
+            errors.append(f"{field} must not be empty.")
+    if config.RERANK_MAX_DOCS < config.RERANK_TOP_K:
+        errors.append(f"RERANK_MAX_DOCS={config.RERANK_MAX_DOCS} must be >= RERANK_TOP_K={config.RERANK_TOP_K}.")
+    effective_candidates = (
+        config.RERANK_TOP_K if config.RERANK_ENABLED else (config.VECTOR_SEARCH_TOP_K + config.FTS_SEARCH_TOP_K)
+    )
+    if effective_candidates < config.CHUNKS_TO_LLM:
+        errors.append(f"CHUNKS_TO_LLM={config.CHUNKS_TO_LLM} exceeds effective candidates ({effective_candidates}).")
+    return errors
+
+
+def validate_config_dependencies() -> list[str]:
+    """
+    Validate cross-field config constraints and numeric ranges.
+    Returns a list of human-readable error strings (empty = all OK).
+    """
+    return _validate_api_keys() + _validate_numeric_ranges() + _validate_cross_field()
 
 
 # ============================================

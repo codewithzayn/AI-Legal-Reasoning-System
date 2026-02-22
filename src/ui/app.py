@@ -10,6 +10,7 @@ from pathlib import Path
 os.environ.setdefault("LOG_FORMAT", "simple")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 warnings.filterwarnings("ignore", message=".*(PyTorch|TensorFlow|Flax).*")
+warnings.filterwarnings("ignore", category=FutureWarning, module=r"google\.api_core")
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -17,20 +18,32 @@ import streamlit.components.v1 as components
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from datetime import datetime as _dt
+
 from src.agent.stream import stream_query_response
 from src.config.prompt_templates import get_templates_for_lang, get_workflow_categories
 from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR, config, validate_env_for_app
 from src.config.translations import LANGUAGE_OPTIONS, t
-from src.ui.auth import get_current_user_email, get_current_user_id, is_authenticated, render_auth_page, sign_out
+from src.ui.auth import (
+    get_current_user_email,
+    get_current_user_id,
+    is_authenticated,
+    render_auth_page,
+    sign_out,
+    sync_session_to_storage,
+    try_restore_from_cookies,
+)
 from src.ui.chat_pdf_export import generate_chat_pdf
 from src.ui.citations import render_assistant_message
 from src.ui.conversation_store import delete_conversation, list_conversations, load_conversation, save_conversation
-from src.ui.feedback import render_feedback_buttons
+from src.ui.feedback import delete_feedback_for_conversation, render_feedback_buttons
 from src.ui.ingestion import render_ingestion_sidebar
 from src.ui.suggestions import render_suggestions
 from src.utils.chat_helpers import add_message, clear_chat_history, get_chat_history, initialize_chat_history
 from src.utils.query_context import resolve_query_with_context
 from src.utils.year_llm import interpret_year_reply_sync
+
+_CURRENT_YEAR = _dt.now().year
 
 # ---------------------------------------------------------------------------
 #  Theme palettes — Light (default) + Dark
@@ -254,17 +267,23 @@ def _inject_custom_css() -> None:
                 color: {theme["text"]} !important;
             }}
 
-            /* ── D2: Layout wrappers → dark bg ── */
-            .main, .main > div, .main > div > div,
+            /* ── D2: Layout wrappers → transparent (inherit dark bg from root) ── */
+            .main, .main > div, .main > div > div, .main > div > div > div,
             [data-testid="stAppViewContainer"],
             [data-testid="stAppViewContainer"] > div,
             [data-testid="stAppViewContainer"] > div > div,
             [data-testid="stAppViewContainer"] > div > div > div,
+            [data-testid="stMain"],
+            [data-testid="stMain"] > div,
+            [data-testid="stMainBlockContainer"],
+            [data-testid="stMainBlockContainer"] > div,
             .block-container, .block-container > div,
             .block-container > div > div, .block-container > div > div > div,
             [data-testid="stVerticalBlock"],
             [data-testid="stVerticalBlock"] > div,
             [data-testid="stVerticalBlock"] > div > div,
+            [data-testid="stVerticalBlockBorderWrapper"],
+            [data-testid="stVerticalBlockBorderWrapper"] > div,
             [data-testid="stHorizontalBlock"],
             [data-testid="stHorizontalBlock"] > div,
             [data-testid="stHorizontalBlock"] > div > div,
@@ -274,10 +293,13 @@ def _inject_custom_css() -> None:
             .element-container,
             .element-container > div,
             .element-container > div > div,
+            .stMarkdown, .stMarkdown > div,
             .stButton, .stButton > div,
-            header[data-testid="stHeader"] {{
-                background-color: {theme["bg"]} !important;
-                background: {theme["bg"]} !important;
+            header[data-testid="stHeader"],
+            [data-testid="stForm"],
+            [data-testid="stForm"] > div {{
+                background-color: transparent !important;
+                background: transparent !important;
             }}
             /* ── D2b: Bottom input bar wrappers ── */
             [data-testid="stBottom"],
@@ -371,10 +393,19 @@ def _inject_custom_css() -> None:
                 background: {theme["surface"]} !important;
                 background-color: {theme["surface"]} !important;
                 color: {theme["text"]} !important;
-                border-color: {theme["border"]} !important;
+                border: 1.5px solid {theme["border"]} !important;
+            }}
+            .stButton > button[kind="secondary"]:hover {{
+                background: {theme["accent_soft"]} !important;
+                background-color: {theme["accent_soft"]} !important;
+                border-color: {theme["accent"]} !important;
             }}
             .stButton > button[kind="primary"] {{
                 background: linear-gradient(135deg, {theme["accent"]} 0%, {theme["primary"]} 100%) !important;
+            }}
+            [data-testid="stFormSubmitButton"] button {{
+                background: linear-gradient(135deg, {theme["accent"]} 0%, {theme["primary"]} 100%) !important;
+                color: white !important;
             }}
 
             /* ── D7: Inputs ── */
@@ -438,6 +469,111 @@ def _inject_custom_css() -> None:
             /* ── D9: Send button in chat input ── */
             [data-testid="stChatInput"] button {{
                 background: linear-gradient(135deg, {theme["accent"]} 0%, {theme["primary"]} 100%) !important;
+            }}
+
+            /* ── D10: Forms, expanders, and tabs ── */
+            .stForm, .stForm > div {{
+                background: {theme["bg"]} !important;
+                background-color: {theme["bg"]} !important;
+            }}
+            [data-testid="stExpander"] summary {{
+                color: {theme["text"]} !important;
+            }}
+            [data-testid="stExpander"] > div > div {{
+                background: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            .stTabs, .stTabs > div,
+            [data-baseweb="tab-list"],
+            [data-baseweb="tab-panel"] {{
+                background: {theme["bg"]} !important;
+                background-color: {theme["bg"]} !important;
+            }}
+            [data-baseweb="tab"] {{
+                color: {theme["text"]} !important;
+            }}
+
+            /* ── D11: Remaining white-bg widgets ── */
+            .stMultiSelect, .stMultiSelect > div,
+            .stMultiSelect > div > div,
+            .stTextInput > div > div > input,
+            .stNumberInput > div > div > input {{
+                background: {theme["input_bg"]} !important;
+                background-color: {theme["input_bg"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            .stRadio > div[role="radiogroup"] {{
+                background: {theme["surface"]} !important;
+            }}
+            .stCheckbox label span {{
+                color: {theme["text"]} !important;
+            }}
+
+            /* ── D12: Code blocks and markdown containers ── */
+            .stCodeBlock, pre, code {{
+                background: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            .stAlert {{
+                background: {theme["surface"]} !important;
+            }}
+
+            /* ── D13: File uploader, drag-drop zone ── */
+            .stFileUploader, .stFileUploader > div,
+            .stFileUploader section,
+            .stFileUploader [data-testid="stFileUploaderDropzone"] {{
+                background: {theme["surface"]} !important;
+                background-color: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+                border: 1.5px solid {theme["border"]} !important;
+                border-radius: 10px !important;
+            }}
+            .stFileUploader label,
+            .stFileUploader small,
+            .stFileUploader span {{
+                color: {theme["text"]} !important;
+            }}
+            .stFileUploader button {{
+                background: {theme["surface"]} !important;
+                background-color: {theme["surface"]} !important;
+                color: {theme["text"]} !important;
+                border: 1.5px solid {theme["border"]} !important;
+                border-radius: 8px !important;
+            }}
+            .stFileUploader button:hover {{
+                border-color: {theme["accent"]} !important;
+                background: {theme["accent_soft"]} !important;
+            }}
+
+            /* ── D14: Tabs (main + sidebar ingestion) ── */
+            .stTabs > div,
+            [data-baseweb="tab-list"],
+            [data-baseweb="tab-panel"],
+            [data-baseweb="tab-panel"] > div {{
+                background: transparent !important;
+                background-color: transparent !important;
+            }}
+            [data-baseweb="tab"] {{
+                color: {theme["text"]} !important;
+                background: transparent !important;
+            }}
+            [data-baseweb="tab"][aria-selected="true"] {{
+                color: {theme["accent"]} !important;
+            }}
+
+            /* ── D15: Text input wrappers only (not buttons) ── */
+            .stTextInput > div,
+            .stTextInput > div > div {{
+                background: transparent !important;
+                background-color: transparent !important;
+            }}
+
+            /* ── D16: Catch remaining white-bg wrapper divs ── */
+            [data-testid="stMainBlockContainer"],
+            [data-testid="stMain"],
+            [data-testid="stMainBlockContainer"] > div {{
+                background: {theme["bg"]} !important;
+                background-color: {theme["bg"]} !important;
             }}
         """
 
@@ -857,6 +993,32 @@ def _is_year_clarification_message(msg: str, lang: str) -> bool:
     return any(t("year_clarification", code).strip() in content for code in ("en", "fi", "sv"))
 
 
+_CLARIFICATION_MARKERS = (
+    "clarif",
+    "which years",
+    "what specific",
+    "could you",
+    "please clarify",
+    "tarkentaa",
+    "förtydliga",
+    "tarkenna",
+    "vilka år",
+    "miltä vuosi",
+)
+
+
+def _is_clarification_response(msg: str, lang: str) -> bool:
+    """True if the assistant message is a clarification question, not a substantive answer."""
+    if _is_year_clarification_message(msg, lang):
+        return True
+    content = (msg or "").strip().lower()
+    if not content:
+        return False
+    short_with_question_mark = len(content) < 180 and "?" in content
+    has_clarification_marker = any(m in content for m in _CLARIFICATION_MARKERS)
+    return short_with_question_mark or has_clarification_marker
+
+
 def _get_sidebar_filters() -> dict:
     """Read current sidebar filter values from session state."""
     filters = {}
@@ -871,6 +1033,46 @@ def _get_sidebar_filters() -> dict:
         if domains:
             filters["legal_domains"] = list(domains)
     return filters
+
+
+def _looks_like_year_reply(text: str) -> bool:
+    """True if the user's message is a year-range answer or 'all', not a legal question."""
+    stripped = text.strip().lower()
+    _year_reply_markers = (
+        "all",
+        "all years",
+        "any year",
+        "no filter",
+        "every year",
+        "kaikki",
+        "kaikki vuodet",
+        "ei rajoitusta",
+        "alla",
+        "alla år",
+        "allt",
+    )
+    if stripped in _year_reply_markers:
+        return True
+    from src.utils.year_filter import extract_year_range
+
+    yr = extract_year_range(text)
+    return bool(yr[0] is not None and len(stripped) < 40)
+
+
+def _find_original_legal_question(chat_history: list[dict]) -> str | None:
+    """Walk backwards through chat history to find the most recent user legal question."""
+    for i in range(len(chat_history) - 1, -1, -1):
+        msg = chat_history[i]
+        if msg.get("role") != "user":
+            continue
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        if _looks_like_year_reply(content):
+            continue
+        if len(content) > 10:
+            return content
+    return None
 
 
 def _process_prompt(prompt: str) -> None:
@@ -890,6 +1092,12 @@ def _process_prompt(prompt: str) -> None:
             original_query = prev_msg.get("content", "").strip()
             year_range = interpret_year_reply_sync(prompt)
 
+    if original_query is None and _looks_like_year_reply(prompt):
+        legal_question = _find_original_legal_question(chat_history)
+        if legal_question:
+            original_query = legal_question
+            year_range = interpret_year_reply_sync(prompt)
+
     if original_query is None:
         effective_query, ctx_year = resolve_query_with_context(prompt, chat_history)
         if ctx_year is not None or effective_query != prompt:
@@ -905,7 +1113,7 @@ def _process_prompt(prompt: str) -> None:
     # Override year range from filters if set and no year clarification in progress
     if original_query is None and "year_range" in filters:
         yr_filter = filters["year_range"]
-        if yr_filter[0] != 1926 or yr_filter[1] != 2026:
+        if yr_filter[0] != 1926 or yr_filter[1] != _CURRENT_YEAR:
             year_range = yr_filter
             original_query = prompt
 
@@ -1038,22 +1246,17 @@ def main():
     if "dark_mode" not in st.session_state:
         st.session_state.dark_mode = False
 
+    # Restore session from cookies BEFORE rendering anything (no flash)
+    if not is_authenticated():
+        try_restore_from_cookies()
+
     # Auth gate: show login page if not authenticated
     if not is_authenticated():
         render_auth_page(st.session_state.lang)
         return
 
-    # Set user_id and tenant_id from authenticated user
-    user_id = get_current_user_id()
-    st.session_state.user_id = user_id
-    if "tenant_id" not in st.session_state or st.session_state.tenant_id is None:
-        st.session_state.tenant_id = user_id
-
-    # Handle OAuth callback before any rendering (Drive/OneDrive)
-    _handle_oauth_callback()
-
+    # Page config must be the first Streamlit render command in the auth path.
     lang = _get_lang()
-
     st.set_page_config(
         page_title=t("page_title", lang),
         page_icon=PAGE_CONFIG["page_icon"],
@@ -1061,9 +1264,46 @@ def main():
         initial_sidebar_state=PAGE_CONFIG["initial_sidebar_state"],
     )
 
+    # Set user_id and tenant_id from authenticated user
+    user_id = get_current_user_id()
+    st.session_state.user_id = user_id
+    if "tenant_id" not in st.session_state or st.session_state.tenant_id is None:
+        st.session_state.tenant_id = user_id
+
+    # Persist session tokens to cookies + localStorage (survives page reloads)
+    sync_session_to_storage()
+
+    # Strip auth tokens from URL so they never stay visible in the address bar
+    _token_params = {"access_token", "refresh_token", "expires_at", "expires_in", "token_type", "type", "_sat", "_srt"}
+    if _token_params & set(st.query_params.keys()):
+        st.query_params.clear()
+
+    # Handle OAuth callback before any rendering (Drive/OneDrive)
+    _handle_oauth_callback()
+
     _inject_custom_css()
     _inject_toggle_fix()
     _inject_keyboard_shortcuts()
+
+    # Clean up any auth hash fragment that might still be in the address bar.
+    # Also start an idle-session timer: when the cookie expires (SESSION_LIFETIME_SECONDS)
+    # the page reloads automatically so the user gets the sign-in screen
+    # without having to manually refresh.
+    from src.ui.auth import SESSION_LIFETIME_SECONDS as _SLT
+
+    components.html(
+        "<script>"
+        "if(window.parent.location.hash.indexOf('access_token')!==-1)"
+        "{window.parent.history.replaceState(null,'',window.parent.location.pathname)}"
+        "if(!window.parent._lexaiIdleTimer){"
+        f"window.parent._lexaiIdleTimer=setTimeout(function(){{try{{window.parent.location.reload()}}catch(e){{}}}},{_SLT * 1000});"
+        "window.parent.addEventListener('click',function(){"
+        "clearTimeout(window.parent._lexaiIdleTimer);"
+        f"window.parent._lexaiIdleTimer=setTimeout(function(){{try{{window.parent.location.reload()}}catch(e){{}}}},{_SLT * 1000})"
+        "})}"
+        "</script>",
+        height=0,
+    )
 
     # LexAI branded header with scales icon + user email top-right
     import html as _html
@@ -1156,22 +1396,22 @@ def _render_chat_or_welcome(chat_history: list, lang: str) -> None:
                         _, sources = parse_response_and_sources(message["content"])
                         _render_source_cards(sources, idx, lang, theme)
 
-                    # Download response as PDF
-                    response_pdf = generate_chat_pdf(
-                        [
-                            {"role": "user", "content": last_user_query},
-                            {"role": "assistant", "content": message["content"]},
-                        ],
-                        title=t("export_pdf_title", lang),
-                    )
-                    pdf_filename = _build_pdf_filename(last_user_query)
-                    st.download_button(
-                        label=f"\U0001f4e5 {t('export_pdf', lang)}",
-                        data=response_pdf,
-                        file_name=pdf_filename,
-                        mime="application/pdf",
-                        key=f"dl_pdf_{idx}",
-                    )
+                    if not _is_clarification_response(message["content"], lang):
+                        response_pdf = generate_chat_pdf(
+                            [
+                                {"role": "user", "content": last_user_query},
+                                {"role": "assistant", "content": message["content"]},
+                            ],
+                            title=t("export_pdf_title", lang),
+                        )
+                        pdf_filename = _build_pdf_filename(last_user_query)
+                        st.download_button(
+                            label=f"\U0001f4e5 {t('export_pdf', lang)}",
+                            data=response_pdf,
+                            file_name=pdf_filename,
+                            mime="application/pdf",
+                            key=f"dl_pdf_{idx}",
+                        )
 
                     render_feedback_buttons(message["content"], last_user_query, lang, idx)
                 else:
@@ -1254,8 +1494,8 @@ def _render_sidebar_filters(lang: str) -> None:
     st.slider(
         t("filter_year_range", lang),
         min_value=1926,
-        max_value=2026,
-        value=st.session_state.get("filter_year_range", (1926, 2026)),
+        max_value=_CURRENT_YEAR,
+        value=st.session_state.get("filter_year_range", (1926, _CURRENT_YEAR)),
         key="filter_year_range",
     )
     st.multiselect(
@@ -1298,9 +1538,12 @@ def _render_sidebar_conversations(lang: str) -> None:
                     st.rerun()
         with col_del:
             if st.button("\U0001f5d1\ufe0f", key=f"del_conv_{conv_id}", help=t("delete", lang)):
+                delete_feedback_for_conversation(conv_id)
                 delete_conversation(conv_id)
                 if st.session_state.get("current_conversation_id") == conv_id:
                     st.session_state.current_conversation_id = None
+                    clear_chat_history()
+                    _clear_session_caches()
                 st.rerun()
 
 
@@ -1395,21 +1638,6 @@ def _render_sidebar(lang: str, chat_history: list) -> None:
         render_ingestion_sidebar(lang, st.session_state.get("tenant_id"))
         _render_sidebar_filters(lang)
         st.markdown("---")
-
-        def _on_sidebar_lang_change():
-            label = st.session_state.lang_selector
-            st.session_state.lang = LANGUAGE_OPTIONS.get(label, st.session_state.lang)
-
-        lang_labels = list(LANGUAGE_OPTIONS.keys())
-        lang_values = list(LANGUAGE_OPTIONS.values())
-        current_idx = lang_values.index(lang) if lang in lang_values else 0
-        st.selectbox(
-            t("language", lang),
-            lang_labels,
-            index=current_idx,
-            key="lang_selector",
-            on_change=_on_sidebar_lang_change,
-        )
 
         st.markdown("---")
 

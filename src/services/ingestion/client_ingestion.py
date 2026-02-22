@@ -1,8 +1,10 @@
 """
 Client Document Ingestion Service
 Orchestrates: download/upload → extract → chunk → embed → store with tenant_id.
+Async pipeline with progress callbacks for UI.
 """
 
+import asyncio
 import hashlib
 import uuid
 
@@ -30,7 +32,7 @@ class ClientIngestionService:
         self._embedder = DocumentEmbedder()
         self._storage = ClientDocumentStorage()
 
-    def ingest_bytes(
+    async def aingest_bytes(
         self,
         tenant_id: str,
         file_bytes: bytes,
@@ -39,7 +41,7 @@ class ClientIngestionService:
         source_file_id: str | None = None,
         on_progress: callable = None,
     ) -> dict:
-        """Ingest a document from raw bytes.
+        """Async ingest a document from raw bytes.
 
         Args:
             tenant_id: Tenant identifier.
@@ -47,50 +49,105 @@ class ClientIngestionService:
             filename: Original filename.
             source_provider: 'upload', 'google_drive', or 'onedrive'.
             source_file_id: External file ID (from drive). Auto-generated if None.
-            on_progress: Optional callback(stage: str, pct: float) for UI progress.
+            on_progress: Optional async callback(stage: str, pct: float) for UI progress.
 
         Returns:
             Dict with 'case_law_id', 'chunks_count', 'status'.
+
+        Raises:
+            ValueError: If file size exceeds MAX_UPLOAD_SIZE_MB.
+            asyncio.TimeoutError: If ingestion exceeds INGESTION_TIMEOUT_SECONDS.
         """
         file_id = source_file_id or str(uuid.uuid4())
 
-        def _progress(stage: str, pct: float) -> None:
+        async def _progress(stage: str, pct: float) -> None:
             if on_progress:
-                on_progress(stage, pct)
+                if asyncio.iscoroutinefunction(on_progress):
+                    await on_progress(stage, pct)
+                else:
+                    on_progress(stage, pct)
 
+        # Check file size before processing
+        file_size_mb = len(file_bytes) / (1024 * 1024)
+        if file_size_mb > config.MAX_UPLOAD_SIZE_MB:
+            logger.error(
+                "Document %s exceeds max size: %.2f MB > %d MB", filename, file_size_mb, config.MAX_UPLOAD_SIZE_MB
+            )
+            raise ValueError(
+                f"Document exceeds maximum size of {config.MAX_UPLOAD_SIZE_MB} MB (got {file_size_mb:.2f} MB)"
+            )
+
+        try:
+            # Wrap the entire pipeline with timeout
+            return await asyncio.wait_for(
+                self._execute_ingestion_pipeline(tenant_id, file_bytes, filename, source_provider, file_id, _progress),
+                timeout=config.INGESTION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as err:
+            logger.error("Ingestion timeout for %s after %d seconds", filename, config.INGESTION_TIMEOUT_SECONDS)
+            raise asyncio.TimeoutError(
+                f"Document ingestion exceeded timeout of {config.INGESTION_TIMEOUT_SECONDS} seconds"
+            ) from err
+
+    async def _execute_ingestion_pipeline(
+        self,
+        tenant_id: str,
+        file_bytes: bytes,
+        filename: str,
+        source_provider: str,
+        file_id: str,
+        _progress: callable,
+    ) -> dict:
+        """Internal pipeline execution (extracted for timeout wrapping)."""
         # Step 1: Check idempotency via content hash
-        _progress("hashing", 0.05)
+        await _progress("hashing", 0.05)
         content_hash = hashlib.sha256(file_bytes).hexdigest()
-        if self._storage.document_exists(tenant_id, content_hash):
+        doc_exists = await asyncio.to_thread(self._storage.document_exists, tenant_id, content_hash)
+        if doc_exists:
             logger.info("Document already ingested (hash match): %s", filename)
             return {"case_law_id": None, "chunks_count": 0, "status": "already_exists"}
 
-        # Step 2: Extract text
-        _progress("extracting", 0.15)
+        # Step 2: Extract text (PHASE 1: with quality metrics)
+        await _progress("extracting", 0.15)
         logger.info("Extracting text from %s (%s bytes)...", filename, len(file_bytes))
-        result = self._extractor.extract_from_bytes(file_bytes, filename)
+        result = await asyncio.to_thread(self._extractor.extract_from_bytes, file_bytes, filename)
         text = result.get("text", "")
         if not text.strip():
             logger.warning("No text extracted from %s", filename)
             return {"case_law_id": None, "chunks_count": 0, "status": "empty_document"}
 
+        # PHASE 1: Log extraction quality
+        extraction_confidence = result.get("extraction_confidence", 0.85)
+        completeness_score = result.get("completeness_score", 0.80)
+        extraction_warnings = result.get("warnings", [])
+        has_quality_issues = extraction_confidence < 0.75 or completeness_score < 0.65
+
+        logger.info(
+            "Extraction quality: confidence=%.2f, completeness=%.2f, warnings=%s",
+            extraction_confidence,
+            completeness_score,
+            extraction_warnings,
+        )
+        if has_quality_issues:
+            logger.warning("Document has quality issues and may require manual review")
+
         # Step 3: Chunk
-        _progress("chunking", 0.35)
+        await _progress("chunking", 0.35)
         logger.info("Chunking %s characters...", len(text))
-        chunks = self._chunker.chunk_document(text, document_title=filename)
+        chunks = await asyncio.to_thread(self._chunker.chunk_document, text, filename)
         if not chunks:
             logger.warning("No chunks produced from %s", filename)
             return {"case_law_id": None, "chunks_count": 0, "status": "no_chunks"}
         logger.info("Produced %s chunks", len(chunks))
 
         # Step 4: Embed
-        _progress("embedding", 0.55)
+        await _progress("embedding", 0.55)
         logger.info("Embedding %s chunks...", len(chunks))
-        embedded = self._embedder.embed_chunks(chunks)
+        embedded = await asyncio.to_thread(self._embedder.embed_chunks, chunks)
         logger.info("Embedded %s chunks", len(embedded))
 
-        # Step 5: Store with tenant_id
-        _progress("storing", 0.80)
+        # Step 5: Store with tenant_id (non-blocking)
+        await _progress("storing", 0.80)
         chunk_dicts = [
             {
                 "text": ec.text,
@@ -102,23 +159,52 @@ class ClientIngestionService:
             for ec in embedded
         ]
 
-        case_law_id = self._storage.upsert_document(
-            tenant_id=tenant_id,
-            file_id=file_id,
-            file_name=filename,
-            text=text,
-            chunks=chunk_dicts,
-            content_hash=content_hash,
-            source_provider=source_provider,
+        # PHASE 1 & 2: Pass quality metrics to storage (in thread)
+        case_law_id = await asyncio.to_thread(
+            self._storage.upsert_document,
+            tenant_id,
+            file_id,
+            filename,
+            text,
+            chunk_dicts,
+            content_hash,
+            source_provider,
+            extraction_confidence,
+            completeness_score,
+            has_quality_issues,
         )
 
-        _progress("done", 1.0)
+        await _progress("done", 1.0)
         logger.info("Ingestion complete: %s → %s chunks, case_law_id=%s", filename, len(chunks), case_law_id)
         return {
             "case_law_id": case_law_id,
             "chunks_count": len(chunks),
             "status": "completed",
+            "extraction_confidence": extraction_confidence,
+            "completeness_score": completeness_score,
+            "requires_review": has_quality_issues,
         }
+
+    def ingest_bytes(
+        self,
+        tenant_id: str,
+        file_bytes: bytes,
+        filename: str,
+        source_provider: str = "upload",
+        source_file_id: str | None = None,
+        on_progress: callable = None,
+    ) -> dict:
+        """Sync wrapper for aingest_bytes (for backward compatibility).
+
+        NOTE: For new code, use aingest_bytes() instead.
+        """
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                self.aingest_bytes(tenant_id, file_bytes, filename, source_provider, source_file_id, on_progress)
+            )
+        finally:
+            loop.close()
 
     def get_tenant_documents(self, tenant_id: str) -> list[dict]:
         """List all ingested documents for a tenant."""

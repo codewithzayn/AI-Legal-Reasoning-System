@@ -316,7 +316,19 @@ def _render_drive_file_picker(
 
 
 def _ingest_uploaded_file(uploaded, tenant_id: str, lang: str) -> None:
-    """Ingest an uploaded file."""
+    """Ingest an uploaded file with size validation and error handling."""
+    from src.config.settings import config
+
+    # Check file size before processing
+    file_size_mb = len(uploaded.getvalue()) / (1024 * 1024)
+    if file_size_mb > config.MAX_UPLOAD_SIZE_MB:
+        st.error(
+            f"{t('ingestion_error', lang)}: "
+            f"File exceeds maximum size of {config.MAX_UPLOAD_SIZE_MB} MB (got {file_size_mb:.2f} MB)"
+        )
+        logger.error("Upload rejected: %s exceeds max size (%.2f MB)", uploaded.name, file_size_mb)
+        return
+
     progress = st.progress(0, text=t("ingestion_progress_start", lang))
 
     def on_progress(stage: str, pct: float) -> None:
@@ -348,13 +360,32 @@ def _ingest_uploaded_file(uploaded, tenant_id: str, lang: str) -> None:
             st.info(t("ingestion_already_exists", lang))
         else:
             st.warning(t("ingestion_empty", lang))
+    except ValueError as e:
+        logger.error("Ingestion validation failed: %s", e)
+        st.error(f"{t('ingestion_error', lang)}: {e}")
+    except TimeoutError as e:
+        logger.error("Ingestion timeout: %s", e)
+        st.error(f"Ingestion timeout: {e}")
     except Exception as e:
         logger.error("Ingestion failed: %s", e)
         st.error(f"{t('ingestion_error', lang)}: {e}")
 
 
 def _ingest_drive_file(file_info: dict, access_token: str, provider: str, tenant_id: str, lang: str) -> None:
-    """Download and ingest a file from a cloud drive."""
+    """Download and ingest a file from a cloud drive with size validation and error handling."""
+    from src.config.settings import config
+
+    # Check file size before downloading (use size from file_info if available)
+    if "size" in file_info:
+        file_size_mb = file_info["size"] / (1024 * 1024)
+        if file_size_mb > config.MAX_UPLOAD_SIZE_MB:
+            st.error(
+                f"{t('ingestion_error', lang)}: "
+                f"File exceeds maximum size of {config.MAX_UPLOAD_SIZE_MB} MB (got {file_size_mb:.2f} MB)"
+            )
+            logger.error("Drive file rejected: %s exceeds max size (%.2f MB)", file_info["name"], file_size_mb)
+            return
+
     progress = st.progress(0, text=t("ingestion_progress_start", lang))
 
     def on_progress(stage: str, pct: float) -> None:
@@ -372,6 +403,16 @@ def _ingest_drive_file(file_info: dict, access_token: str, provider: str, tenant
         connector = _get_connector(provider)
         progress.progress(0.05, text="Downloading...")
         file_bytes = connector.download_file(access_token, file_info["id"])
+
+        # Double-check actual downloaded size
+        file_size_mb = len(file_bytes) / (1024 * 1024)
+        if file_size_mb > config.MAX_UPLOAD_SIZE_MB:
+            st.error(
+                f"{t('ingestion_error', lang)}: "
+                f"Downloaded file exceeds maximum size of {config.MAX_UPLOAD_SIZE_MB} MB (got {file_size_mb:.2f} MB)"
+            )
+            logger.error("Downloaded file rejected: %s exceeds max size (%.2f MB)", file_info["name"], file_size_mb)
+            return
 
         from src.services.ingestion.client_ingestion import ClientIngestionService
 
@@ -391,6 +432,12 @@ def _ingest_drive_file(file_info: dict, access_token: str, provider: str, tenant
             st.info(t("ingestion_already_exists", lang))
         else:
             st.warning(t("ingestion_empty", lang))
+    except ValueError as e:
+        logger.error("Drive ingestion validation failed: %s", e)
+        st.error(f"{t('ingestion_error', lang)}: {e}")
+    except TimeoutError as e:
+        logger.error("Drive ingestion timeout: %s", e)
+        st.error(f"Ingestion timeout: {e}")
     except Exception as e:
         logger.error("Drive ingestion failed: %s", e)
         st.error(f"{t('ingestion_error', lang)}: {e}")
