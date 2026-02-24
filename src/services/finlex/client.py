@@ -67,7 +67,7 @@ class FinlexAPI:
         Returns:
             List of documents with akn_uri and status
         """
-        url = f"{self.BASE_URL}/akn/fi/{doc_type}/{category}/list"
+        url = f"{self.BASE_URL}/akn/fi/{category}/{doc_type}/list"
 
         params = {"startYear": year, "page": page, "limit": limit}
 
