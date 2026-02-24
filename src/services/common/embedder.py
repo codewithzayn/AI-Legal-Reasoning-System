@@ -20,7 +20,7 @@ class EmbeddedChunk:
     """Chunk with embedding"""
 
     text: str
-    embedding: list[float]
+    embedding: list[float] | None  # None if oversized or embedding failed
     chunk_index: int
     section_number: str
     metadata: dict
@@ -66,9 +66,10 @@ class DocumentEmbedder:
             batch_size: Number of chunks to process at once
 
         Returns:
-            List of EmbeddedChunk objects with embeddings
+            List of EmbeddedChunk objects with embeddings (None if oversized)
         """
         embedded_chunks = []
+        oversized_count = 0
 
         # Process in batches
         for i in range(0, len(chunks), batch_size):
@@ -79,19 +80,44 @@ class DocumentEmbedder:
 
             # Generate embeddings
             logger.info("Generating embeddings for batch %s (%s chunks)...", i // batch_size + 1, len(batch))
-            response = self.client.embeddings.create(model=self.model, input=texts)
+            try:
+                response = self.client.embeddings.create(model=self.model, input=texts)
 
-            # Combine chunks with embeddings
-            for chunk, embedding_obj in zip(batch, response.data, strict=True):
-                embedded_chunks.append(
-                    EmbeddedChunk(
-                        text=chunk.text,
-                        embedding=embedding_obj.embedding,
-                        chunk_index=chunk.chunk_index,
-                        section_number=chunk.section_number,
-                        metadata=chunk.metadata,
+                # Combine chunks with embeddings
+                for chunk, embedding_obj in zip(batch, response.data, strict=True):
+                    embedded_chunks.append(
+                        EmbeddedChunk(
+                            text=chunk.text,
+                            embedding=embedding_obj.embedding,
+                            chunk_index=chunk.chunk_index,
+                            section_number=chunk.section_number,
+                            metadata=chunk.metadata,
+                        )
                     )
-                )
+            except Exception as e:
+                # Handle oversized chunks: skip embedding but keep chunk for FTS/Phase1
+                error_msg = str(e)
+                if "maximum context length" in error_msg or "too long" in error_msg.lower():
+                    logger.warning(
+                        "⚠️  Batch oversized (token limit exceeded), skipping embeddings but keeping chunks for FTS"
+                    )
+                    for chunk in batch:
+                        oversized_count += 1
+                        embedded_chunks.append(
+                            EmbeddedChunk(
+                                text=chunk.text,
+                                embedding=None,  # No embedding
+                                chunk_index=chunk.chunk_index,
+                                section_number=chunk.section_number,
+                                metadata=chunk.metadata,
+                            )
+                        )
+                else:
+                    logger.error("❌ Embedding error: %s", error_msg)
+                    raise
+
+        if oversized_count > 0:
+            logger.info("ℹ️  %s chunks skipped embedding (too large) - still searchable via FTS", oversized_count)
 
         return embedded_chunks
 
