@@ -55,6 +55,25 @@ class FinlexIngestionService:
             if pdf_metadata:
                 chunk.metadata.update(pdf_metadata[0])
 
+    def _enrich_chunks_with_phase1_data(self, chunks, parsed) -> None:
+        """Attach Phase 1 structured legal intelligence to each chunk.
+
+        This enriches chunks with:
+        - definitions: Key terms and definitions from statute
+        - cross_references: References to other statutes
+        - temporal_scope: Effective dates, entry into force
+        - amendments: What changed (insertions, repeals, substitutions)
+        """
+        phase1_data = {
+            "definitions": parsed.get("definitions", []),
+            "cross_references": parsed.get("cross_references", []),
+            "temporal_scope": parsed.get("temporal_scope", {}),
+            "amendments": parsed.get("amendments", {}),
+        }
+
+        for chunk in chunks:
+            chunk.metadata.update(phase1_data)
+
     async def process_document(
         self,
         document_uri: str,
@@ -114,6 +133,8 @@ class FinlexIngestionService:
                 attachments=parsed.get("attachments", []),
             )
             self._enrich_chunks_with_pdf_metadata(chunks, parsed)
+            # Phase 1: Add structured legal intelligence to chunks
+            self._enrich_chunks_with_phase1_data(chunks, parsed)
             embedded_chunks = self.embedder.embed_chunks(chunks)
             stored_count = self.storage.store_chunks(embedded_chunks)
 

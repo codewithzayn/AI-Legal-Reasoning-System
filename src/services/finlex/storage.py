@@ -51,22 +51,26 @@ class SupabaseStorage:
         # Prepare data for insertion
         rows = []
         for ec in embedded_chunks:
-            rows.append(
-                {
-                    "document_uri": ec.metadata["document_uri"],
-                    "document_title": ec.metadata["document_title"],
-                    "document_year": ec.metadata["document_year"],
-                    "document_type": ec.metadata.get("document_type", "unknown"),
-                    "document_category": ec.metadata.get("document_category", "unknown"),
-                    "document_number": ec.metadata.get("document_number"),
-                    "language": ec.metadata.get("language", "fin"),
-                    "chunk_text": ec.text,
-                    "chunk_index": ec.chunk_index,
-                    "section_number": ec.section_number,
-                    "embedding": ec.embedding,
-                    "metadata": ec.metadata,
-                }
-            )
+            row = {
+                "document_uri": ec.metadata["document_uri"],
+                "document_title": ec.metadata["document_title"],
+                "document_year": ec.metadata["document_year"],
+                "document_type": ec.metadata.get("document_type", "unknown"),
+                "document_category": ec.metadata.get("document_category", "unknown"),
+                "document_number": ec.metadata.get("document_number"),
+                "language": ec.metadata.get("language", "fin"),
+                "chunk_text": ec.text,
+                "chunk_index": ec.chunk_index,
+                "section_number": ec.section_number,
+                "embedding": ec.embedding,
+                "metadata": ec.metadata,
+                # Phase 1: Structured legal intelligence
+                "definitions": ec.metadata.get("definitions", []),
+                "cross_references": ec.metadata.get("cross_references", []),
+                "temporal_scope": ec.metadata.get("temporal_scope", {}),
+                "amendments": ec.metadata.get("amendments", {}),
+            }
+            rows.append(row)
 
         # Upsert into Supabase (prevents duplicates via unique constraint)
         logger.info("Upserting %s chunks into Supabase...", len(rows))

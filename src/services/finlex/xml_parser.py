@@ -289,6 +289,154 @@ class XMLParser:
 
         return list(set(links))  # Deduplicate
 
+    def extract_definitions(self, xml_content: str) -> list[dict]:
+        """Extract definitions from statute (typically in § 3)
+
+        Returns list of dicts with term and definition
+        """
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return []
+
+        definitions = []
+
+        # Find sections with "Määritelmät" (Definitions) heading
+        sections = root.findall(".//akn:section", self.ns)
+        if not sections:
+            sections = root.findall(".//{*}section")
+
+        for section in sections:
+            heading_elem = section.find(".//akn:heading", self.ns)
+            if heading_elem is None:
+                heading_elem = section.find(".//{*}heading")
+
+            heading = self._get_element_text(heading_elem) if heading_elem is not None else ""
+
+            # Check if this is definitions section
+            if "määritel" in heading.lower() or "definition" in heading.lower():
+                num_elem = section.find(".//akn:num", self.ns)
+                if num_elem is None:
+                    num_elem = section.find(".//{*}num")
+                section_number = num_elem.text.strip() if num_elem is not None and num_elem.text else "?"
+
+                # Extract content paragraphs as definitions
+                paragraphs = section.findall(".//{*}p")
+                for p in paragraphs:
+                    text = self._get_element_text(p).strip()
+                    if text:
+                        definitions.append({"section": section_number, "text": text})
+
+        return definitions
+
+    def extract_cross_references(self, xml_content: str) -> list[dict]:
+        """Extract references to other statutes (affectedDocument tags)
+
+        Returns list of referenced statutes with URIs
+        """
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return []
+
+        references = []
+
+        # Find all affectedDocument tags (references to other statutes)
+        affected_docs = root.findall(".//{*}affectedDocument")
+
+        for doc in affected_docs:
+            href = doc.get("href", "")
+            text = doc.text or ""
+
+            if href:
+                references.append(
+                    {
+                        "statute": text.strip(),
+                        "uri": href,
+                        "type": "amending" if "muutossäädös" in text.lower() else "referenced",
+                    }
+                )
+
+        return references
+
+    def extract_temporal_scope(self, xml_content: str) -> dict:
+        """Extract temporal scope: effective dates, entry into force
+
+        Returns dict with dates and applicability
+        """
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return {}
+
+        temporal_data = {
+            "effective_from": None,
+            "effective_until": None,
+            "issued_date": None,
+            "published_date": None,
+            "in_force": None,
+        }
+
+        # Extract dates from FRBRWork
+        frbrwork = root.find(".//{*}FRBRWork")
+        if frbrwork is not None:
+            dates = frbrwork.findall(".//{*}FRBRdate")
+            for date_elem in dates:
+                date_val = date_elem.get("date", "")
+                name = date_elem.get("name", "")
+
+                if name == "dateIssued":
+                    temporal_data["issued_date"] = date_val
+                elif name == "datePublished":
+                    temporal_data["published_date"] = date_val
+
+        # Check if document is in force
+        finlex_in_force = root.find(".//{*}isInForce")
+        if finlex_in_force is not None:
+            temporal_data["in_force"] = finlex_in_force.get("value", "").lower() == "true"
+
+        # Find entry into force section in body
+        entry_into_force = root.find(".//{*}entryIntoForce")
+        if entry_into_force is not None:
+            entry_text = self._get_element_text(entry_into_force).strip()
+            if entry_text:
+                temporal_data["entry_into_force_text"] = entry_text
+
+        return temporal_data
+
+    def extract_amendments(self, xml_content: str) -> dict:
+        """Extract amendment information: what's inserted, repealed, modified
+
+        Returns dict with amendment actions and affected provisions
+        """
+        try:
+            root = ET.fromstring(xml_content)
+        except ET.ParseError:
+            return {}
+
+        amendments = {"insertions": [], "repeals": [], "substitutions": [], "modifications": []}
+
+        # Find preamble blocks
+        blocks = root.findall(".//{*}block")
+
+        for block in blocks:
+            block_name = block.get("name", "")
+            content = self._get_element_text(block).strip()
+
+            if not content:
+                continue
+
+            if block_name == "insertions":
+                amendments["insertions"].append(content)
+            elif block_name == "repeals":
+                amendments["repeals"].append(content)
+            elif block_name == "substitutions":
+                amendments["substitutions"].append(content)
+            elif block_name == "modifications":
+                amendments["modifications"].append(content)
+
+        return amendments
+
     def parse(self, xml_content: str, language: str = "fin", document_uri: str = None) -> dict:
         """Parse XML and return structured data
 
@@ -323,6 +471,12 @@ class XMLParser:
         attachments = self.extract_attachments(xml_content)
         pdf_links = self.extract_pdf_links(xml_content)
 
+        # Phase 1: Extract structured legal intelligence
+        definitions = self.extract_definitions(xml_content)
+        cross_references = self.extract_cross_references(xml_content)
+        temporal_scope = self.extract_temporal_scope(xml_content)
+        amendments = self.extract_amendments(xml_content)
+
         # Combine text with attachment content for full text search
         full_text = text
         if attachments:
@@ -337,4 +491,9 @@ class XMLParser:
             "pdf_links": pdf_links,
             "length": len(full_text),
             "is_pdf_only": False,
+            # Phase 1: Structured Intelligence
+            "definitions": definitions,
+            "cross_references": cross_references,
+            "temporal_scope": temporal_scope,
+            "amendments": amendments,
         }
