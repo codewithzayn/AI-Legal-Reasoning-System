@@ -650,6 +650,7 @@ async def reason_legal(state: AgentState) -> AgentState:
         logger.info("Focus case(s) for answer: %s", focus_case_ids)
 
     is_client_doc_analysis = _detect_client_doc_analysis(state, results)
+    court_types = state.get("court_types")
 
     try:
         stream_queue = state.get("stream_queue")
@@ -663,6 +664,7 @@ async def reason_legal(state: AgentState) -> AgentState:
                     response_language=lang,
                     conversation_history=state.get("messages") or None,
                     is_client_doc_analysis=is_client_doc_analysis,
+                    court_types=court_types,
                 ):
                     response_parts.append(chunk)
                     await stream_queue.put(chunk)
@@ -678,6 +680,7 @@ async def reason_legal(state: AgentState) -> AgentState:
                 response_language=lang,
                 conversation_history=state.get("messages") or None,
                 is_client_doc_analysis=is_client_doc_analysis,
+                court_types=court_types,
             )
             state["response"] = response
         elapsed = time.time() - start_time

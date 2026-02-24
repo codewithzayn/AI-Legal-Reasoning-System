@@ -44,9 +44,11 @@ class GoogleDriveConnector(BaseDriveConnector):
                     self._client_id = creds.get("client_id", "")
                     self._client_secret = creds.get("client_secret", "")
 
-    def get_auth_url(self, redirect_uri: str) -> str:
+    def get_auth_url(self, redirect_uri: str, state: str = "") -> str:
         if not self._client_id:
             raise ValueError("Google Drive OAuth client ID not configured")
+        if not state:
+            raise ValueError("state must be a non-empty CSRF token")
         params = {
             "client_id": self._client_id,
             "redirect_uri": redirect_uri,
@@ -54,7 +56,7 @@ class GoogleDriveConnector(BaseDriveConnector):
             "scope": _SCOPES,
             "access_type": "offline",
             "prompt": "consent",
-            "state": "google_drive",
+            "state": state,
         }
         qs = "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
         return f"{_AUTH_URL}?{qs}"

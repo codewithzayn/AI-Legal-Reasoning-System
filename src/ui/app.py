@@ -18,21 +18,18 @@ import streamlit.components.v1 as components
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import secrets
+import uuid
 from datetime import datetime as _dt
 
 from src.agent.stream import stream_query_response
+from src.config.logging_config import setup_logger
 from src.config.prompt_templates import get_templates_for_lang, get_workflow_categories
 from src.config.settings import ASSISTANT_AVATAR, PAGE_CONFIG, USER_AVATAR, config, validate_env_for_app
 from src.config.translations import LANGUAGE_OPTIONS, t
-from src.ui.auth import (
-    get_current_user_email,
-    get_current_user_id,
-    is_authenticated,
-    render_auth_page,
-    sign_out,
-    sync_session_to_storage,
-    try_restore_from_cookies,
-)
+
+logger = setup_logger(__name__)
+
 from src.ui.chat_pdf_export import generate_chat_pdf
 from src.ui.citations import render_assistant_message
 from src.ui.conversation_store import delete_conversation, list_conversations, load_conversation, save_conversation
@@ -88,6 +85,13 @@ COURT_TYPE_OPTIONS = {
     "CJEU": "cjeu",
     "ECHR": "echr",
     "GC": "general_court",
+}
+
+# Court selector labels for UI
+COURT_SELECTOR_OPTIONS = {
+    "en": {"KKO": "Supreme Court (KKO)", "KHO": "Supreme Administrative Court (KHO)", "both": "Both Courts"},
+    "fi": {"KKO": "Korkein oikeus (KKO)", "KHO": "Korkein hallinto-oikeus (KHO)", "both": "Molemmat tuomioistuimet"},
+    "sv": {"KKO": "Högsta domstolen (KKO)", "KHO": "Högsta förvaltningsdomstolen (KHO)", "both": "Båda domstolarna"},
 }
 
 # Legal domain categories
@@ -921,7 +925,8 @@ def _inject_custom_css() -> None:
 def _render_workflow_cards(lang: str) -> None:
     """Show categorized workflow cards on the welcome screen."""
     template_lang = "en" if lang == "auto" else lang
-    categories = get_workflow_categories(template_lang)
+    court = st.session_state.get("selected_court", "both")
+    categories = get_workflow_categories(template_lang, court=court)
     if not categories:
         return
 
@@ -1026,12 +1031,17 @@ def _get_sidebar_filters() -> dict:
         yr = st.session_state.get("filter_year_range")
         if yr and isinstance(yr, (list, tuple)) and len(yr) == 2:
             filters["year_range"] = (yr[0], yr[1])
-        courts = st.session_state.get("filter_court_types")
-        if courts:
-            filters["court_types"] = list(courts)
         domains = st.session_state.get("filter_legal_domains")
         if domains:
             filters["legal_domains"] = list(domains)
+
+    # Court selector (always available, not behind filters_enabled toggle)
+    court_map = {"KKO": ["KKO"], "KHO": ["KHO"], "both": None}
+    court_selection = st.session_state.get("selected_court", "both")
+    court_types = court_map.get(court_selection)
+    if court_types is not None:
+        filters["court_types"] = court_types
+
     return filters
 
 
@@ -1184,38 +1194,54 @@ def _auto_save_conversation(lang: str) -> None:
         st.session_state.current_conversation_id = new_id
 
 
-def _handle_oauth_callback() -> None:
-    """Check query params for an OAuth callback and exchange the code for tokens."""
+def _handle_drive_oauth_code() -> None:
+    """Exchange a Google/OneDrive OAuth code for drive tokens.
+
+    State token format: "{provider}:{nonce}" where nonce was generated
+    by ``secrets.token_urlsafe`` in ingestion.py and stored in session.
+    The callback validates the full state string with a constant-time
+    comparison before touching the authorization code.
+    """
     code = st.query_params.get("code")
-    state = st.query_params.get("state")  # "google_drive" or "onedrive"
+    state = st.query_params.get("state")
     if not code or not state:
+        return
+
+    # --- CSRF validation: reject callbacks whose state doesn't match ---
+    expected_state = st.session_state.get("oauth_csrf_state")
+    if not expected_state or not secrets.compare_digest(state, expected_state):
+        logger.warning("OAuth callback rejected: missing or invalid CSRF state token")
+        st.query_params.clear()
+        return
+    # Single-use: consume the nonce immediately
+    del st.session_state["oauth_csrf_state"]
+
+    # Parse provider from state (format: "{provider}:{nonce}")
+    provider = state.split(":", 1)[0]
+    if provider not in ("google_drive", "onedrive"):
+        logger.warning("OAuth callback rejected: unknown provider in state")
+        st.query_params.clear()
         return
 
     tenant_id = st.session_state.get("tenant_id")
     if not tenant_id:
-        st.query_params.clear()
         return
 
-    provider = state  # state param carries the provider name
     redirect_uri = st.session_state.get("oauth_redirect_uri", config.APP_BASE_URL)
-
     try:
-        # Get the right connector and exchange code
         if provider == "google_drive":
             from src.services.drive.google_connector import GoogleDriveConnector
 
             connector = GoogleDriveConnector()
-        elif provider == "onedrive":
+            token_key = "gdrive_access_token"
+        else:
             from src.services.drive.onedrive_connector import OneDriveConnector
 
             connector = OneDriveConnector()
-        else:
-            st.query_params.clear()
-            return
+            token_key = "onedrive_access_token"
 
         tokens = connector.exchange_code(code, redirect_uri)
 
-        # Persist to database
         from src.services.drive.drive_settings import DriveSettingsService
 
         settings = DriveSettingsService()
@@ -1226,16 +1252,15 @@ def _handle_oauth_callback() -> None:
             refresh_token=tokens.get("refresh_token", ""),
             token_expiry=tokens.get("expires_in", 3600),
         )
-
-        # Store in session state for immediate use
-        token_key = "gdrive_access_token" if provider == "google_drive" else "onedrive_access_token"
         st.session_state[token_key] = tokens["access_token"]
+        st.session_state["_drive_just_connected"] = True
+    except Exception as exc:
+        logger.error("OAuth code exchange failed: %s", exc)
+        # Store a flag only — never expose the raw exception to the UI
+        st.session_state["_drive_connect_error"] = True
 
-        st.query_params.clear()
-        st.toast(t("drive_connected", _get_lang()), icon="\u2705")
-    except Exception as e:
-        st.query_params.clear()
-        st.error(f"OAuth error: {e}")
+    st.query_params.clear()
+    st.rerun()
 
 
 def main():
@@ -1245,17 +1270,10 @@ def main():
         st.session_state.lang = "fi"
     if "dark_mode" not in st.session_state:
         st.session_state.dark_mode = False
+    if "selected_court" not in st.session_state:
+        st.session_state.selected_court = "both"
 
-    # Restore session from cookies BEFORE rendering anything (no flash)
-    if not is_authenticated():
-        try_restore_from_cookies()
-
-    # Auth gate: show login page if not authenticated
-    if not is_authenticated():
-        render_auth_page(st.session_state.lang)
-        return
-
-    # Page config must be the first Streamlit render command in the auth path.
+    # Page config
     lang = _get_lang()
     st.set_page_config(
         page_title=t("page_title", lang),
@@ -1264,52 +1282,25 @@ def main():
         initial_sidebar_state=PAGE_CONFIG["initial_sidebar_state"],
     )
 
-    # Set user_id and tenant_id from authenticated user
-    user_id = get_current_user_id()
-    st.session_state.user_id = user_id
-    if "tenant_id" not in st.session_state or st.session_state.tenant_id is None:
-        st.session_state.tenant_id = user_id
+    # Anonymous session identity for conversations, feedback, and drive
+    if "user_id" not in st.session_state or not st.session_state.user_id:
+        st.session_state.user_id = str(uuid.uuid4())
+    if "tenant_id" not in st.session_state or not st.session_state.tenant_id:
+        st.session_state.tenant_id = st.session_state.user_id
 
-    # Persist session tokens to cookies + localStorage (survives page reloads)
-    sync_session_to_storage()
+    # Handle Drive OAuth callback — exchange code for tokens
+    _handle_drive_oauth_code()
 
-    # Strip auth tokens from URL so they never stay visible in the address bar
-    _token_params = {"access_token", "refresh_token", "expires_at", "expires_in", "token_type", "type", "_sat", "_srt"}
-    if _token_params & set(st.query_params.keys()):
-        st.query_params.clear()
-
-    # Handle OAuth callback before any rendering (Drive/OneDrive)
-    _handle_oauth_callback()
+    if st.session_state.pop("_drive_just_connected", False):
+        st.toast(t("drive_connected", lang), icon="\u2705")
+    if st.session_state.pop("_drive_connect_error", False):
+        st.error(t("drive_connect_error", lang))
 
     _inject_custom_css()
     _inject_toggle_fix()
     _inject_keyboard_shortcuts()
 
-    # Clean up any auth hash fragment that might still be in the address bar.
-    # Also start an idle-session timer: when the cookie expires (SESSION_LIFETIME_SECONDS)
-    # the page reloads automatically so the user gets the sign-in screen
-    # without having to manually refresh.
-    from src.ui.auth import SESSION_LIFETIME_SECONDS as _SLT
-
-    components.html(
-        "<script>"
-        "if(window.parent.location.hash.indexOf('access_token')!==-1)"
-        "{window.parent.history.replaceState(null,'',window.parent.location.pathname)}"
-        "if(!window.parent._lexaiIdleTimer){"
-        f"window.parent._lexaiIdleTimer=setTimeout(function(){{try{{window.parent.location.reload()}}catch(e){{}}}},{_SLT * 1000});"
-        "window.parent.addEventListener('click',function(){"
-        "clearTimeout(window.parent._lexaiIdleTimer);"
-        f"window.parent._lexaiIdleTimer=setTimeout(function(){{try{{window.parent.location.reload()}}catch(e){{}}}},{_SLT * 1000})"
-        "})}"
-        "</script>",
-        height=0,
-    )
-
-    # LexAI branded header with scales icon + user email top-right
-    import html as _html
-
-    user_email = get_current_user_email() or ""
-    escaped_email = _html.escape(user_email)
+    # LexAI branded header
     st.markdown(
         f"""
         <div class="main-header">
@@ -1320,9 +1311,6 @@ def main():
             <div class="header-text">
                 <h1>{t("sidebar_app_name", lang)} — {t("header_title", lang)}</h1>
                 <p class="subtitle">{t("header_subtitle", lang)}</p>
-            </div>
-            <div class="header-user">
-                <span class="header-user-email">{escaped_email}</span>
             </div>
         </div>
         """,
@@ -1498,12 +1486,7 @@ def _render_sidebar_filters(lang: str) -> None:
         value=st.session_state.get("filter_year_range", (1926, _CURRENT_YEAR)),
         key="filter_year_range",
     )
-    st.multiselect(
-        t("filter_court_type", lang),
-        options=list(COURT_TYPE_OPTIONS.keys()),
-        default=st.session_state.get("filter_court_types", []),
-        key="filter_court_types",
-    )
+    # Note: Court type now controlled by dedicated radio selector above, not multiselect
     st.multiselect(
         t("filter_legal_domain", lang),
         options=LEGAL_DOMAIN_OPTIONS,
@@ -1589,12 +1572,6 @@ def _render_sidebar(lang: str, chat_history: list) -> None:
         st.markdown(f"**\u2696\ufe0f {t('sidebar_app_name', lang)}**")
         st.caption(t("sidebar_tagline", lang))
 
-        user_email = get_current_user_email()
-        if user_email:
-            st.caption(t("auth_welcome_user", lang, email=user_email))
-            if st.button(t("auth_logout", lang), key="logout_btn", use_container_width=True, type="secondary"):
-                sign_out()
-                st.rerun()
         st.markdown("---")
 
         dark_mode = st.toggle(
@@ -1617,10 +1594,30 @@ def _render_sidebar(lang: str, chat_history: list) -> None:
 
         st.markdown("---")
 
+        # Court selector (always visible, not behind filters toggle)
+        court_options_dict = COURT_SELECTOR_OPTIONS.get(lang, COURT_SELECTOR_OPTIONS["en"])
+        court_options = ["both", "KKO", "KHO"]
+        current_court = st.session_state.get("selected_court", "both")
+        court_idx = court_options.index(current_court) if current_court in court_options else 0
+
+        selected_court = st.radio(
+            t("court_selector_label", lang),
+            options=court_options,
+            format_func=lambda x: court_options_dict.get(x, x),
+            index=court_idx,
+            key="court_selector",
+        )
+        if selected_court != st.session_state.get("selected_court"):
+            st.session_state.selected_court = selected_court
+            st.rerun()
+
+        st.markdown("---")
+
         st.markdown(f"**{t('templates_heading', lang)}**")
         st.caption(t("templates_hint", lang))
         template_lang = "en" if lang == "auto" else lang
-        for i, tmpl in enumerate(get_templates_for_lang(template_lang)):
+        court = st.session_state.get("selected_court", "both")
+        for i, tmpl in enumerate(get_templates_for_lang(template_lang, court=court)):
             if st.button(
                 f"\u2192 {tmpl['label']}",
                 key=f"template_{template_lang}_{i}",

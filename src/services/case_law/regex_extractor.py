@@ -15,8 +15,26 @@ from src.services.case_law.extractor import (
     LowerCourts,
     References,
 )
+from src.services.case_law.trend_analyzer import extract_trend_direction as _analyze_trend
 
 logger = setup_logger(__name__)
+
+
+def _clean_html(text: str) -> str:
+    """Remove HTML tags and decode entities from text."""
+    if not text:
+        return ""
+    # Remove HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode common HTML entities
+    text = text.replace("&nbsp;", " ")
+    text = text.replace("&lt;", "<")
+    text = text.replace("&gt;", ">")
+    text = text.replace("&amp;", "&")
+    text = text.replace("&quot;", '"')
+    text = text.replace("&apos;", "'")
+    return text
+
 
 # --- KKO Precedent patterns (English/Finnish header block) ---
 PATTERN_CASE_ID = re.compile(r"KKO\s*:\s*(\d{4})\s*:\s*(\d+)", re.IGNORECASE)
@@ -460,6 +478,7 @@ def _extract_exceptions_from_text(text: str) -> str:
     """Extract exception/limitation phrases from full_text for legal analysis. Returns single string, phrases separated by ' | '."""
     if not (text or "").strip():
         return ""
+    text = _clean_html(text)
     collected: list[str] = []
     total_len = 0
     for m in PATTERN_EXCEPTIONS.finditer(text):
@@ -485,6 +504,7 @@ def _extract_reasoning_excerpt(text: str, max_chars: int = 1500) -> str:
     Falls back to 'KORKEIN OIKEUS' section for older cases."""
     if not (text or "").strip():
         return ""
+    text = _clean_html(text)
     for section_name, pattern in SECTION_HEADERS:
         if section_name != "reasoning":
             continue
@@ -581,6 +601,7 @@ def _extract_distinctive_facts_from_text(text: str) -> str:
     """Extract decisive-facts phrases for jurist (which facts were decisive)."""
     if not (text or "").strip():
         return ""
+    text = _clean_html(text)
     collected: list[str] = []
     total_len = 0
     for m in PATTERN_DISTINCTIVE_FACTS.finditer(text):
@@ -623,29 +644,94 @@ _PATTERN_HE_REF = re.compile(
     re.IGNORECASE,
 )
 
+# EU Directive references (e.g., "Directive 2020/60/EU")
+_PATTERN_EU_DIRECTIVE = re.compile(
+    r"(?:Directive|Dir\.?)\s+(\d{4})/(\d+)(?:/EU)?",
+    re.IGNORECASE,
+)
+
+# EU Regulation references (e.g., "Regulation (EU) No 1301/2013")
+_PATTERN_EU_REGULATION_SIMPLE = re.compile(
+    r"(?:Regulation|Reg\.?)\s+\(EU\)\s+(?:No\.?|Nr\.?)\s+(\d+)/(\d{4})",
+    re.IGNORECASE,
+)
+
+# Law number references (e.g., "Laki 123/2020")
+_PATTERN_LAW_NUMBER = re.compile(
+    r"(?:Laki|Law)\s+(?:no\.?|nr\.?|N:o)\s+(\d+)/(\d{4})",
+    re.IGNORECASE,
+)
+
+# Constitution references (e.g., "PL 10 §")
+_PATTERN_CONSTITUTION = re.compile(
+    r"(?:PL|Perustuslaki)\s+(?:§|pykälä)\s+(\d+[a-z]?)",
+    re.IGNORECASE,
+)
+
+# EU Court case references (e.g., "C-123/45")
+_PATTERN_CJEU_CASE = re.compile(r"\b(C-\d+/\d{2}(?:\s+[EEC]+)?)\b")
+
 
 def _scan_provision_refs(block: str) -> list[str]:
     """Run all provision-pattern regexes against *block* and return raw ref strings."""
     refs: list[str] = []
+
+    # Finnish Criminal Code (RL)
     for m in PATTERN_RL.finditer(block):
         refs.append(f"RL {m.group(1)} luku {m.group(2)} §")
+
+    # Generic Chapter/Section
     for m in PATTERN_LAW_CHAPTER.finditer(block):
         refs.append(f"Luku {m.group(1)} § {m.group(2)}")
+
+    # Employment Contract Law (TSL)
     for m in _PATTERN_TSL.finditer(block):
         refs.append(f"TSL {m.group(1)} luku {m.group(2)} §")
+
+    # Code of Judicial Procedure (OK)
     for m in _PATTERN_OKL.finditer(block):
         refs.append(f"OK {m.group(1)} luku {m.group(2)} §")
+
+    # Named laws (työsopimus, vahingonkorvaus, etc.)
     for m in _PATTERN_NAMED_LAW_SECTION.finditer(block):
         chapter = m.group(2) or ""
         label = f"{m.group(1)} {chapter} luku {m.group(3)} §" if chapter else f"{m.group(1)} {m.group(3)} §"
         refs.append(label)
+
+    # Finnish section references (generic: "1 luku 2 §")
     for m in _PATTERN_FI_SECTION_REF.finditer(block):
         refs.append(f"{m.group(1)} luku {m.group(2)} §")
+
+    # Law section (lain X §)
     for m in _PATTERN_FI_LAW_SECTION.finditer(block):
         refs.append(f"lain {m.group(1)} §")
+
+    # Government proposals (HE X/YYYY vp)
     for m in _PATTERN_HE_REF.finditer(block):
         refs.append(f"HE {m.group(1)}")
-    return refs
+
+    # Constitution (PL)
+    for m in _PATTERN_CONSTITUTION.finditer(block):
+        refs.append(f"PL § {m.group(1)}")
+
+    # EU Directives (Directive 2020/60/EU)
+    for m in _PATTERN_EU_DIRECTIVE.finditer(block):
+        refs.append(f"Directive {m.group(1)}/{m.group(2)}/EU")
+
+    # EU Regulations (Regulation (EU) No 1301/2013)
+    for m in _PATTERN_EU_REGULATION_SIMPLE.finditer(block):
+        refs.append(f"Regulation (EU) No {m.group(1)}/{m.group(2)}")
+
+    # Law numbers (Laki 123/2020)
+    for m in _PATTERN_LAW_NUMBER.finditer(block):
+        refs.append(f"Law {m.group(1)}/{m.group(2)}")
+
+    # EU Court cases (C-123/45)
+    for m in _PATTERN_CJEU_CASE.finditer(block):
+        refs.append(m.group(1).strip())
+
+    # Remove duplicates while preserving order
+    return list(dict.fromkeys(refs))
 
 
 def _extract_applied_provisions_from_text(text: str) -> str:
@@ -916,3 +1002,10 @@ def extract_precedent(full_text: str, case_id: str) -> CaseExtractionResult | No
     except Exception as e:
         logger.exception("Regex extraction failed for %s: %s", case_id, e)
         return None
+
+
+def extract_trend_direction_from_case(
+    case_id: str, ruling_instruction: str, legal_domains: list, case_year: int
+) -> str:
+    """Wrapper for trend analysis. Returns: stricter, more_lenient, stable, or empty."""
+    return _analyze_trend(case_id, ruling_instruction, legal_domains, case_year)

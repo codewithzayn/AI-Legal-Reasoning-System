@@ -3,7 +3,7 @@ Conversation persistence for LexAI.
 
 CRUD operations for the 'conversations' Supabase table.
 Auto-saves after each message exchange, supports load/delete from sidebar.
-All operations are scoped to the authenticated user via user_id.
+All operations are scoped to the current session user via user_id.
 """
 
 import json
@@ -18,7 +18,7 @@ logger = setup_logger(__name__)
 
 
 def _get_user_id() -> str | None:
-    """Return the current authenticated user's ID from session state."""
+    """Return the current session user's ID from session state."""
     return st.session_state.get("user_id")
 
 

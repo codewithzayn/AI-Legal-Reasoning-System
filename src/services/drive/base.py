@@ -10,11 +10,15 @@ class BaseDriveConnector(ABC):
     """Interface for cloud drive read connectors."""
 
     @abstractmethod
-    def get_auth_url(self, redirect_uri: str) -> str:
+    def get_auth_url(self, redirect_uri: str, state: str = "") -> str:
         """Return the OAuth authorization URL for the user to visit.
 
         Args:
             redirect_uri: The callback URL after auth.
+            state: CSRF nonce to embed in the authorization URL and
+                   validate in the callback.  Callers MUST pass a
+                   cryptographically random value (e.g., from
+                   ``secrets.token_urlsafe``).
 
         Returns:
             Authorization URL string.

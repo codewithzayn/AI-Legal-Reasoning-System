@@ -41,12 +41,14 @@ class OneDriveConnector(BaseDriveConnector):
             )
         return self._app
 
-    def get_auth_url(self, redirect_uri: str) -> str:
+    def get_auth_url(self, redirect_uri: str, state: str = "") -> str:
+        if not state:
+            raise ValueError("state must be a non-empty CSRF token")
         app = self._get_app()
         result = app.get_authorization_request_url(
             scopes=_SCOPES,
             redirect_uri=redirect_uri,
-            state="onedrive",
+            state=state,
         )
         return result
 

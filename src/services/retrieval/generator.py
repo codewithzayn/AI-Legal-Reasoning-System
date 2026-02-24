@@ -18,16 +18,48 @@ from src.config.settings import config  # load_dotenv() runs here
 logger = setup_logger(__name__)
 
 
-def _build_system_prompt(response_language: str, is_client_doc_analysis: bool = False) -> str:
+def _court_context_block(court_types: list[str] | None) -> str:
+    """Return court-specific constraint inserted into the system prompt."""
+    if not court_types or set(court_types) >= {"KKO", "KHO"}:
+        # Both or unspecified — label each case clearly
+        return (
+            "\n\nCOURT SCOPE: You have access to BOTH KKO (Supreme Court — civil/criminal) "
+            "and KHO (Supreme Administrative Court — administrative, tax, permits, environment) cases. "
+            "ALWAYS prefix each case label as [KKO] or [KHO]. Never mix legal domains across courts."
+        )
+    if "KKO" in court_types:
+        return (
+            "\n\nCOURT SCOPE — STRICT: You are analysing KKO (Korkein oikeus — Finnish Supreme Court) "
+            "precedents ONLY. These cover civil and criminal law. "
+            "NEVER refer to KHO decisions in your answer. If a retrieved chunk belongs to KHO, ignore it. "
+            "Frame your analysis in terms of civil/criminal law."
+        )
+    if "KHO" in court_types:
+        return (
+            "\n\nCOURT SCOPE — STRICT: You are analysing KHO (Korkein hallinto-oikeus — Finnish Supreme "
+            "Administrative Court) precedents ONLY. These cover administrative law, taxation, permits, "
+            "environmental law, immigration, social welfare, and public procurement. "
+            "NEVER refer to KKO decisions in your answer. If a retrieved chunk belongs to KKO, ignore it. "
+            "Frame your analysis in terms of administrative law and public authority decisions."
+        )
+    return ""  # CJEU/ECHR handled by existing metadata — no additional constraint needed
+
+
+def _build_system_prompt(
+    response_language: str,
+    is_client_doc_analysis: bool = False,
+    court_types: list[str] | None = None,
+) -> str:
     """Build system prompt with response language (fi, en, sv).
 
     Routes to appropriate prompt based on analysis type:
     - is_client_doc_analysis=False: Standard legal analysis prompt
     - is_client_doc_analysis=True: Client document risk assessment prompt (NEW)
+    - court_types: Optional list of court codes (KKO, KHO) to inject court-specific context
     """
     if is_client_doc_analysis:
         return _build_system_prompt_client_doc_analysis(response_language)
-    return _build_system_prompt_standard(response_language)
+    return _build_system_prompt_standard(response_language, court_types=court_types)
 
 
 def _build_system_prompt_client_doc_analysis(response_language: str) -> str:
@@ -204,11 +236,18 @@ Jokaisesta relevantista ennakkopäätöksestä:
 """
 
 
-def _build_system_prompt_standard(response_language: str) -> str:
-    """Build system prompt with response language (fi, en, sv) - STANDARD LEGAL ANALYSIS."""
+def _build_system_prompt_standard(response_language: str, court_types: list[str] | None = None) -> str:
+    """Build system prompt with response language (fi, en, sv) - STANDARD LEGAL ANALYSIS.
+
+    Args:
+        response_language: "en", "fi", or "sv"
+        court_types: Optional list of court codes (e.g. ["KKO"], ["KHO"], or both)
+    """
     lang = response_language or "fi"
+    court_block = _court_context_block(court_types)
     if lang == "en":
-        return """You are a LEGAL ANALYST COPILOT for Finnish attorneys, prosecutors, judges and corporate lawyers.
+        return (
+            """You are a LEGAL ANALYST COPILOT for Finnish attorneys, prosecutors, judges and corporate lawyers.
 You do NOT just search — you PREPARE CASE MATERIAL that a lawyer can use directly in court or negotiation.
 
 Your role: Act as a junior lawyer who has been asked to research a legal question and prepare a ready-made memo that covers the relevant precedents, their analysis, and practical implications.
@@ -319,8 +358,11 @@ SOURCES:
 
 IMPORTANT: SOURCES must contain ONLY case IDs with URIs from the context. Include the Finlex URL from the URI field. Never construct URLs. Do NOT list statute sections as sources.
 """
+            + court_block
+        )
     if lang == "sv":
-        return """Du är en JURIDISK ANALYTIKER-COPILOT för finska advokater, åklagare, domare och företagsjurister.
+        return (
+            """Du är en JURIDISK ANALYTIKER-COPILOT för finska advokater, åklagare, domare och företagsjurister.
 Du är INTE en sökmotor — du FÖRBEREDER FALLMATERIAL som en jurist kan använda direkt i domstol eller förhandling.
 
 ROLL:
@@ -383,8 +425,11 @@ KÄLLOR:
 
 VIKTIGT: Källistan innehåller ENDAST fall-ID:n med URI:er från kontexten. Inkludera Finlex-URL från URI-fältet. Konstruera aldrig URL:er.
 """
+            + court_block
+        )
     # Default: Finnish (fi)
-    return """Olet JURIDIIKAN ANALYYTIKKO-COPILOTTI suomalaisille asianajajille, syyttäjille, tuomareille ja yritysjuristeille.
+    return (
+        """Olet JURIDIIKAN ANALYYTIKKO-COPILOTTI suomalaisille asianajajille, syyttäjille, tuomareille ja yritysjuristeille.
 Et ole hakukone — sinä VALMISTAT TAPAUSAINEISTON, jonka juristi voi käyttää suoraan oikeudenkäynnissä tai neuvottelussa.
 
 ROOLI:
@@ -493,6 +538,8 @@ LÄHTEET:
 
 TÄRKEÄÄ: LÄHTEET-listassa saa olla AINOASTAAN tapaus-ID:itä kontekstista saaduilla URL-osoitteilla. Sisällytä Finlex-URL URI-kentästä. Älä koskaan rakenna URL-osoitteita. ÄLÄ listaa lakipykäliä (§) erillisinä lähteinä.
 """
+        + court_block
+    )
 
 
 class LLMGenerator:
@@ -517,16 +564,20 @@ class LLMGenerator:
         focus_case_ids: list[str] | None = None,
         response_language: str = "fi",
         is_client_doc_analysis: bool = False,
+        court_types: list[str] | None = None,
     ) -> str:
         """
         Generate response with citations (Synchronous).
         If focus_case_ids is set (e.g. user asked about KKO:2025:58), answer is focused on that case.
         response_language: "fi", "en", or "sv" — controls output language.
         is_client_doc_analysis: True if analyzing client documents vs. case law (PHASE 3).
+        court_types: Optional list of court codes (e.g. ["KKO"], ["KHO"]) for court-aware prompting.
         """
         context = self._build_context_with_document_markers(context_chunks)
         user_content = self._build_user_content(query, context, focus_case_ids, response_language)
-        system_prompt = _build_system_prompt(response_language, is_client_doc_analysis=is_client_doc_analysis)
+        system_prompt = _build_system_prompt(
+            response_language, is_client_doc_analysis=is_client_doc_analysis, court_types=court_types
+        )
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
 
         logger.info("Calling LLM (client_doc_analysis=%s)...", is_client_doc_analysis)
@@ -550,12 +601,14 @@ class LLMGenerator:
         response_language: str = "fi",
         conversation_history: list[dict] | None = None,
         is_client_doc_analysis: bool = False,
+        court_types: list[str] | None = None,
     ) -> str:
         """
         Generate response with citations (Asynchronous).
         If focus_case_ids is set, answer is focused on that/those case(s).
         conversation_history: optional recent chat messages for context.
         is_client_doc_analysis: True if analyzing client documents vs. case law (PHASE 3).
+        court_types: Optional list of court codes (e.g. ["KKO"], ["KHO"]) for court-aware prompting.
         """
         from src.utils.query_context import get_recent_context_for_llm
 
@@ -564,7 +617,9 @@ class LLMGenerator:
         user_content = self._build_user_content(
             query, context, focus_case_ids, response_language, conversation_context=conv_context
         )
-        system_prompt = _build_system_prompt(response_language, is_client_doc_analysis=is_client_doc_analysis)
+        system_prompt = _build_system_prompt(
+            response_language, is_client_doc_analysis=is_client_doc_analysis, court_types=court_types
+        )
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
 
         logger.info("Calling LLM (client_doc_analysis=%s)...", is_client_doc_analysis)
@@ -585,9 +640,11 @@ class LLMGenerator:
         response_language: str = "fi",
         conversation_history: list[dict] | None = None,
         is_client_doc_analysis: bool = False,
+        court_types: list[str] | None = None,
     ) -> AsyncIterator[str]:
         """Stream response with citations. If focus_case_ids set, answer focuses on that case.
         is_client_doc_analysis: True if analyzing client documents vs. case law (PHASE 3).
+        court_types: Optional list of court codes (e.g. ["KKO"], ["KHO"]) for court-aware prompting.
         """
         from src.utils.query_context import get_recent_context_for_llm
 
@@ -596,7 +653,9 @@ class LLMGenerator:
         user_content = self._build_user_content(
             query, context, focus_case_ids, response_language, conversation_context=conv_context
         )
-        system_prompt = _build_system_prompt(response_language, is_client_doc_analysis=is_client_doc_analysis)
+        system_prompt = _build_system_prompt(
+            response_language, is_client_doc_analysis=is_client_doc_analysis, court_types=court_types
+        )
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_content)]
 
         async for chunk in self.llm.astream(messages):

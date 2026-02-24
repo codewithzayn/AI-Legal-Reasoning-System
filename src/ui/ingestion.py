@@ -3,6 +3,11 @@ Sidebar ingestion component for client document upload and cloud drive ingestion
 Includes OAuth connection flow, folder browser, and file picker.
 """
 
+import html as _html
+import os
+import secrets
+from pathlib import Path
+
 import streamlit as st
 
 from src.config.logging_config import setup_logger
@@ -100,9 +105,6 @@ def _render_upload_tab(lang: str, tenant_id: str) -> None:
 
 def _render_drive_tab(lang: str, tenant_id: str, provider: str) -> None:
     """Render a drive tab with connect/disconnect, folder browser, and file picker."""
-    import os
-    from pathlib import Path
-
     # Check provider is configured
     if provider == "google_drive":
         client_id = os.getenv("GOOGLE_DRIVE_CLIENT_ID", "").strip()
@@ -114,7 +116,6 @@ def _render_drive_tab(lang: str, tenant_id: str, provider: str) -> None:
         token_key = "gdrive_access_token"
         folder_key = "gdrive_folder_id"
         connect_btn_label = t("ingestion_gdrive_connect_btn", lang)
-        authorize_label = t("ingestion_gdrive_authorize", lang)
         connect_hint = t("ingestion_gdrive_connect_hint", lang)
     else:
         client_id = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
@@ -124,7 +125,6 @@ def _render_drive_tab(lang: str, tenant_id: str, provider: str) -> None:
         token_key = "onedrive_access_token"
         folder_key = "onedrive_folder_id"
         connect_btn_label = t("ingestion_onedrive_connect_btn", lang)
-        authorize_label = t("ingestion_onedrive_authorize", lang)
         connect_hint = t("ingestion_onedrive_connect_hint", lang)
 
     access_token = st.session_state.get(token_key)
@@ -135,8 +135,18 @@ def _render_drive_tab(lang: str, tenant_id: str, provider: str) -> None:
         if st.button(connect_btn_label, key=f"{provider}_connect"):
             connector = _get_connector(provider)
             redirect_uri = _get_redirect_uri()
-            auth_url = connector.get_auth_url(redirect_uri)
-            st.markdown(f"[{authorize_label}]({auth_url})")
+            # Generate a per-request CSRF nonce; encode provider so the
+            # callback can identify the provider without trusting user input.
+            nonce = secrets.token_urlsafe(32)
+            state_token = f"{provider}:{nonce}"
+            st.session_state["oauth_csrf_state"] = state_token
+            auth_url = connector.get_auth_url(redirect_uri, state=state_token)
+            # HTML-escape the URL before embedding in an attribute so that a
+            # quote character in the URL cannot break out of the attribute.
+            st.markdown(
+                f'<meta http-equiv="refresh" content="0;url={_html.escape(auth_url)}">',
+                unsafe_allow_html=True,
+            )
     else:
         # --- Connected ---
         col_status, col_disconnect = st.columns([2, 1])

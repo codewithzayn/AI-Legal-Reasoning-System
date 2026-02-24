@@ -76,11 +76,97 @@ PROMPT_TEMPLATES: dict[str, list[dict[str, str]]] = {
 }
 
 
-def get_templates_for_lang(lang: str) -> list[dict[str, str]]:
-    """Return prompt templates for the given language code. Falls back to English for 'auto'."""
+# KHO (Supreme Administrative Court) templates
+KHO_PROMPT_TEMPLATES: dict[str, list[dict[str, str]]] = {
+    "en": [
+        {
+            "label": "Tax law analysis 2015–2024",
+            "prompt": "Analyze KHO precedents on taxation and tax appeals (verotus, veroratkaisut) from 2015 to 2024. For each case: ruling instruction, decisive facts, provisions, vote strength, and distinctions.",
+        },
+        {
+            "label": "Administrative permit analysis",
+            "prompt": "Analyze KHO precedents on administrative permits and environmental permits (hallinnolliset luvat, ympäristöluvat) from recent years. What are the decisive facts, requirements, and appeal grounds?",
+        },
+        {
+            "label": "Immigration and asylum law",
+            "prompt": "Analyze KHO precedents on immigration and asylum decisions (maahanmuutto, turvapaikka) from 2018–2024. What trends and distinctions are there in the legal position?",
+        },
+        {
+            "label": "Social welfare law",
+            "prompt": "Analyze KHO precedents on social welfare decisions and appeals (sosiaaliturva) from recent years. What are common grounds for reversal and what is the trend?",
+        },
+        {
+            "label": "Public procurement law",
+            "prompt": "Analyze KHO precedents on public procurement disputes and bid protests (julkinen hankintatoimi) from 2018–2024. What are the decisive factors in KHO decisions?",
+        },
+    ],
+    "fi": [
+        {
+            "label": "Verotusanalyysi 2015–2024",
+            "prompt": "Analysoi KHO:n ennakkopäätökset verotuksesta ja veroratkaisuista vuosilta 2015–2024. Jokaisesta tapauksesta: ratkaisuohje, ratkaisevat tosiseikat, sovelletut säännökset, äänestystulos ja erottelut.",
+        },
+        {
+            "label": "Hallinnolliset luvat",
+            "prompt": "Analysoi KHO:n ennakkopäätökset hallinnollisista luvista ja ympäristöluvista. Mitä ovat ratkaisevat tosiseikat, vaatimukset ja muutoksenhakuperusteet?",
+        },
+        {
+            "label": "Maahanmuutto ja turvapaikkaoikeus",
+            "prompt": "Analysoi KHO:n ennakkopäätökset maahanmuutto- ja turvapaikkatapauksista vuosilta 2018–2024. Mitkä ovat kehityssuunnat ja erottelut oikeudellisissa kannanotoissa?",
+        },
+        {
+            "label": "Sosiaaliturvarikokset",
+            "prompt": "Analysoi KHO:n ennakkopäätökset sosiaaliturvan kanteluista vuosilta 2018–2024. Mitkä ovat yleisimmät muutoksenhakuperusteet ja kehityssuunta?",
+        },
+        {
+            "label": "Julkinen hankintatoimi",
+            "prompt": "Analysoi KHO:n ennakkopäätökset julkisista hankintatoimi-riidoista ja tarjousprotestiista vuosilta 2018–2024. Mitkä ovat ratkaisevat tekijät KHO:n päätöksissä?",
+        },
+    ],
+    "sv": [
+        {
+            "label": "Skatteredovisningsanalys 2015–2024",
+            "prompt": "Analysera HFD-prejudikat om skatteredovisning och skattebeslut från 2015 till 2024. För varje fall: avgörandeinstruktion, avgörande fakta, bestämmelser, röststyrka och distinktioner.",
+        },
+        {
+            "label": "Administrativa tillstånd",
+            "prompt": "Analysera HFD-prejudikat om administrativa tillstånd och miljötillstånd. Vad är avgörande fakta, krav och överklagandsgrunder?",
+        },
+        {
+            "label": "Invandring och asylrätt",
+            "prompt": "Analysera HFD-prejudikat om invandring och asylbeslut från 2018–2024. Vilka är trenderna och distinktionerna i den juridiska positionen?",
+        },
+        {
+            "label": "Socialförsäkringsrätt",
+            "prompt": "Analysera HFD-prejudikat om socialförsäkringsbeslut från 2018–2024. Vilka är vanliga omprövningsgrunder och vad är trenden?",
+        },
+        {
+            "label": "Offentlig upphandling",
+            "prompt": "Analysera HFD-prejudikat om offentlig upphandling från 2018–2024. Vilka är avgörande faktorer i HFD:s beslut?",
+        },
+    ],
+}
+
+
+def get_templates_for_lang(lang: str, court: str = "both") -> list[dict[str, str]]:
+    """Return prompt templates for the given language code and court.
+
+    Args:
+        lang: "en", "fi", or "sv" (or "auto" which defaults to "en")
+        court: "KKO", "KHO", or "both"
+    """
     if lang == "auto":
-        return PROMPT_TEMPLATES["en"]
-    return PROMPT_TEMPLATES.get(lang, PROMPT_TEMPLATES["en"])
+        lang = "en"
+
+    if court == "KHO":
+        return KHO_PROMPT_TEMPLATES.get(lang, KHO_PROMPT_TEMPLATES["en"])
+
+    if court == "KKO":
+        return PROMPT_TEMPLATES.get(lang, PROMPT_TEMPLATES["en"])
+
+    # "both" - merge KKO and KHO templates (first 3 from each)
+    kko_templates = PROMPT_TEMPLATES.get(lang, PROMPT_TEMPLATES["en"])[:3]
+    kho_templates = KHO_PROMPT_TEMPLATES.get(lang, KHO_PROMPT_TEMPLATES["en"])[:3]
+    return kko_templates + kho_templates
 
 
 # ---------------------------------------------------------------------------
@@ -241,8 +327,16 @@ WORKFLOW_CATEGORIES: dict[str, list[dict]] = {
 }
 
 
-def get_workflow_categories(lang: str) -> list[dict]:
-    """Return workflow categories for the given language. Falls back to English for 'auto'."""
+def get_workflow_categories(lang: str, court: str = "both") -> list[dict]:
+    """Return workflow categories for the given language and court.
+
+    Args:
+        lang: "en", "fi", or "sv"
+        court: "KKO", "KHO", or "both"
+    """
     if lang == "auto":
-        return WORKFLOW_CATEGORIES["en"]
+        lang = "en"
+
+    # Currently, WORKFLOW_CATEGORIES is the same for all courts (KKO-focused)
+    # In future, could split by court if needed
     return WORKFLOW_CATEGORIES.get(lang, WORKFLOW_CATEGORIES["en"])
