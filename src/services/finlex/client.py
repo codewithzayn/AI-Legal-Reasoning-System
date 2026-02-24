@@ -60,6 +60,7 @@ class FinlexAPI:
 
         Args:
             category: Document category (act, judgment, doc)
+            doc_type: Document type (statute, statute-consolidated, statute-foreign-language-translation, statute-sami-translation)
             year: Year to fetch
             page: Page number
             limit: Results per page

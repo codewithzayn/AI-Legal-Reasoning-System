@@ -21,8 +21,11 @@ logger = setup_logger(__name__)
 # Ingestion defaults
 START_YEAR = 2026
 END_YEAR = 2017
+# CATEGORIES: category -> list of document types
+# category: act, judgment, doc
+# doc_type: statute, statute-consolidated, statute-foreign-language-translation, statute-sami-translation
 CATEGORIES: dict[str, list[str]] = {
-    "statute": ["act", "decree"],
+    "act": ["statute"],  # Acts with statute type
 }
 
 
