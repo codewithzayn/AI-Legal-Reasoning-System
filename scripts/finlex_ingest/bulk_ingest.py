@@ -18,14 +18,13 @@ from src.services.finlex.ingestion import FinlexIngestionService
 
 logger = setup_logger(__name__)
 
-# Ingestion defaults
-START_YEAR = 2026
-END_YEAR = 2017
-# CATEGORIES: category -> list of document types
-# category: act, judgment, doc
-# doc_type: statute, statute-consolidated, statute-foreign-language-translation, statute-sami-translation
-CATEGORIES: dict[str, list[str]] = {
-    "act": ["statute"],  # Acts with statute type
+# Ingestion configuration: per-document-type year ranges
+# statute: 2017-2026 (individual amendments with Phase 1 intelligence)
+# statute-consolidated: 2016-2026 (complete current law with Phase 1 intelligence)
+CATEGORY = "act"
+DOC_TYPES_CONFIG = {
+    "statute": {"start_year": 2026, "end_year": 2017},
+    "statute-consolidated": {"start_year": 2026, "end_year": 2016},
 }
 
 
@@ -166,22 +165,26 @@ class BulkIngestionManager:
                 break
 
     async def run(self) -> None:
-        logger.info("🚀 BULK DOCUMENT INGESTION")
-        logger.info("Years: %s → %s", START_YEAR, END_YEAR)
-        logger.info("Categories: %s", list(CATEGORIES.keys()))
+        logger.info("🚀 BULK DOCUMENT INGESTION - Phase 1 (Intelligent Extraction)")
+        logger.info("Category: %s", CATEGORY)
+        logger.info("Document types with year ranges:")
+        for doc_type, config in DOC_TYPES_CONFIG.items():
+            logger.info("  - %s: %s → %s", doc_type, config["start_year"], config["end_year"])
         total_start = time.time()
 
-        # Process each year (newest first)
-        for year in range(START_YEAR, END_YEAR - 1, -1):
-            logger.info("# YEAR: %s", year)
+        # Process each document type with its year range
+        for doc_type, year_config in DOC_TYPES_CONFIG.items():
+            start_year = year_config["start_year"]
+            end_year = year_config["end_year"]
+            logger.info("\n## Processing %s/%s (%s → %s)", CATEGORY, doc_type, start_year, end_year)
 
-            # Process each category/type
-            for category, doc_types in CATEGORIES.items():
-                for doc_type in doc_types:
-                    await self.process_year(category, doc_type, year)
+            # Process years in descending order (newest first)
+            for year in range(start_year, end_year - 1, -1):
+                logger.info("# YEAR: %s", year)
+                await self.process_year(CATEGORY, doc_type, year)
 
         total_elapsed = time.time() - total_start
-        logger.info("✅ BULK INGESTION COMPLETED")
+        logger.info("\n✅ BULK INGESTION COMPLETED")
         logger.info("⏱️  TOTAL TIME: %.2fs", total_elapsed)
 
 
