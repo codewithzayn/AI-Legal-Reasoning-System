@@ -32,54 +32,6 @@ class BulkIngestionManager:
         self.storage = self.service.storage
         self.api = self.service.api
 
-    def get_tracking_status(self, category: str, doc_type: str, year: int) -> dict | None:
-        """Get current tracking status from database"""
-        result = (
-            self.storage.client.table("ingestion_tracking")
-            .select("*")
-            .eq("document_category", category)
-            .eq("document_type", doc_type)
-            .eq("year", year)
-            .execute()
-        )
-        return result.data[0] if result.data else None
-
-    def init_tracking(self, category: str, doc_type: str, year: int) -> None:
-        """Initialize tracking record"""
-        self.storage.client.table("ingestion_tracking").upsert(
-            {
-                "document_category": category,
-                "document_type": doc_type,
-                "year": year,
-                "status": "in_progress",
-                "started_at": "now()",
-                "last_updated": "now()",
-            }
-        ).execute()
-
-    def update_tracking(self, category: str, doc_type: str, year: int, page: int, processed: int, failed: int) -> None:
-        """Update tracking progress"""
-        self.storage.client.table("ingestion_tracking").update(
-            {
-                "last_processed_page": page,
-                "documents_processed": processed,
-                "documents_failed": failed,
-                "last_updated": "now()",
-            }
-        ).eq("document_category", category).eq("document_type", doc_type).eq("year", year).execute()
-
-    def mark_completed(self, category: str, doc_type: str, year: int) -> None:
-        """Mark ingestion as completed"""
-        self.storage.client.table("ingestion_tracking").update(
-            {"status": "completed", "completed_at": "now()", "last_updated": "now()"}
-        ).eq("document_category", category).eq("document_type", doc_type).eq("year", year).execute()
-
-    def mark_no_documents(self, category: str, doc_type: str, year: int) -> None:
-        """Mark as no documents available"""
-        self.storage.client.table("ingestion_tracking").update(
-            {"status": "no_documents", "completed_at": "now()", "last_updated": "now()"}
-        ).eq("document_category", category).eq("document_type", doc_type).eq("year", year).execute()
-
     def get_doctype_progress(self, category: str, doc_type: str) -> dict:
         """Get progress for a doc_type (year=0 used as key for simplified pagination)"""
         result = (
@@ -148,69 +100,9 @@ class BulkIngestionManager:
             logger.debug("Error processing %s: %s", document_uri, e)
             return False
 
-    async def process_year(self, category: str, doc_type: str, year: int) -> None:
-        """Process all documents for a specific category/type/year"""
-        logger.info("Processing %s/%s/%s", category, doc_type, year)
-
-        # Get or init tracking
-        tracking = self.get_tracking_status(category, doc_type, year)
-        if tracking and tracking["status"] == "completed":
-            logger.info("  Already completed, skipping")
-            return
-
-        start_page = tracking["last_processed_page"] + 1 if tracking else 1
-        processed = tracking["documents_processed"] if tracking else 0
-        failed = tracking["documents_failed"] if tracking else 0
-
-        if not tracking:
-            self.init_tracking(category, doc_type, year)
-
-        # Fetch documents page by page
-        page = start_page
-        while True:
-            logger.debug("[%s] Page %s", year, page)
-
-            try:
-                # Fetch page (async)
-                documents = await self.api.fetch_document_list(
-                    category=category, doc_type=doc_type, year=year, page=page, limit=10
-                )
-
-                # Check if empty
-                if not documents:
-                    if page == 1:
-                        logger.info("  No documents found")
-                        self.mark_no_documents(category, doc_type, year)
-                    else:
-                        logger.info("  Completed: %d docs (%.1f docs/sec)", processed, 0)
-                        self.mark_completed(category, doc_type, year)
-                    break
-
-                # Process each document
-                for doc in documents:
-                    uri = doc["akn_uri"]
-                    status = doc["status"]
-
-                    success = await self.process_document(uri, status, category, doc_type)
-                    if success:
-                        processed += 1
-                    else:
-                        failed += 1
-
-                    # Small delay to avoid rate limiting
-                    await asyncio.sleep(0.5)
-
-                # Update tracking
-                self.update_tracking(category, doc_type, year, page, processed, failed)
-
-                # Next page
-                page += 1
-
-            except Exception as e:
-                logger.error("Error on page %s: %s", page, e)
-                break
-
-    async def process_doc_type(self, category: str, doc_type: str, concurrent_workers: int = 5) -> None:
+    async def process_doc_type(
+        self, category: str, doc_type: str, concurrent_workers: int = 10, page_size: int = 50
+    ) -> None:
         """
         Process all documents for a specific category/type (ALL YEARS, no year filtering).
 
@@ -218,9 +110,12 @@ class BulkIngestionManager:
         Supports resumption from last page on restart.
 
         Args:
-            concurrent_workers: Number of concurrent document processing tasks (default: 5)
+            concurrent_workers: Number of concurrent document processing tasks (default: 10)
+            page_size: Documents per API page (default: 50)
         """
-        logger.info("Processing %s/%s (all years, %d workers)", category, doc_type, concurrent_workers)
+        logger.info(
+            "Processing %s/%s (all years, %d workers, batch %d)", category, doc_type, concurrent_workers, page_size
+        )
 
         # Check if already completed
         progress = self.get_doctype_progress(category, doc_type)
@@ -255,7 +150,7 @@ class BulkIngestionManager:
             try:
                 # Fetch page WITHOUT year filter (gets all years)
                 documents = await self.api.fetch_document_list(
-                    category=category, doc_type=doc_type, year=None, page=page, limit=10
+                    category=category, doc_type=doc_type, year=None, page=page, limit=page_size
                 )
 
                 if not documents:
