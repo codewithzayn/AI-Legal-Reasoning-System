@@ -117,14 +117,17 @@ class BulkIngestionManager:
 
         progress = self.get_doctype_progress(category, doc_type)
         if progress and progress["status"] == "completed":
-            logger.info("  Already completed, skipping")
+            total_pages = progress.get("last_processed_page", 0)
+            logger.info(
+                "  Already completed: %d pages, %d docs processed", total_pages, progress.get("documents_processed", 0)
+            )
             return
 
         if progress:
             page = progress["last_processed_page"] + 1
             processed = progress["documents_processed"]
             failed = progress["documents_failed"]
-            logger.info("  Resuming from page %d (progress: %d docs)", page, processed)
+            logger.info("  Resuming from page %d (progress: %d docs, %d failed)", page, processed, failed)
         else:
             page = 1
             processed = 0
@@ -133,6 +136,7 @@ class BulkIngestionManager:
             logger.info("  Starting fresh ingestion")
 
         total_start = time.time()
+        total_pages = 0
         semaphore = asyncio.Semaphore(concurrent_workers)
 
         async def process_with_semaphore(uri: str, status: str) -> bool:
@@ -148,6 +152,7 @@ class BulkIngestionManager:
                 )
 
                 if not documents:
+                    total_pages = page - 1
                     self.mark_doctype_completed(category, doc_type, processed)
                     break
 
@@ -168,15 +173,17 @@ class BulkIngestionManager:
 
             except Exception as e:
                 logger.error("Error on page %d: %s", page, e)
+                total_pages = page - 1
                 self.update_doctype_progress(category, doc_type, page - 1, processed, failed)
                 break
 
         elapsed = time.time() - total_start
         rate = processed / elapsed if elapsed > 0 else 0
         logger.info(
-            "Completed %s/%s: %d docs in %.0fs (%.2f docs/sec)",
+            "Completed %s/%s: %d pages, %d docs (%.0fs, %.2f docs/sec)",
             category,
             doc_type,
+            total_pages,
             processed,
             elapsed,
             rate,
@@ -185,12 +192,38 @@ class BulkIngestionManager:
     async def run(self) -> None:
         logger.info("Bulk ingestion started: %s [%s]", CATEGORY, ", ".join(DOC_TYPES))
         total_start = time.time()
+        stats = {}
 
         for doc_type in DOC_TYPES:
             await self.process_doc_type(CATEGORY, doc_type)
+            progress = self.get_doctype_progress(CATEGORY, doc_type)
+            if progress:
+                stats[doc_type] = {
+                    "pages": progress.get("last_processed_page", 0),
+                    "docs": progress.get("documents_processed", 0),
+                    "failed": progress.get("documents_failed", 0),
+                }
 
         total_elapsed = time.time() - total_start
-        logger.info("Bulk ingestion completed in %.0fs (%.2f hours)", total_elapsed, total_elapsed / 3600)
+
+        # Summary with comparative stats
+        total_pages = sum(s["pages"] for s in stats.values())
+        total_docs = sum(s["docs"] for s in stats.values())
+        total_failed = sum(s["failed"] for s in stats.values())
+
+        logger.info("=" * 60)
+        logger.info("Bulk ingestion completed")
+        for doc_type, stat in stats.items():
+            logger.info("  %s: %d pages, %d docs (+%d failed)", doc_type, stat["pages"], stat["docs"], stat["failed"])
+        logger.info("=" * 60)
+        logger.info(
+            "Total: %d pages, %d docs, %d failed in %.0fs (%.2f hours)",
+            total_pages,
+            total_docs,
+            total_failed,
+            total_elapsed,
+            total_elapsed / 3600,
+        )
 
 
 def main():
