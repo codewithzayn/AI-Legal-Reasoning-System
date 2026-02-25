@@ -80,6 +80,56 @@ class BulkIngestionManager:
             {"status": "no_documents", "completed_at": "now()", "last_updated": "now()"}
         ).eq("document_category", category).eq("document_type", doc_type).eq("year", year).execute()
 
+    def get_doctype_progress(self, category: str, doc_type: str) -> dict:
+        """Get progress for a doc_type (year=0 used as key for simplified pagination)"""
+        result = (
+            self.storage.client.table("ingestion_tracking")
+            .select("*")
+            .eq("document_category", category)
+            .eq("document_type", doc_type)
+            .eq("year", 0)  # year=0 means "all years"
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def init_doctype_progress(self, category: str, doc_type: str) -> None:
+        """Initialize progress tracking for a doc_type"""
+        self.storage.client.table("ingestion_tracking").upsert(
+            {
+                "document_category": category,
+                "document_type": doc_type,
+                "year": 0,  # year=0 means "all years"
+                "status": "in_progress",
+                "last_processed_page": 0,
+                "documents_processed": 0,
+                "documents_failed": 0,
+                "started_at": "now()",
+                "last_updated": "now()",
+            }
+        ).execute()
+
+    def update_doctype_progress(self, category: str, doc_type: str, page: int, processed: int, failed: int) -> None:
+        """Update progress for a doc_type"""
+        self.storage.client.table("ingestion_tracking").update(
+            {
+                "last_processed_page": page,
+                "documents_processed": processed,
+                "documents_failed": failed,
+                "last_updated": "now()",
+            }
+        ).eq("document_category", category).eq("document_type", doc_type).eq("year", 0).execute()
+
+    def mark_doctype_completed(self, category: str, doc_type: str, processed: int) -> None:
+        """Mark doc_type ingestion as completed"""
+        self.storage.client.table("ingestion_tracking").update(
+            {
+                "status": "completed",
+                "completed_at": "now()",
+                "documents_processed": processed,
+                "last_updated": "now()",
+            }
+        ).eq("document_category", category).eq("document_type", doc_type).eq("year", 0).execute()
+
     async def process_document(self, document_uri: str, status: str, category: str, doc_type: str) -> bool:
         """
         Process a single document using the shared service
@@ -166,15 +216,32 @@ class BulkIngestionManager:
         Process all documents for a specific category/type (ALL YEARS, no year filtering).
 
         Uses concurrent processing for speed (multiple documents in parallel).
+        Supports resumption from last page on restart.
 
         Args:
             concurrent_workers: Number of concurrent document processing tasks (default: 5)
         """
         logger.info("\n## Processing %s/%s (ALL YEARS, %s concurrent workers)", category, doc_type, concurrent_workers)
 
-        page = 1
-        processed = 0
-        failed = 0
+        # Check if already completed
+        progress = self.get_doctype_progress(category, doc_type)
+        if progress and progress["status"] == "completed":
+            logger.info("✅ Already completed, skipping...")
+            return
+
+        # Resume from last page or start fresh
+        if progress:
+            page = progress["last_processed_page"] + 1
+            processed = progress["documents_processed"]
+            failed = progress["documents_failed"]
+            logger.info("📖 Resuming from page %s (already processed: %s docs)", page, processed)
+        else:
+            page = 1
+            processed = 0
+            failed = 0
+            self.init_doctype_progress(category, doc_type)
+            logger.info("📖 Starting fresh ingestion")
+
         total_start = time.time()
         semaphore = asyncio.Semaphore(concurrent_workers)
 
@@ -194,6 +261,7 @@ class BulkIngestionManager:
 
                 if not documents:
                     logger.info("✅ Reached end of documents (page %s returned 0 items)", page)
+                    self.mark_doctype_completed(category, doc_type, processed)
                     break
 
                 # Process documents CONCURRENTLY (multiple at same time)
@@ -210,6 +278,10 @@ class BulkIngestionManager:
                         failed += 1
 
                 logger.info("📊 Page %s done - Total: %s processed, %s failed", page, processed, failed)
+
+                # Update progress tracking
+                self.update_doctype_progress(category, doc_type, page, processed, failed)
+
                 page += 1
 
                 # Small delay between pages (not per-document)
@@ -217,6 +289,8 @@ class BulkIngestionManager:
 
             except Exception as e:
                 logger.error("❌ Error on page %s: %s", page, e)
+                # Save progress before breaking
+                self.update_doctype_progress(category, doc_type, page - 1, processed, failed)
                 break
 
         elapsed = time.time() - total_start
