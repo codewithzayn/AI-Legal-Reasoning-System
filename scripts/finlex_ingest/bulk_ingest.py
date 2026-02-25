@@ -93,7 +93,7 @@ class BulkIngestionManager:
             return False
 
     async def process_doc_type(
-        self, category: str, doc_type: str, concurrent_workers: int = 10, page_size: int = 50
+        self, category: str, doc_type: str, concurrent_workers: int = 10, page_size: int = 10
     ) -> None:
         """
         Process all documents for a category/type across ALL YEARS.
@@ -105,15 +105,9 @@ class BulkIngestionManager:
             category: Document category (act, judgment, doc)
             doc_type: Document type (statute, statute-consolidated, etc.)
             concurrent_workers: Number of concurrent processing tasks (default: 10)
-            page_size: Documents per API page (default: 50)
+            page_size: Documents per API page (default: 10, API maximum)
         """
-        logger.info(
-            "Processing %s/%s (all years, %d workers, batch %d)",
-            category,
-            doc_type,
-            concurrent_workers,
-            page_size,
-        )
+        logger.info("Processing %s/%s (all years, %d workers)", category, doc_type, concurrent_workers)
 
         progress = self.get_doctype_progress(category, doc_type)
         if progress and progress["status"] == "completed":

@@ -41,10 +41,8 @@ def setup_logger(
             # Message only (no time, level, module name) – for ingestion progress
             formatter = logging.Formatter("%(message)s")
         else:
-            # JSON formatter for production
-            formatter = jsonlogger.JsonFormatter(
-                "%(asctime)s %(levelname)s %(name)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S"
-            )
+            # JSON formatter for production (time + message only)
+            formatter = jsonlogger.JsonFormatter("%(asctime)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
