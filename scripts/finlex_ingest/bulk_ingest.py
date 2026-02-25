@@ -192,9 +192,24 @@ class BulkIngestionManager:
 
     async def run(self) -> None:
         logger.info("Bulk ingestion started: %s", CATEGORY)
+        logger.info("=" * 60)
+        logger.info("PROGRESS TRACKING CHECK")
+        logger.info("=" * 60)
+
         for doc_type in DOC_TYPES:
             max_pages = MAX_PAGES_PER_DOCTYPE.get(doc_type, 0)
             logger.info("  %s: max %d pages", doc_type, max_pages)
+            progress = self.get_doctype_progress(CATEGORY, doc_type)
+            if progress:
+                logger.info(
+                    "    ✓ Existing progress found: page %d, %d docs processed",
+                    progress.get("last_processed_page", 0),
+                    progress.get("documents_processed", 0),
+                )
+            else:
+                logger.info("    ○ No progress found - will start fresh")
+
+        logger.info("=" * 60)
         total_start = time.time()
         stats = {}
 
