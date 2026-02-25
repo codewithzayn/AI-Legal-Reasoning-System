@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Bulk Document Ingestion Script
-Systematically ingests all Finlex documents (2017-2026) with tracking and resume capability
+Systematically ingests ALL Finlex documents across ALL years with Phase 1 intelligent extraction.
+Uses simplified pagination without year filtering - extracts year from each document URI.
 """
 
 import sys
@@ -18,14 +19,10 @@ from src.services.finlex.ingestion import FinlexIngestionService
 
 logger = setup_logger(__name__)
 
-# Ingestion configuration: per-document-type year ranges
-# statute: 2017-2026 (individual amendments with Phase 1 intelligence)
-# statute-consolidated: 2016-2026 (complete current law with Phase 1 intelligence)
+# Ingestion configuration: document types to ingest
+# No year filtering - fetches ALL documents (auto-extracts year from URI)
 CATEGORY = "act"
-DOC_TYPES_CONFIG = {
-    "statute": {"start_year": 2026, "end_year": 2017},
-    "statute-consolidated": {"start_year": 2026, "end_year": 2016},
-}
+DOC_TYPES = ["statute", "statute-consolidated"]
 
 
 class BulkIngestionManager:
@@ -164,28 +161,66 @@ class BulkIngestionManager:
                 logger.error("❌ Error on page %s: %s", page, e)
                 break
 
-    async def run(self) -> None:
-        logger.info("🚀 BULK DOCUMENT INGESTION - Phase 1 (Intelligent Extraction)")
-        logger.info("Category: %s", CATEGORY)
-        logger.info("Document types with year ranges:")
-        for doc_type, config in DOC_TYPES_CONFIG.items():
-            logger.info("  - %s: %s → %s", doc_type, config["start_year"], config["end_year"])
+    async def process_doc_type(self, category: str, doc_type: str) -> None:
+        """Process all documents for a specific category/type (ALL YEARS, no year filtering)"""
+        logger.info("\n## Processing %s/%s (ALL YEARS via simplified pagination)", category, doc_type)
+
+        page = 1
+        processed = 0
+        failed = 0
         total_start = time.time()
 
-        # Process each document type with its year range
-        for doc_type, year_config in DOC_TYPES_CONFIG.items():
-            start_year = year_config["start_year"]
-            end_year = year_config["end_year"]
-            logger.info("\n## Processing %s/%s (%s → %s)", CATEGORY, doc_type, start_year, end_year)
+        while True:
+            logger.info("📄 Page %s...", page)
 
-            # Process years in descending order (newest first)
-            for year in range(start_year, end_year - 1, -1):
-                logger.info("# YEAR: %s", year)
-                await self.process_year(CATEGORY, doc_type, year)
+            try:
+                # Fetch page WITHOUT year filter (gets all years)
+                documents = await self.api.fetch_document_list(
+                    category=category, doc_type=doc_type, year=None, page=page, limit=10
+                )
+
+                if not documents:
+                    logger.info("✅ Reached end of documents (page %s returned 0 items)", page)
+                    break
+
+                # Process each document
+                for doc in documents:
+                    uri = doc["akn_uri"]
+                    status = doc["status"]
+
+                    success = await self.process_document(uri, status, category, doc_type)
+                    if success:
+                        processed += 1
+                    else:
+                        failed += 1
+
+                    # Small delay to avoid rate limiting
+                    await asyncio.sleep(0.5)
+
+                logger.info("📊 Page %s done - Total: %s processed, %s failed", page, processed, failed)
+                page += 1
+
+            except Exception as e:
+                logger.error("❌ Error on page %s: %s", page, e)
+                break
+
+        elapsed = time.time() - total_start
+        logger.info("✅ Completed %s/%s - %s docs in %.0fs", category, doc_type, processed, elapsed)
+
+    async def run(self) -> None:
+        logger.info("🚀 BULK DOCUMENT INGESTION - Phase 1 (Intelligent Extraction)")
+        logger.info("Strategy: Simplified pagination (ALL YEARS, no filtering)")
+        logger.info("Category: %s", CATEGORY)
+        logger.info("Document types: %s", ", ".join(DOC_TYPES))
+        total_start = time.time()
+
+        # Process each document type (all years in one sequence)
+        for doc_type in DOC_TYPES:
+            await self.process_doc_type(CATEGORY, doc_type)
 
         total_elapsed = time.time() - total_start
-        logger.info("\n✅ BULK INGESTION COMPLETED")
-        logger.info("⏱️  TOTAL TIME: %.2fs", total_elapsed)
+        logger.info("\n✅ ALL INGESTION COMPLETED")
+        logger.info("⏱️  TOTAL TIME: %.0fs (%.1f hours)", total_elapsed, total_elapsed / 3600)
 
 
 def main():

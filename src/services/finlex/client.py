@@ -53,15 +53,15 @@ class FinlexAPI:
             return "unknown"
 
     async def fetch_document_list(
-        self, category: str, doc_type: str, year: int, page: int = 1, limit: int = 10
+        self, category: str, doc_type: str, year: int = None, page: int = 1, limit: int = 10
     ) -> list:
         """
         Fetch list of documents for bulk ingestion
 
         Args:
             category: Document category (act, judgment, doc)
-            doc_type: Document type (statute, statute-consolidated, statute-foreign-language-translation, statute-sami-translation)
-            year: Year to fetch
+            doc_type: Document type (statute, statute-consolidated, etc.)
+            year: (Optional) Specific year to fetch. If None, fetches all years.
             page: Page number
             limit: Results per page
 
@@ -70,7 +70,9 @@ class FinlexAPI:
         """
         url = f"{self.BASE_URL}/akn/fi/{category}/{doc_type}/list"
 
-        params = {"startYear": year, "page": page, "limit": limit}
+        params = {"page": page, "limit": limit}
+        if year is not None:
+            params["startYear"] = year
 
         try:
             async with httpx.AsyncClient() as client:
