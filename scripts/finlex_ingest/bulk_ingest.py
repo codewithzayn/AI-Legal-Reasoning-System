@@ -161,14 +161,27 @@ class BulkIngestionManager:
                 logger.error("❌ Error on page %s: %s", page, e)
                 break
 
-    async def process_doc_type(self, category: str, doc_type: str) -> None:
-        """Process all documents for a specific category/type (ALL YEARS, no year filtering)"""
-        logger.info("\n## Processing %s/%s (ALL YEARS via simplified pagination)", category, doc_type)
+    async def process_doc_type(self, category: str, doc_type: str, concurrent_workers: int = 5) -> None:
+        """
+        Process all documents for a specific category/type (ALL YEARS, no year filtering).
+
+        Uses concurrent processing for speed (multiple documents in parallel).
+
+        Args:
+            concurrent_workers: Number of concurrent document processing tasks (default: 5)
+        """
+        logger.info("\n## Processing %s/%s (ALL YEARS, %s concurrent workers)", category, doc_type, concurrent_workers)
 
         page = 1
         processed = 0
         failed = 0
         total_start = time.time()
+        semaphore = asyncio.Semaphore(concurrent_workers)
+
+        async def process_with_semaphore(uri: str, status: str) -> bool:
+            """Process document with concurrency control"""
+            async with semaphore:
+                return await self.process_document(uri, status, category, doc_type)
 
         while True:
             logger.info("📄 Page %s...", page)
@@ -183,29 +196,34 @@ class BulkIngestionManager:
                     logger.info("✅ Reached end of documents (page %s returned 0 items)", page)
                     break
 
-                # Process each document
-                for doc in documents:
-                    uri = doc["akn_uri"]
-                    status = doc["status"]
+                # Process documents CONCURRENTLY (multiple at same time)
+                tasks = [process_with_semaphore(doc["akn_uri"], doc["status"]) for doc in documents]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    success = await self.process_document(uri, status, category, doc_type)
-                    if success:
+                # Count results
+                for result in results:
+                    if isinstance(result, Exception):
+                        failed += 1
+                    elif result:
                         processed += 1
                     else:
                         failed += 1
 
-                    # Small delay to avoid rate limiting
-                    await asyncio.sleep(0.5)
-
                 logger.info("📊 Page %s done - Total: %s processed, %s failed", page, processed, failed)
                 page += 1
+
+                # Small delay between pages (not per-document)
+                await asyncio.sleep(0.1)
 
             except Exception as e:
                 logger.error("❌ Error on page %s: %s", page, e)
                 break
 
         elapsed = time.time() - total_start
-        logger.info("✅ Completed %s/%s - %s docs in %.0fs", category, doc_type, processed, elapsed)
+        rate = processed / elapsed if elapsed > 0 else 0
+        logger.info(
+            "✅ Completed %s/%s - %s docs in %.0fs (%.1f docs/sec)", category, doc_type, processed, elapsed, rate
+        )
 
     async def run(self) -> None:
         logger.info("🚀 BULK DOCUMENT INGESTION - Phase 1 (Intelligent Extraction)")
