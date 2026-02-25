@@ -145,17 +145,17 @@ class BulkIngestionManager:
             return result["success"]
 
         except Exception as e:
-            logger.error("❌ Error processing %s: %s", document_uri, e)
+            logger.debug("Error processing %s: %s", document_uri, e)
             return False
 
     async def process_year(self, category: str, doc_type: str, year: int) -> None:
         """Process all documents for a specific category/type/year"""
-        logger.info("Processing: %s/%s/%s", category, doc_type, year)
+        logger.info("Processing %s/%s/%s", category, doc_type, year)
 
         # Get or init tracking
         tracking = self.get_tracking_status(category, doc_type, year)
         if tracking and tracking["status"] == "completed":
-            logger.info("✅ Already completed, skipping...")
+            logger.info("  Already completed, skipping")
             return
 
         start_page = tracking["last_processed_page"] + 1 if tracking else 1
@@ -168,7 +168,7 @@ class BulkIngestionManager:
         # Fetch documents page by page
         page = start_page
         while True:
-            logger.info("📄 [%s] Page %s...", year, page)
+            logger.debug("[%s] Page %s", year, page)
 
             try:
                 # Fetch page (async)
@@ -179,10 +179,10 @@ class BulkIngestionManager:
                 # Check if empty
                 if not documents:
                     if page == 1:
-                        logger.info("ℹ️  No documents found")
+                        logger.info("  No documents found")
                         self.mark_no_documents(category, doc_type, year)
                     else:
-                        logger.info("✅ Completed all pages")
+                        logger.info("  Completed: %d docs (%.1f docs/sec)", processed, 0)
                         self.mark_completed(category, doc_type, year)
                     break
 
@@ -202,13 +202,12 @@ class BulkIngestionManager:
 
                 # Update tracking
                 self.update_tracking(category, doc_type, year, page, processed, failed)
-                logger.info("📊 Progress: %s processed, %s failed", processed, failed)
 
                 # Next page
                 page += 1
 
             except Exception as e:
-                logger.error("❌ Error on page %s: %s", page, e)
+                logger.error("Error on page %s: %s", page, e)
                 break
 
     async def process_doc_type(self, category: str, doc_type: str, concurrent_workers: int = 5) -> None:
@@ -221,12 +220,12 @@ class BulkIngestionManager:
         Args:
             concurrent_workers: Number of concurrent document processing tasks (default: 5)
         """
-        logger.info("\n## Processing %s/%s (ALL YEARS, %s concurrent workers)", category, doc_type, concurrent_workers)
+        logger.info("Processing %s/%s (all years, %d workers)", category, doc_type, concurrent_workers)
 
         # Check if already completed
         progress = self.get_doctype_progress(category, doc_type)
         if progress and progress["status"] == "completed":
-            logger.info("✅ Already completed, skipping...")
+            logger.info("  Already completed, skipping")
             return
 
         # Resume from last page or start fresh
@@ -234,13 +233,13 @@ class BulkIngestionManager:
             page = progress["last_processed_page"] + 1
             processed = progress["documents_processed"]
             failed = progress["documents_failed"]
-            logger.info("📖 Resuming from page %s (already processed: %s docs)", page, processed)
+            logger.info("  Resuming from page %d (progress: %d docs)", page, processed)
         else:
             page = 1
             processed = 0
             failed = 0
             self.init_doctype_progress(category, doc_type)
-            logger.info("📖 Starting fresh ingestion")
+            logger.info("  Starting fresh ingestion")
 
         total_start = time.time()
         semaphore = asyncio.Semaphore(concurrent_workers)
@@ -251,7 +250,7 @@ class BulkIngestionManager:
                 return await self.process_document(uri, status, category, doc_type)
 
         while True:
-            logger.info("📄 Page %s...", page)
+            logger.debug("Page %d", page)
 
             try:
                 # Fetch page WITHOUT year filter (gets all years)
@@ -260,7 +259,6 @@ class BulkIngestionManager:
                 )
 
                 if not documents:
-                    logger.info("✅ Reached end of documents (page %s returned 0 items)", page)
                     self.mark_doctype_completed(category, doc_type, processed)
                     break
 
@@ -277,8 +275,6 @@ class BulkIngestionManager:
                     else:
                         failed += 1
 
-                logger.info("📊 Page %s done - Total: %s processed, %s failed", page, processed, failed)
-
                 # Update progress tracking
                 self.update_doctype_progress(category, doc_type, page, processed, failed)
 
@@ -288,22 +284,17 @@ class BulkIngestionManager:
                 await asyncio.sleep(0.1)
 
             except Exception as e:
-                logger.error("❌ Error on page %s: %s", page, e)
+                logger.error("Error on page %d: %s", page, e)
                 # Save progress before breaking
                 self.update_doctype_progress(category, doc_type, page - 1, processed, failed)
                 break
 
         elapsed = time.time() - total_start
         rate = processed / elapsed if elapsed > 0 else 0
-        logger.info(
-            "✅ Completed %s/%s - %s docs in %.0fs (%.1f docs/sec)", category, doc_type, processed, elapsed, rate
-        )
+        logger.info("Completed %s/%s: %d docs in %.0fs (%.2f docs/sec)", category, doc_type, processed, elapsed, rate)
 
     async def run(self) -> None:
-        logger.info("🚀 BULK DOCUMENT INGESTION - Phase 1 (Intelligent Extraction)")
-        logger.info("Strategy: Simplified pagination (ALL YEARS, no filtering)")
-        logger.info("Category: %s", CATEGORY)
-        logger.info("Document types: %s", ", ".join(DOC_TYPES))
+        logger.info("Bulk ingestion started: %s [%s]", CATEGORY, ", ".join(DOC_TYPES))
         total_start = time.time()
 
         # Process each document type (all years in one sequence)
@@ -311,8 +302,7 @@ class BulkIngestionManager:
             await self.process_doc_type(CATEGORY, doc_type)
 
         total_elapsed = time.time() - total_start
-        logger.info("\n✅ ALL INGESTION COMPLETED")
-        logger.info("⏱️  TOTAL TIME: %.0fs (%.1f hours)", total_elapsed, total_elapsed / 3600)
+        logger.info("Bulk ingestion completed in %.0fs (%.2f hours)", total_elapsed, total_elapsed / 3600)
 
 
 def main():
