@@ -20,6 +20,7 @@ logger = setup_logger(__name__)
 
 CATEGORY = "act"
 DOC_TYPES = ["statute", "statute-consolidated"]
+MAX_API_PAGES = 11805  # Finlex API maximum available pages
 
 
 class BulkIngestionManager:
@@ -138,7 +139,8 @@ class BulkIngestionManager:
                 return await self.process_document(uri, status, category, doc_type)
 
         while True:
-            logger.debug("Page %d", page)
+            progress_pct = (page / MAX_API_PAGES) * 100
+            logger.debug("Page %d (%.1f%% of max)", page, progress_pct)
 
             try:
                 documents = await self.api.fetch_document_list(
@@ -184,7 +186,7 @@ class BulkIngestionManager:
         )
 
     async def run(self) -> None:
-        logger.info("Bulk ingestion started: %s [%s]", CATEGORY, ", ".join(DOC_TYPES))
+        logger.info("Bulk ingestion started: %s [%s] (max %d API pages)", CATEGORY, ", ".join(DOC_TYPES), MAX_API_PAGES)
         total_start = time.time()
         stats = {}
 
