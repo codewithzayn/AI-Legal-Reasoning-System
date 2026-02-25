@@ -121,7 +121,7 @@ class BulkIngestionManager:
         # Fetch documents page by page
         page = start_page
         while True:
-            logger.info("📄 Page %s...", page)
+            logger.info("📄 [%s] Page %s...", year, page)
 
             try:
                 # Fetch page (async)
