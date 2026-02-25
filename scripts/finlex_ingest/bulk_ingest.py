@@ -20,7 +20,11 @@ logger = setup_logger(__name__)
 
 CATEGORY = "act"
 DOC_TYPES = ["statute", "statute-consolidated"]
-MAX_API_PAGES = 11805  # Finlex API maximum available pages
+# Max pages per document type (from Finlex API)
+MAX_PAGES_PER_DOCTYPE = {
+    "statute": 11805,
+    "statute-consolidated": 13100,
+}
 
 
 class BulkIngestionManager:
@@ -139,8 +143,9 @@ class BulkIngestionManager:
                 return await self.process_document(uri, status, category, doc_type)
 
         while True:
-            progress_pct = (page / MAX_API_PAGES) * 100
-            logger.debug("Page %d (%.1f%% of max)", page, progress_pct)
+            max_pages = MAX_PAGES_PER_DOCTYPE.get(doc_type, 11805)
+            progress_pct = (page / max_pages) * 100
+            logger.debug("Page %d (%.1f%% of max %d)", page, progress_pct, max_pages)
 
             try:
                 documents = await self.api.fetch_document_list(
@@ -186,7 +191,10 @@ class BulkIngestionManager:
         )
 
     async def run(self) -> None:
-        logger.info("Bulk ingestion started: %s [%s] (max %d API pages)", CATEGORY, ", ".join(DOC_TYPES), MAX_API_PAGES)
+        logger.info("Bulk ingestion started: %s", CATEGORY)
+        for doc_type in DOC_TYPES:
+            max_pages = MAX_PAGES_PER_DOCTYPE.get(doc_type, 0)
+            logger.info("  %s: max %d pages", doc_type, max_pages)
         total_start = time.time()
         stats = {}
 
@@ -223,7 +231,16 @@ class BulkIngestionManager:
 
 
 def main():
-    """Main entry point"""
+    """Main entry point - DO NOT RE-RUN UNNECESSARILY
+
+    CRITICAL: This ingestion pipeline processes 161,000+ documents.
+    - Year extraction from URI is validated and correct
+    - Document numbers are extracted from URI format: /YYYY/NNNNN/
+    - Database UNIQUE constraints on (document_uri, chunk_index) prevent duplicates
+    - Failed documents tracked separately to avoid re-ingestion
+
+    Only run this if you understand the cost and have validated the output.
+    """
     manager = BulkIngestionManager()
     asyncio.run(manager.run())
 
