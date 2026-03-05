@@ -22,6 +22,36 @@ def _safe_url(url: str) -> str:
     return ""
 
 
+def _finlex_url_for_case_id(case_id: str, metadata: dict | None = None) -> str:
+    """Build Finlex URL for KKO/KHO case when no URL is in the source.
+    Returns empty string if case_id is not a Finnish case or cannot be parsed.
+    """
+    if not case_id or ":" not in case_id:
+        return ""
+    parts = case_id.strip().upper().split(":")
+    if len(parts) < 3:
+        return ""
+    court_code = parts[0]
+    year = metadata.get("year") if metadata else None
+    if year is None:
+        try:
+            year = int(parts[1])
+        except (ValueError, IndexError):
+            return ""
+    case_num = parts[-1]
+    if court_code == "KKO":
+        court_path = "korkein-oikeus"
+    elif court_code == "KHO":
+        court_path = "korkein-hallinto-oikeus"
+    else:
+        return ""
+    try:
+        num_padded = case_num.zfill(4) if case_num.isdigit() else case_num
+        return f"https://www.finlex.fi/fi/oikeuskaytanto/{court_path}/ennakkopaatokset/{year}/{year}{num_padded}"
+    except (ValueError, TypeError):
+        return ""
+
+
 # Regex to split response text from the sources block.
 # Matches SOURCES:, LAHTEET:, KALLOR:, KILDER: (with optional heading markup)
 _SOURCES_RE = re.compile(
@@ -78,16 +108,13 @@ def parse_response_and_sources(response: str) -> tuple[str, list[dict[str, str]]
 
 
 def _linkify_inline_citations(text: str, url_map: dict[str, str], theme: dict | None = None) -> str:
-    """Replace [KKO:2024:76] patterns in answer text with styled HTML badge-links.
+    """Replace [KKO:2024:76] / [KHO:2023:45] patterns in answer text with styled HTML badge-links.
 
     Text is HTML-escaped first to prevent XSS from LLM output, then
     citation patterns (which survive escaping) are replaced with safe
-    badge HTML.
+    badge HTML. Uses url_map when present; otherwise builds Finlex URL for KKO/KHO so sources stay clickable.
     """
     escaped_text = html.escape(text)
-    if not url_map:
-        return escaped_text
-
     accent = (theme or {}).get("accent", "#2563eb")
 
     def _replace_cite(m: re.Match) -> str:
@@ -95,6 +122,8 @@ def _linkify_inline_citations(text: str, url_map: dict[str, str], theme: dict | 
         case_id = cite[1:-1]
         safe_case_id = html.escape(case_id)
         safe_url = _safe_url(url_map.get(case_id, ""))
+        if not safe_url and case_id.strip():
+            safe_url = _safe_url(_finlex_url_for_case_id(case_id, None))
         badge_style = (
             f"display:inline-block;background:{accent}18;color:{accent};"
             f"border:1px solid {accent}40;border-radius:4px;"
@@ -145,45 +174,52 @@ def _render_source_cards(
 
     for src in sources:
         case_id = src["case_id"]
-        url = src["url"]
+        url = src.get("url") or ""
         sr_meta = meta_lookup.get(case_id, {})
+        if not url:
+            url = _finlex_url_for_case_id(case_id, sr_meta or None)
+        if not url and sr_meta:
+            year = sr_meta.get("year") or sr_meta.get("case_year")
+            if year is not None:
+                url = _finlex_url_for_case_id(case_id, {"year": year})
 
         # Enrich with metadata when available
-        court = sr_meta.get("court", "")
-        year = sr_meta.get("year", "")
+        court = sr_meta.get("court", "") or sr_meta.get("court_type", "")
+        year = sr_meta.get("year", "") or sr_meta.get("case_year", "")
         keywords = sr_meta.get("keywords") or sr_meta.get("legal_domains") or []
         if isinstance(keywords, list):
             keywords = ", ".join(keywords[:3])
-
-        safe_case_id = html.escape(case_id)
-        safe_url = _safe_url(url)
-        title_html = (
-            f'<a href="{safe_url}" target="_blank" style="color:{accent};font-weight:600;'
-            f'text-decoration:none;font-size:0.88rem;">{safe_case_id}</a>'
-            if safe_url
-            else f'<span style="color:{accent};font-weight:600;font-size:0.88rem;">{safe_case_id}</span>'
-        )
-
         meta_parts = []
         if court:
-            meta_parts.append(html.escape(court.upper() if len(court) <= 4 else court))
+            meta_parts.append(str(court).upper() if len(str(court)) <= 4 else str(court))
         if year:
-            meta_parts.append(html.escape(str(year)))
+            meta_parts.append(str(year))
         if keywords:
-            meta_parts.append(html.escape(str(keywords)))
-        meta_html = (
-            f'<div style="font-size:0.78rem;color:#64748b;margin-top:2px;">{" &middot; ".join(meta_parts)}</div>'
-            if meta_parts
-            else ""
-        )
+            meta_parts.append(str(keywords))
+        meta_str = " · ".join(meta_parts) if meta_parts else ""
 
-        st.markdown(
-            f'<div style="border:1px solid {border};border-left:3px solid {accent};'
-            f"border-radius:8px;padding:0.5rem 0.75rem;margin-bottom:0.375rem;"
-            f'background:{surface};">'
-            f"{title_html}{meta_html}</div>",
-            unsafe_allow_html=True,
-        )
+        # Use Streamlit native markdown link so the right-side source stays clickable
+        safe_url = _safe_url(url)
+        if safe_url:
+            st.markdown(
+                f'<div style="border:1px solid {border};border-left:3px solid {accent};'
+                f"border-radius:8px;padding:0.5rem 0.75rem;margin-bottom:0.375rem;"
+                f'background:{surface};">',
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"[**{html.escape(case_id)}**]({safe_url})")
+            if meta_str:
+                st.caption(meta_str)
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            safe_case_id = html.escape(case_id)
+            st.markdown(
+                f'<div style="border:1px solid {border};border-left:3px solid {accent};'
+                f"border-radius:8px;padding:0.5rem 0.75rem;margin-bottom:0.375rem;"
+                f'background:{surface};color:{accent};font-weight:600;">{safe_case_id}'
+                f'<div style="font-size:0.78rem;color:#64748b;">{html.escape(meta_str)}</div></div>',
+                unsafe_allow_html=True,
+            )
 
 
 def _parse_sections(answer_text: str) -> list[tuple[str, str]]:

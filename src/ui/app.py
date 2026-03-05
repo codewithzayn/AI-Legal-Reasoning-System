@@ -15,6 +15,17 @@ warnings.filterwarnings("ignore", category=FutureWarning, module=r"google\.api_c
 import streamlit as st
 import streamlit.components.v1 as components
 
+# On Streamlit Cloud, secrets are in st.secrets (not .env). Inject into os.environ so config works.
+try:
+    for key, value in st.secrets.items():
+        if isinstance(value, dict):
+            for k2, v2 in value.items():
+                os.environ.setdefault(str(k2), str(v2))
+        else:
+            os.environ.setdefault(str(key), str(value))
+except Exception:
+    pass
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -1027,22 +1038,57 @@ def _is_clarification_response(msg: str, lang: str) -> bool:
 def _get_sidebar_filters() -> dict:
     """Read current sidebar filter values from session state."""
     filters = {}
+    court_selection = st.session_state.get("selected_court", "both")
+    min_year_by_court = 1946 if court_selection == "KHO" else 1926
+
     if st.session_state.get("filters_enabled", False):
         yr = st.session_state.get("filter_year_range")
         if yr and isinstance(yr, (list, tuple)) and len(yr) == 2:
-            filters["year_range"] = (yr[0], yr[1])
+            low, high = yr[0], yr[1]
+            low = max(low, min_year_by_court)
+            high = min(high, _CURRENT_YEAR)
+            filters["year_range"] = (low, high)
         domains = st.session_state.get("filter_legal_domains")
         if domains:
             filters["legal_domains"] = list(domains)
 
     # Court selector (always available, not behind filters_enabled toggle)
     court_map = {"KKO": ["KKO"], "KHO": ["KHO"], "both": None}
-    court_selection = st.session_state.get("selected_court", "both")
     court_types = court_map.get(court_selection)
     if court_types is not None:
         filters["court_types"] = court_types
 
     return filters
+
+
+def _court_types_from_query(query: str) -> list[str] | None:
+    """If query explicitly asks for one court, return that court's types; else None (use sidebar).
+    Ensures e.g. 'tell me about KHO case laws' uses KHO scope even when sidebar is on KKO or both.
+    """
+    if not query or not query.strip():
+        return None
+    q = query.strip().lower()
+    has_kho = any(
+        x in q
+        for x in (
+            "kho",
+            "korkein hallinto-oikeus",
+            "supreme administrative court",
+            "hallinto-oikeus",
+            "administrative court",
+        )
+    )
+    # KKO: avoid matching "supreme administrative court" or "korkein hallinto-oikeus"
+    has_kko = (
+        "kko" in q
+        or ("korkein oikeus" in q and "hallinto" not in q)
+        or ("supreme court" in q and "administrative" not in q)
+    )
+    if has_kho and not has_kko:
+        return ["KHO"]
+    if has_kko and not has_kho:
+        return ["KKO"]
+    return None
 
 
 def _looks_like_year_reply(text: str) -> bool:
@@ -1051,7 +1097,9 @@ def _looks_like_year_reply(text: str) -> bool:
     _year_reply_markers = (
         "all",
         "all years",
+        "any",
         "any year",
+        "any years",
         "no filter",
         "every year",
         "kaikki",
@@ -1117,6 +1165,11 @@ def _process_prompt(prompt: str) -> None:
     # Get sidebar filters
     filters = _get_sidebar_filters()
     court_types = filters.get("court_types")
+    # Override court from query when user explicitly asks for one court (e.g. "tell me about KHO case laws")
+    effective_query_for_court = original_query if original_query else prompt
+    query_court = _court_types_from_query(effective_query_for_court)
+    if query_court is not None:
+        court_types = query_court
     legal_domains = filters.get("legal_domains")
     tenant_id = st.session_state.get("tenant_id")
 
@@ -1478,12 +1531,26 @@ def _render_sidebar_filters(lang: str) -> None:
     if not filters_enabled:
         return
 
+    # Court-aware year range: KKO 1926–, KHO 1946–, both 1926–
+    selected_court = st.session_state.get("selected_court", "both")
+    min_year = 1946 if selected_court == "KHO" else 1926
+    default_range = (min_year, _CURRENT_YEAR)
+    current_range = st.session_state.get("filter_year_range", default_range)
+    if isinstance(current_range, (list, tuple)) and len(current_range) == 2:
+        low, high = current_range[0], current_range[1]
+        if low < min_year:
+            current_range = (min_year, min(high, _CURRENT_YEAR))
+        elif high > _CURRENT_YEAR:
+            current_range = (max(low, min_year), _CURRENT_YEAR)
+    else:
+        current_range = default_range
+
     st.markdown(f"**{t('filters_heading', lang)}**")
     st.slider(
         t("filter_year_range", lang),
-        min_value=1926,
+        min_value=min_year,
         max_value=_CURRENT_YEAR,
-        value=st.session_state.get("filter_year_range", (1926, _CURRENT_YEAR)),
+        value=current_range,
         key="filter_year_range",
     )
     # Note: Court type now controlled by dedicated radio selector above, not multiselect
@@ -1491,6 +1558,7 @@ def _render_sidebar_filters(lang: str) -> None:
         t("filter_legal_domain", lang),
         options=LEGAL_DOMAIN_OPTIONS,
         default=st.session_state.get("filter_legal_domains", []),
+        format_func=lambda opt: t("legal_domain_" + opt, lang),
         key="filter_legal_domains",
     )
 

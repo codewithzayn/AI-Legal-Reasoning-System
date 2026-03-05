@@ -4,11 +4,16 @@
 
 ## Streamlit Community Cloud (Recommended)
 
-1. Push this repo to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Sign in → New app → Select repo, branch, main file: `app.py`
-4. Add env vars (see **Environment variables for deployment** below)
-5. Deploy
+1. **Push this repo to GitHub** (if not already).
+2. Go to **[share.streamlit.io](https://share.streamlit.io)** and sign in with GitHub.
+3. Click **“New app”** and set:
+   - **Repository:** `your-username/your-repo-name`
+   - **Branch:** `main` (or your default branch)
+   - **Main file path:** `src/ui/app.py` ← must be this path (not `app.py`)
+4. Add your keys using either method:
+   - **Secrets** (recommended): In the deploy form, open **“Advanced settings”** → **Secrets**, and paste TOML (see **Environment variables for deployment** below). The app reads these via `st.secrets` and uses them as environment variables.
+   - **Environment variables**: Some platforms let you set env vars in Advanced settings; use the same keys as in the block below.
+5. Click **Deploy**. The app will build and run at `https://your-app-name.streamlit.app`.
 
 ## Railway / Render (Procfile)
 
@@ -77,6 +82,19 @@ MAX_QUERY_LENGTH=2000
 RERANK_ENABLED=false
 MULTI_QUERY_ENABLED=false
 RELEVANCY_CHECK_ENABLED=false
+```
+
+**For Streamlit Cloud Secrets** (paste in App → Settings → Secrets):
+
+```toml
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_KEY = "your-anon-or-service-key"
+OPENAI_API_KEY = "your-openai-api-key"
+COHERE_API_KEY = "your-cohere-api-key"
+MAX_QUERY_LENGTH = "2000"
+RERANK_ENABLED = "false"
+MULTI_QUERY_ENABLED = "false"
+RELEVANCY_CHECK_ENABLED = "false"
 ```
 
 ---

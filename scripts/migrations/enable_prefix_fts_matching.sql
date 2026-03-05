@@ -1,4 +1,4 @@
--- ============================================
+cle-- ============================================
 -- FIX: Enable prefix matching in FTS — to_tsquery replaces websearch_to_tsquery
 -- ============================================
 -- Problem:

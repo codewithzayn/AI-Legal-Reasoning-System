@@ -326,6 +326,145 @@ WORKFLOW_CATEGORIES: dict[str, list[dict]] = {
     ],
 }
 
+# KHO (Supreme Administrative Court) workflow categories — administrative, tax, permits, etc.
+KHO_WORKFLOW_CATEGORIES: dict[str, list[dict]] = {
+    "en": [
+        {
+            "category": "Tax & Appeals",
+            "icon": "\U0001f4b0",
+            "templates": [
+                {
+                    "label": "Tax law analysis",
+                    "description": "KHO precedents on taxation and tax appeals",
+                    "prompt": "Analyze KHO precedents on taxation and tax appeals (verotus, veroratkaisut) from 2015 to 2024. For each case: ruling instruction, decisive facts, provisions, vote strength, and distinctions.",
+                },
+                {
+                    "label": "Administrative permit analysis",
+                    "description": "Permits, environmental permits, appeal grounds",
+                    "prompt": "Analyze KHO precedents on administrative permits and environmental permits from recent years. What are the decisive facts, requirements, and appeal grounds?",
+                },
+            ],
+        },
+        {
+            "category": "Administrative Law",
+            "icon": "\U0001f4cb",
+            "templates": [
+                {
+                    "label": "Immigration and asylum",
+                    "description": "KHO precedents on immigration and asylum",
+                    "prompt": "Analyze KHO precedents on immigration and asylum decisions (maahanmuutto, turvapaikka) from 2018–2024. What trends and distinctions are there in the legal position?",
+                },
+                {
+                    "label": "Social welfare law",
+                    "description": "Social welfare decisions and appeals",
+                    "prompt": "Analyze KHO precedents on social welfare decisions and appeals (sosiaaliturva) from recent years. What are common grounds for reversal and what is the trend?",
+                },
+            ],
+        },
+        {
+            "category": "Public Procurement",
+            "icon": "\U0001f3af",
+            "templates": [
+                {
+                    "label": "Public procurement disputes",
+                    "description": "Bid protests and procurement decisions",
+                    "prompt": "Analyze KHO precedents on public procurement disputes and bid protests (julkinen hankintatoimi) from 2018–2024. What are the decisive factors in KHO decisions?",
+                },
+            ],
+        },
+    ],
+    "fi": [
+        {
+            "category": "Verotus ja valitukset",
+            "icon": "\U0001f4b0",
+            "templates": [
+                {
+                    "label": "Verotusanalyysi",
+                    "description": "KHO:n ennakkopäätökset verotuksesta",
+                    "prompt": "Analysoi KHO:n ennakkopäätökset verotuksesta ja veroratkaisuista vuosilta 2015–2024. Jokaisesta tapauksesta: ratkaisuohje, ratkaisevat tosiseikat, sovelletut säännökset, äänestystulos ja erottelut.",
+                },
+                {
+                    "label": "Hallinnolliset luvat",
+                    "description": "Luvat, ympäristöluvat, muutoksenhakuperusteet",
+                    "prompt": "Analysoi KHO:n ennakkopäätökset hallinnollisista luvista ja ympäristöluvista. Mitä ovat ratkaisevat tosiseikat, vaatimukset ja muutoksenhakuperusteet?",
+                },
+            ],
+        },
+        {
+            "category": "Hallinto-oikeus",
+            "icon": "\U0001f4cb",
+            "templates": [
+                {
+                    "label": "Maahanmuutto ja turvapaikka",
+                    "description": "KHO ennakkopäätökset maahanmuutosta ja turvapaikasta",
+                    "prompt": "Analysoi KHO:n ennakkopäätökset maahanmuutto- ja turvapaikkatapauksista vuosilta 2018–2024. Mitkä ovat kehityssuunnat ja erottelut oikeudellisissa kannanotoissa?",
+                },
+                {
+                    "label": "Sosiaaliturva",
+                    "description": "Sosiaaliturvan kantelut ja muutoksenhaku",
+                    "prompt": "Analysoi KHO:n ennakkopäätökset sosiaaliturvan kanteluista vuosilta 2018–2024. Mitkä ovat yleisimmät muutoksenhakuperusteet ja kehityssuunta?",
+                },
+            ],
+        },
+        {
+            "category": "Julkinen hankintatoimi",
+            "icon": "\U0001f3af",
+            "templates": [
+                {
+                    "label": "Hankintariidat",
+                    "description": "Tarjousprotestit ja KHO:n ratkaisut",
+                    "prompt": "Analysoi KHO:n ennakkopäätökset julkisista hankintatoimi-riidoista ja tarjousprotestiista vuosilta 2018–2024. Mitkä ovat ratkaisevat tekijät KHO:n päätöksissä?",
+                },
+            ],
+        },
+    ],
+    "sv": [
+        {
+            "category": "Skatt och överklaganden",
+            "icon": "\U0001f4b0",
+            "templates": [
+                {
+                    "label": "Skatteredovisningsanalys",
+                    "description": "HFD-prejudikat om skatt och skattebeslut",
+                    "prompt": "Analysera HFD-prejudikat om skatteredovisning och skattebeslut från 2015 till 2024. För varje fall: avgörandeinstruktion, avgörande fakta, bestämmelser, röststyrka och distinktioner.",
+                },
+                {
+                    "label": "Administrativa tillstånd",
+                    "description": "Tillstånd, miljötillstånd, överklagandsgrunder",
+                    "prompt": "Analysera HFD-prejudikat om administrativa tillstånd och miljötillstånd. Vad är avgörande fakta, krav och överklagandsgrunder?",
+                },
+            ],
+        },
+        {
+            "category": "Förvaltningsrätt",
+            "icon": "\U0001f4cb",
+            "templates": [
+                {
+                    "label": "Invandring och asyl",
+                    "description": "HFD-prejudikat om invandring och asyl",
+                    "prompt": "Analysera HFD-prejudikat om invandring och asylbeslut från 2018–2024. Vilka är trenderna och distinktionerna i den juridiska positionen?",
+                },
+                {
+                    "label": "Socialförsäkringsrätt",
+                    "description": "Socialförsäkringsbeslut och överklaganden",
+                    "prompt": "Analysera HFD-prejudikat om socialförsäkringsbeslut från 2018–2024. Vilka är vanliga omprövningsgrunder och vad är trenden?",
+                },
+            ],
+        },
+        {
+            "category": "Offentlig upphandling",
+            "icon": "\U0001f3af",
+            "templates": [
+                {
+                    "label": "Upphandlingstvister",
+                    "description": "Budprotest och HFD:s beslut",
+                    "prompt": "Analysera HFD-prejudikat om offentlig upphandling från 2018–2024. Vilka är avgörande faktorer i HFD:s beslut?",
+                },
+            ],
+        },
+    ],
+}
+
 
 def get_workflow_categories(lang: str, court: str = "both") -> list[dict]:
     """Return workflow categories for the given language and court.
@@ -337,6 +476,12 @@ def get_workflow_categories(lang: str, court: str = "both") -> list[dict]:
     if lang == "auto":
         lang = "en"
 
-    # Currently, WORKFLOW_CATEGORIES is the same for all courts (KKO-focused)
-    # In future, could split by court if needed
-    return WORKFLOW_CATEGORIES.get(lang, WORKFLOW_CATEGORIES["en"])
+    kko_cats = WORKFLOW_CATEGORIES.get(lang, WORKFLOW_CATEGORIES["en"])
+    kho_cats = KHO_WORKFLOW_CATEGORIES.get(lang, KHO_WORKFLOW_CATEGORIES["en"])
+
+    if court == "KHO":
+        return kho_cats
+    if court == "KKO":
+        return kko_cats
+    # "both": show first 2 categories from each court
+    return kko_cats[:2] + kho_cats[:2]

@@ -111,6 +111,8 @@ class Config:
 
     # Query length limit (chars) - reject oversize queries to avoid abuse and cost
     MAX_QUERY_LENGTH: int = int(os.getenv("MAX_QUERY_LENGTH", "2000"))
+    # Per-channel timeout for hybrid search (vec, fts, meta, prefix). Increase if Supabase is slow.
+    SEARCH_CHANNEL_TIMEOUT_SECONDS: float = float(os.getenv("SEARCH_CHANNEL_TIMEOUT_SECONDS", "45"))
 
     # Document Upload Limits (client document ingestion)
     MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))

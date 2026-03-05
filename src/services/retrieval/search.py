@@ -1476,14 +1476,17 @@ Alkuperäinen: "KKO:n ennakkopäätökset vahingonkorvauksesta"
         2. Once the embedding is ready, vector search starts (uses HNSW).
         3. Channels 1–6 are merged via RRF; channel 7 is appended after.
 
-        Each sub-query is capped at 15 s so one slow RPC never blocks all.
+        Each sub-query is capped so one slow RPC never blocks all (see SEARCH_CHANNEL_TIMEOUT_SECONDS).
         Connection errors trigger an automatic client reset and single retry.
         """
         effective_tenant = tenant_id or self.tenant_id
         t0 = time.time()
+        channel_timeout = getattr(config, "SEARCH_CHANNEL_TIMEOUT_SECONDS", 45.0)
 
         # Helper: run a search task with timeout + connection recovery (retry once after reset).
-        async def _timed(coro_factory, label: str, timeout: float = 15.0, retried: bool = False):
+        async def _timed(coro_factory, label: str, timeout: float = None, retried: bool = False):
+            if timeout is None:
+                timeout = channel_timeout
             try:
                 coro = coro_factory()
                 return await asyncio.wait_for(coro, timeout=timeout)
